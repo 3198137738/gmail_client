@@ -486,7 +486,7 @@ def _sync_one_folder(
 
 
 def _announce_new_mail(account_id: int, results: dict[str, dict]) -> None:
-    """有新邮件入库时推送网页事件；收件箱/已发送再发 Telegram 通知。"""
+    """有新邮件入库时推送网页事件，并安排 Telegram 通知。"""
     inbox_new = int(results.get("inbox", {}).get("saved", 0) or 0)
     sent_new = int(results.get("sent", {}).get("saved", 0) or 0)
     junk_new = int(results.get("junk", {}).get("saved", 0) or 0)
@@ -495,10 +495,10 @@ def _announce_new_mail(account_id: int, results: dict[str, dict]) -> None:
             publish_new_mail(account_id, inbox=inbox_new, sent=sent_new, junk=junk_new)
         except Exception:
             logger.debug("Failed to publish new_mail event", exc_info=True)
-    # 垃圾邮件只推送到网页，不发 Telegram 通知，避免刷屏。
-    if inbox_new or sent_new:
+    # 是否真正发送（已发送/垃圾邮件的开关、账号级开关）由 notify_new_mail 决定。
+    if inbox_new or sent_new or junk_new:
         try:
-            submit_bg(notify_new_mail, account_id, inbox=inbox_new, sent=sent_new)
+            submit_bg(notify_new_mail, account_id, inbox=inbox_new, sent=sent_new, junk=junk_new)
         except Exception:
             logger.debug("Failed to schedule Telegram notification", exc_info=True)
 

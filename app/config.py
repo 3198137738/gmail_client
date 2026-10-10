@@ -167,6 +167,8 @@ TELEGRAM_NOTIFY_ENABLED = _get_bool(
 )
 # Also notify when new messages appear in the Sent folder (off by default).
 TELEGRAM_NOTIFY_SENT = _get_bool("TELEGRAM_NOTIFY_SENT", False)
+# 垃圾邮件文件夹收到新邮件时也推送通知（需同时开启 SYNC_JUNK_ENABLED）。
+TELEGRAM_NOTIFY_JUNK = _get_bool("TELEGRAM_NOTIFY_JUNK", True)
 TELEGRAM_API_TIMEOUT_SEC = _get_positive_int("TELEGRAM_API_TIMEOUT_SEC", 10)
 # Run a long-polling listener so the bot reacts to inline buttons (一键已读/
 # 删除) and commands (/unread, /help). Disable to make notifications one-way.

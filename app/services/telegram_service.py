@@ -27,6 +27,7 @@ from ..config import (
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_CHAT_IDS,
     TELEGRAM_NOTIFY_ENABLED,
+    TELEGRAM_NOTIFY_JUNK,
     TELEGRAM_NOTIFY_SENT,
 )
 from ..database import session_scope
@@ -347,15 +348,16 @@ def _send_message_chunked(
         )
 
 
-def _notify_message_detail(msg: Message, safe_email: str) -> None:
+def _notify_message_detail(msg: Message, safe_email: str, *, junk: bool = False) -> None:
     subject = escape(msg.subject or "(无主题)")
     sender = escape(msg.from_addr or "-")
     to_addr = escape(msg.to_addr or "-")
     cc_addr = escape(msg.cc_addr or "-")
     sent_at = escape(_msg_datetime(msg.date))
     body = escape(_full_body(msg) or "(正文为空)")
+    title = "\u26A0 <b>垃圾邮件</b>" if junk else "\U0001F4EC <b>新邮件</b>"
     header = (
-        "\U0001F4EC <b>新邮件</b>\n"
+        f"{title}\n"
         f"\U0001F4E5 账号：<code>{safe_email}</code>\n"
         f"\U0001F3F7 主题：<b>{subject}</b>\n"
         f"\U0001F4E7 发件人：{sender}\n"
@@ -394,7 +396,7 @@ def _notify_message_detail(msg: Message, safe_email: str) -> None:
         )
 
 
-def notify_new_mail(account_id: int, *, inbox: int = 0, sent: int = 0) -> None:
+def notify_new_mail(account_id: int, *, inbox: int = 0, sent: int = 0, junk: int = 0) -> None:
     """Push a Telegram summary for newly arrived mail on one account.
 
     Designed to run on the background pool. Honours the per-account
@@ -404,8 +406,9 @@ def notify_new_mail(account_id: int, *, inbox: int = 0, sent: int = 0) -> None:
         return
     inbox = max(int(inbox or 0), 0)
     sent = max(int(sent or 0), 0)
+    junk = max(int(junk or 0), 0) if TELEGRAM_NOTIFY_JUNK else 0
     notify_sent = TELEGRAM_NOTIFY_SENT and sent > 0
-    if inbox <= 0 and not notify_sent:
+    if inbox <= 0 and junk <= 0 and not notify_sent:
         return
 
     try:
@@ -415,18 +418,22 @@ def notify_new_mail(account_id: int, *, inbox: int = 0, sent: int = 0) -> None:
                 return  # per-account notifications disabled
             email = account.email if account else f"#{account_id}"
 
-            recent: list[Message] = []
-            if inbox > 0:
-                recent = db.execute(
+            def _recent(kind: str, count: int) -> list[Message]:
+                if count <= 0:
+                    return []
+                return db.execute(
                     select(Message)
                     .options(selectinload(Message.attachments))
                     .where(
                         Message.account_id == account_id,
-                        Message.folder_kind == "inbox",
+                        Message.folder_kind == kind,
                     )
                     .order_by(Message.id.desc())
-                    .limit(min(inbox, _MAX_DETAIL))
+                    .limit(min(count, _MAX_DETAIL))
                 ).scalars().all()
+
+            recent = _recent("inbox", inbox)
+            recent_junk = _recent("junk", junk)
             # 提交时 session 会让对象过期，离开 with 后再读字段会抛 DetachedInstanceError；
             # 先从 session 中分离，保留已加载的字段和附件。
             db.expunge_all()
@@ -442,6 +449,14 @@ def notify_new_mail(account_id: int, *, inbox: int = 0, sent: int = 0) -> None:
         if inbox > len(recent):
             send_message(
                 f"\u2139 本次共同步 {inbox} 封新邮件，已展示最近 {len(recent)} 封。"
+            )
+
+    if junk > 0 and recent_junk:
+        for msg in recent_junk:
+            _notify_message_detail(msg, safe_email, junk=True)
+        if junk > len(recent_junk):
+            send_message(
+                f"\u2139 本次共同步 {junk} 封垃圾邮件，已展示最近 {len(recent_junk)} 封。"
             )
 
     if notify_sent:

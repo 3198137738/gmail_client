@@ -495,7 +495,9 @@
             var fresh = doc.querySelector(".rcm-body");
             var current = document.querySelector(".rcm-body");
             if (fresh && current) {
+                var sidebarScroll = getSidebarScroll();
                 current.replaceWith(fresh);
+                setSidebarScroll(sidebarScroll);
                 initMessageList();
                 hideBanner();
             }
@@ -504,6 +506,43 @@
         }).finally(function () {
             refreshing = false;
         });
+    }
+
+    function getSidebarScroll() {
+        var el = document.querySelector(".rcm-sidebar");
+        return el ? el.scrollTop : 0;
+    }
+
+    function setSidebarScroll(top) {
+        var el = document.querySelector(".rcm-sidebar");
+        if (el) el.scrollTop = top;
+    }
+
+    // 只刷新侧边栏（未读数），用于不属于当前列表的新邮件，
+    // 例如正在看收件箱时收到垃圾邮件，或其他账号收到新邮件。
+    var sidebarTimer = null;
+    function refreshSidebar() {
+        clearTimeout(sidebarTimer);
+        sidebarTimer = setTimeout(function () {
+            fetch(window.location.href, {
+                credentials: "same-origin",
+                headers: { "X-Requested-With": "fetch" },
+            }).then(function (resp) {
+                if (!resp.ok) throw new Error("bad status");
+                return resp.text();
+            }).then(function (text) {
+                var doc = new DOMParser().parseFromString(text, "text/html");
+                var fresh = doc.querySelector(".rcm-sidebar");
+                var current = document.querySelector(".rcm-sidebar");
+                if (fresh && current) {
+                    var sidebarScroll = getSidebarScroll();
+                    current.replaceWith(fresh);
+                    setSidebarScroll(sidebarScroll);
+                }
+            }).catch(function () {
+                /* leave the sidebar as-is on transient errors */
+            });
+        }, 100);
     }
 
     // ---- "New mail" banner (used when an auto-swap would be disruptive) ---
@@ -536,7 +575,10 @@
 
     var debounceTimer = null;
     function onNewMail(ev) {
-        if (!eventMatchesView(ev)) return;
+        if (!eventMatchesView(ev)) {
+            refreshSidebar();
+            return;
+        }
         var n = ctx.kind === "junk" ? (ev.junk || 0) : (ev.inbox || 0) + (ev.sent || 0);
         pendingCount += n;
         // 勾选状态存在 sessionStorage 中，刷新后 initMessageList 会恢复勾选，
@@ -546,6 +588,7 @@
             debounceTimer = setTimeout(refreshList, 100);
         } else {
             showBanner();
+            refreshSidebar();
         }
     }
 
