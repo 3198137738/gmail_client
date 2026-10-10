@@ -427,6 +427,9 @@ def notify_new_mail(account_id: int, *, inbox: int = 0, sent: int = 0) -> None:
                     .order_by(Message.id.desc())
                     .limit(min(inbox, _MAX_DETAIL))
                 ).scalars().all()
+            # 提交时 session 会让对象过期，离开 with 后再读字段会抛 DetachedInstanceError；
+            # 先从 session 中分离，保留已加载的字段和附件。
+            db.expunge_all()
     except Exception:
         logger.debug("Failed to build Telegram notification", exc_info=True)
         return
