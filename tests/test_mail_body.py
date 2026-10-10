@@ -34,7 +34,24 @@ def test_remote_resource_detection():
     assert not has_remote_resources(sanitize_html('<img src="/attachments/1/inbox/2/inline/a.png">'))
 
 
-def test_body_document_blocks_remote_images_by_default(client):
+def test_remote_images_load_automatically_by_default(client):
+    login(client)
+    acc = create_account()
+    mid = create_message(acc, body_html='<p>hi</p><img src="https://t.example/p.gif">')
+
+    resp = client.get(f"/messages/{mid}/body")
+    csp = resp.headers["content-security-policy"]
+    assert "img-src 'self' data: https: http:" in csp
+    assert "script-src" not in csp and "default-src 'none'" in csp  # 脚本仍然禁止
+
+    detail = client.get(f"/messages/{mid}").text
+    assert "显示图片" not in detail  # 不再显示拦截提示
+
+
+def test_body_document_blocks_remote_images_when_disabled(client, monkeypatch):
+    import app.services.mail_body as mail_body
+
+    monkeypatch.setattr(mail_body, "MAIL_LOAD_REMOTE_IMAGES", False)
     login(client)
     acc = create_account()
     mid = create_message(acc, body_html='<p>hi</p><img src="https://t.example/p.gif">')
@@ -50,7 +67,10 @@ def test_body_document_blocks_remote_images_by_default(client):
     assert "https:" in resp.headers["content-security-policy"]
 
 
-def test_detail_page_uses_sandboxed_iframe(client):
+def test_detail_page_uses_sandboxed_iframe(client, monkeypatch):
+    import app.services.mail_body as mail_body
+
+    monkeypatch.setattr(mail_body, "MAIL_LOAD_REMOTE_IMAGES", False)
     login(client)
     acc = create_account()
     mid = create_message(acc, body_html='<p>secret-body</p><img src="https://t.example/p.gif">')

@@ -19,7 +19,11 @@ from ..services.background import submit_bg
 from ..services import pagination
 from ..services.pagination import Cursor
 from ..services.search import message_search_filter
-from ..services.mail_body import body_document_response, body_has_remote_images
+from ..services.mail_body import (
+    body_document_response,
+    body_has_remote_images,
+    remote_images_allowed,
+)
 from ..services.imap_client import is_account_busy
 from ..services.imap_ops import delete_imap_messages, update_imap_flags
 from ..services.message_actions import (
@@ -548,7 +552,7 @@ def message_body(
     ).first()
     if row is None:
         raise HTTPException(status_code=404, detail="Message not found")
-    return body_document_response(row.body_html, row.body_text, allow_remote_images=images)
+    return body_document_response(row.body_html, row.body_text, allow_remote_images=remote_images_allowed(images))
 
 
 @router.get("/{message_id}", response_class=HTMLResponse, name="messages.detail")
@@ -600,7 +604,7 @@ def view_message(
             "inline_attachments": inline_attachments,
             "sender_email": sender_email,
             "sender_blocked": sender_blocked,
-            "show_images": images,
+            "show_images": remote_images_allowed(images),
             "back_url": _list_back_url(request, back, message.folder_kind),
             "has_remote_images": body_has_remote_images(message.body_html),
         },

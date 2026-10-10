@@ -3,9 +3,9 @@
 正文不再直接插入主页面，而是由单独的地址输出，并附带严格的 CSP：
 
 * 不允许任何脚本（iframe 也不给 allow-scripts）；
-* 默认只允许加载本站图片（内嵌图片）和 data: 图片，外部图片、CSS 背景图
-  都会被浏览器拦截，防止跟踪像素泄露 IP 和打开时间；用户点「显示图片」后
-  才放开 http/https 图片；
+* 外部图片：默认（MAIL_LOAD_REMOTE_IMAGES=true）直接加载；关闭该配置后
+  只允许本站图片（内嵌图片）和 data: 图片，外部图片、CSS 背景图由浏览器
+  拦截，防止跟踪像素泄露 IP 和打开时间，用户点「显示图片」才放开；
 * 不发送 Referer，链接一律在新窗口打开。
 """
 from __future__ import annotations
@@ -15,6 +15,7 @@ from html import escape
 
 from fastapi.responses import HTMLResponse
 
+from ..config import MAIL_LOAD_REMOTE_IMAGES
 from .html_sanitizer import has_remote_resources, sanitize_html
 
 _SANITIZE_CACHE_SIZE = 64
@@ -43,6 +44,11 @@ def _sanitize_cached(body_html: str) -> str:
     存下的数据。打开一封邮件会用到两次（判断外部图片 + iframe 正文），
     重复打开也很常见，所以按内容缓存最近的结果。"""
     return sanitize_html(body_html)
+
+
+def remote_images_allowed(requested: bool = False) -> bool:
+    """是否加载外部图片：开启了 MAIL_LOAD_REMOTE_IMAGES，或用户点了「显示图片」。"""
+    return requested or MAIL_LOAD_REMOTE_IMAGES
 
 
 def safe_body_html(body_html: str | None, body_text: str | None) -> str:

@@ -158,6 +158,10 @@ SYNC_SENT_ENABLED = _get_bool("SYNC_SENT_ENABLED", True)
 # 同步垃圾邮件文件夹（带 \Junk 标记的文件夹）。默认关闭；垃圾邮件不发送 Telegram 通知。
 SYNC_JUNK_ENABLED = _get_bool("SYNC_JUNK_ENABLED", False)
 
+# 打开邮件时自动加载外部图片。关闭后外部图片默认被拦截（防止跟踪像素获知
+# 打开时间和 IP），需要在邮件中点「显示图片」才加载。
+MAIL_LOAD_REMOTE_IMAGES = _get_bool("MAIL_LOAD_REMOTE_IMAGES", True)
+
 # Real-time delivery via IMAP IDLE + SSE.
 # When enabled, a long-lived IMAP connection is kept per account/folder so new
 # mail triggers an incremental sync within seconds, and the change is pushed to

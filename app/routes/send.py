@@ -20,7 +20,11 @@ from ..config import ATTACHMENTS_DIR, SYNC_SENT_ENABLED
 from ..auth import is_safe_redirect
 from ..database import get_db
 from ..models import Account, Attachment, Message, SentMessage
-from ..services.mail_body import body_document_response, body_has_remote_images
+from ..services.mail_body import (
+    body_document_response,
+    body_has_remote_images,
+    remote_images_allowed,
+)
 from ..services.smtp_service import SMTPSendError, send_email
 from ..templating import templates, utc_to_local
 
@@ -513,7 +517,7 @@ def sent_body(
     ).first()
     if row is None:
         raise HTTPException(status_code=404, detail="Sent message not found")
-    return body_document_response(row.body_html, row.body_text, allow_remote_images=images)
+    return body_document_response(row.body_html, row.body_text, allow_remote_images=remote_images_allowed(images))
 
 
 @router.get("/sent/{sent_id}", response_class=HTMLResponse, name="compose.sent_detail")
@@ -535,7 +539,7 @@ def sent_detail(
         "sent_detail.html",
         {
             "message": record,
-            "show_images": images,
+            "show_images": remote_images_allowed(images),
             "has_remote_images": body_has_remote_images(record.body_html),
         },
     )
