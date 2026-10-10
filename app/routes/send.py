@@ -4,20 +4,21 @@ from __future__ import annotations
 import logging
 import shutil
 import uuid
+from datetime import datetime
 from email.utils import getaddresses
 from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from ..config import ATTACHMENTS_DIR
+from ..config import ATTACHMENTS_DIR, SYNC_SENT_ENABLED
 from ..database import get_db
 from ..models import Account, Attachment, Message, SentMessage
 from ..services.smtp_service import SMTPSendError, send_email
-from ..templating import templates
+from ..templating import templates, utc_to_local
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,9 @@ router = APIRouter(prefix="/compose", tags=["compose"])
 
 OUTBOX_DIR = ATTACHMENTS_DIR / "outbox"
 OUTBOX_DIR.mkdir(parents=True, exist_ok=True)
+
+# 发件记录页最多显示的条数。
+SENT_LIST_LIMIT = 200
 
 
 def _coerce_int(value) -> Optional[int]:
@@ -325,12 +329,82 @@ async def send(
             pass
 
 
+def _normalize_message_id(value: Optional[str]) -> str:
+    return (value or "").strip().strip("<>").strip().lower()
+
+
 @router.get("/sent", response_class=HTMLResponse, name="compose.sent_list")
 def sent_list(request: Request, db: Session = Depends(get_db)):
-    rows = db.execute(
-        select(SentMessage).order_by(SentMessage.sent_at.desc()).limit(200)
+    """发件记录：合并 Gmail「已发送」文件夹（需开启 SYNC_SENT_ENABLED）与本客户端的发送记录。
+
+    本客户端发出的邮件 Gmail 也会存入「已发送」，按 Message-ID 去重后只显示 Gmail 那一份；
+    发送失败或尚未同步到的本地记录照常显示。
+    """
+    gmail_rows = db.execute(
+        select(Message)
+        .options(selectinload(Message.account))
+        .where(Message.folder_kind == "sent")
+        .order_by(Message.date.desc().nulls_last(), Message.id.desc())
+        .limit(SENT_LIST_LIMIT)
     ).scalars().all()
-    return templates.TemplateResponse(request, "sent.html", {"sent": rows})
+    local_rows = db.execute(
+        select(SentMessage)
+        .options(selectinload(SentMessage.account))
+        .order_by(SentMessage.sent_at.desc())
+        .limit(SENT_LIST_LIMIT)
+    ).scalars().all()
+
+    # 去重时不受上面 LIMIT 影响：直接查本地记录的 Message-ID 是否已同步到 Gmail「已发送」。
+    local_ids = {_normalize_message_id(r.message_id) for r in local_rows if r.message_id}
+    synced_ids: set[str] = set()
+    if local_ids:
+        candidates = list(local_ids) + [f"<{mid}>" for mid in local_ids]
+        synced_ids = {
+            _normalize_message_id(mid)
+            for mid in db.execute(
+                select(Message.message_id).where(
+                    Message.folder_kind == "sent",
+                    func.lower(Message.message_id).in_(candidates),
+                )
+            ).scalars().all()
+        }
+
+    items: list[dict] = []
+    for m in gmail_rows:
+        items.append({
+            "source": "gmail",
+            "account": m.account.email if m.account else f"#{m.account_id}",
+            "to_addr": m.to_addr or "",
+            "subject": m.subject,
+            "time": m.date,
+            "status": "sent",
+            "error": None,
+            "detail_url": request.url_for("messages.detail", message_id=m.id),
+            "delete_url": request.url_for("messages.delete_one", message_id=m.id),
+            "delete_confirm": "确定删除这封邮件吗？Gmail「已发送」中的邮件也会移到已删除邮件。",
+        })
+    for r in local_rows:
+        if r.status == "sent" and _normalize_message_id(r.message_id) in synced_ids:
+            continue
+        items.append({
+            "source": "local",
+            "account": r.account.email if r.account else f"#{r.account_id}",
+            "to_addr": r.to_addr or "",
+            "subject": r.subject,
+            "time": utc_to_local(r.sent_at),
+            "status": r.status,
+            "error": r.error,
+            "detail_url": request.url_for("compose.sent_detail", sent_id=r.id),
+            "delete_url": request.url_for("compose.sent_delete", sent_id=r.id),
+            "delete_confirm": "确定删除这条发件记录吗？",
+        })
+
+    items.sort(key=lambda it: it["time"] or datetime.min, reverse=True)
+    return templates.TemplateResponse(
+        request,
+        "sent.html",
+        {"sent": items[:SENT_LIST_LIMIT], "sync_sent_enabled": SYNC_SENT_ENABLED},
+    )
 
 
 @router.get("/sent/{sent_id}", response_class=HTMLResponse, name="compose.sent_detail")

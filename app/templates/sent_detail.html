@@ -27,7 +27,7 @@
                 {% if message.bcc_addr %}<div><strong>Bcc：</strong> {{ message.bcc_addr }}</div>{% endif %}
             </div>
             <div class="col-md-3 text-md-end">
-                <div><strong>{{ message.sent_at|fmt_dt('%Y-%m-%d %H:%M:%S') }}</strong></div>
+                <div><strong>{{ message.sent_at|utc_to_local|fmt_dt('%Y-%m-%d %H:%M:%S') }}</strong></div>
             </div>
         </div>
 

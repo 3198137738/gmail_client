@@ -1,7 +1,7 @@
 """Shared Jinja2 environment setup."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
@@ -21,6 +21,19 @@ def _safe_html(value: str) -> Markup:
     Idempotent thanks to the post-process anchor-tag guard.
     """
     return Markup(sanitize_html(value or ""))
+
+
+def utc_to_local(value: datetime | None) -> datetime | None:
+    """数据库中 sent_at/created_at 等字段为 UTC（无时区），显示前转换为服务器本地时间。
+
+    邮件的 ``date`` 字段已是本地时间，不需要转换。
+    """
+    if value is None:
+        return None
+    try:
+        return value.replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
+    except Exception:
+        return value
 
 
 def _fmt_dt(value, fmt: str = "%Y-%m-%d %H:%M") -> str:
@@ -104,6 +117,7 @@ def _initials(value: str) -> str:
 
 templates.env.filters["safe_html"] = _safe_html
 templates.env.filters["fmt_dt"] = _fmt_dt
+templates.env.filters["utc_to_local"] = utc_to_local
 templates.env.filters["fmt_rel_dt"] = _fmt_rel_dt
 templates.env.filters["shorten"] = _truncate
 templates.env.filters["initials"] = _initials

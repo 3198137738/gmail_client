@@ -46,7 +46,7 @@
                     <tr>
                         <td><code>{{ row.sender_email }}</code></td>
                         <td>{{ row.account.display_name or row.account.email }}</td>
-                        <td>{{ row.created_at|fmt_dt('%Y-%m-%d %H:%M:%S') }}</td>
+                        <td>{{ row.created_at|utc_to_local|fmt_dt('%Y-%m-%d %H:%M:%S') }}</td>
                         <td class="text-end">
                             <form method="post" action="{{ url_for('messages.unblock_sender', blocked_id=row.id) }}" class="d-inline"
                                   onsubmit="return confirm('确定解除对 {{ row.sender_email }} 的屏蔽吗？');">
