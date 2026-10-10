@@ -11,9 +11,11 @@ event for connected browsers.
 Design notes
 ------------
 * New mail is fetched on the IDLE connection itself (only the watched folder),
-  avoiding a fresh TLS handshake + LOGIN per message. The fetch still acquires
-  the per-account lock, so it never collides with a manual/scheduled sync; if
-  the lock is busy, a full ``safe_sync_account`` runs as soon as it is freed.
+  avoiding a fresh TLS handshake + LOGIN per message. It takes only the
+  per-folder lock, so the inbox/sent/junk workers of one account never block
+  each other, and mark-read/delete operations (account lock) never delay it.
+  If a manual/scheduled sync is already syncing the same folder, the worker
+  waits for it to finish and then syncs on its own connection.
 * ``idle_check`` blocks only ``IDLE_POLL_SEC`` at a time so a stop request is
   honoured promptly. Every ``IDLE_REFRESH_SEC`` the worker leaves IDLE, runs a
   cheap catch-up check (UID SEARCH) and re-enters IDLE; together with TCP

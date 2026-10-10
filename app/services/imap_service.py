@@ -77,6 +77,22 @@ _locks_mutex = threading.Lock()
 _sync_locks: dict[int, threading.Lock] = {}
 
 
+# 文件夹级同步锁：同一文件夹同一时刻只允许一个同步，不同文件夹（收件箱/已发送/垃圾邮件）互不阻塞。
+_folder_locks: dict[tuple[int, str], threading.Lock] = {}
+# 等待同一文件夹上正在进行的同步结束的最长时间。
+_FOLDER_LOCK_TIMEOUT_SEC = 120
+
+
+def _folder_lock(account_id: int, folder: str) -> threading.Lock:
+    with _locks_mutex:
+        key = (account_id, folder)
+        lock = _folder_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _folder_locks[key] = lock
+        return lock
+
+
 def _account_lock(account_id: int) -> threading.Lock:
     with _locks_mutex:
         lock = _sync_locks.get(account_id)
@@ -512,12 +528,14 @@ def sync_folder_with_client(
     """在调用方已登录的 IMAP 连接上增量同步单个文件夹（供 IDLE 使用）。
 
     省去新建连接、TLS 握手、登录和文件夹发现的开销，并且只同步发生变化的文件夹。
-    账号锁被占用时返回 ``None``，并登记一次补同步（锁释放后执行完整同步）。
-    IMAP 出错时向上抛出，由调用方决定是否重连。
+
+    只获取该文件夹的锁，不获取账号锁：同账号其他文件夹的同步、标记已读、删除等操作
+    都不会阻塞它。若同一文件夹正被其他同步占用，则原地等待其结束后再在本连接上同步
+    （等待超时返回 ``None``）。IMAP 出错时向上抛出，由调用方决定是否重连。
     """
-    lock = _account_lock(account_id)
-    if not _try_acquire_for_sync(account_id, lock):
-        logger.info("Account busy, sync deferred until lock release account=%s", account_id)
+    lock = _folder_lock(account_id, folder)
+    if not lock.acquire(timeout=_FOLDER_LOCK_TIMEOUT_SEC):
+        logger.warning("Folder busy too long, skipped account=%s folder=%s", account_id, folder)
         return None
     try:
         result = _sync_one_folder(client, account_id, folder, folder_kind)
@@ -525,7 +543,7 @@ def sync_folder_with_client(
         _record_error(account_id, folder, str(exc))
         raise
     finally:
-        _release_account_lock(account_id, lock)
+        lock.release()
     _announce_new_mail(account_id, {folder_kind: result})
     return result
 
@@ -581,6 +599,13 @@ def safe_sync_account(account_id: int, folder: Optional[str] = None) -> dict:
                         logger.info("No Junk folder discovered for account=%s", account_id)
 
                 for folder_name, kind in targets:
+                    folder_lock = _folder_lock(account_id, folder_name)
+                    if not folder_lock.acquire(timeout=_FOLDER_LOCK_TIMEOUT_SEC):
+                        logger.warning(
+                            "Folder busy too long, skipped account=%s folder=%s",
+                            account_id, folder_name,
+                        )
+                        continue
                     try:
                         results[kind] = _sync_one_folder(
                             client, account_id, folder_name, kind
@@ -596,6 +621,8 @@ def safe_sync_account(account_id: int, folder: Optional[str] = None) -> dict:
                             "folder_kind": kind,
                             "error": str(exc),
                         }
+                    finally:
+                        folder_lock.release()
         except IMAPSyncError as exc:
             logger.warning("IMAP login/network failed account=%s: %s", account_id, exc)
             _record_error(account_id, DEFAULT_FOLDER, str(exc))
