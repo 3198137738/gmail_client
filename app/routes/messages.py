@@ -159,6 +159,7 @@ def _redirect_to_list(
     q: Optional[str],
     page: int = 1,
     page_size: int = DEFAULT_PAGE_SIZE,
+    unread: bool = False,
 ) -> RedirectResponse:
     params: dict[str, object] = {
         "kind": kind,
@@ -166,6 +167,8 @@ def _redirect_to_list(
         "page": max(page, 1),
         "page_size": _normalize_page_size(page_size),
     }
+    if unread:
+        params["unread"] = 1
     if account_id:
         params["account_id"] = account_id
     return RedirectResponse(
@@ -215,6 +218,7 @@ def list_messages(
     page_size: int = Query(DEFAULT_PAGE_SIZE),
     after: Optional[str] = Query(None),
     before: Optional[str] = Query(None),
+    unread: bool = Query(False),
     db: Session = Depends(get_db),
 ):
     kind = _normalize_kind(kind)
@@ -242,6 +246,10 @@ def list_messages(
     if search_filter is not None:
         stmt = stmt.where(search_filter)
         count_stmt = count_stmt.where(search_filter)
+    if unread:
+        # 仅看未读
+        stmt = stmt.where(Message.is_read.is_(False))
+        count_stmt = count_stmt.where(Message.is_read.is_(False))
 
     total, unread_total = db.execute(count_stmt).one()
     total = int(total or 0)
@@ -328,6 +336,7 @@ def list_messages(
             "page_size": page_size,
             "page_size_options": PAGE_SIZE_OPTIONS,
             "next_cursor": next_cursor,
+            "unread_only": unread,
             "prev_cursor": prev_cursor,
         },
     )
@@ -343,6 +352,7 @@ def mark_all_read(
     q: Optional[str] = Form(None),
     page: int = Form(1),
     page_size: int = Form(DEFAULT_PAGE_SIZE),
+    unread: bool = Form(False),
     db: Session = Depends(get_db),
 ):
     """Mark every unread message matching the current filter as read.
@@ -374,6 +384,7 @@ def mark_all_read(
         q=q,
         page=page,
         page_size=page_size,
+        unread=unread,
     )
 
 
@@ -386,6 +397,7 @@ def batch_mark_read(
     q: Optional[str] = Form(None),
     page: int = Form(1),
     page_size: int = Form(DEFAULT_PAGE_SIZE),
+    unread: bool = Form(False),
     db: Session = Depends(get_db),
 ):
     account_id_int = _coerce_int(account_id)
@@ -402,6 +414,7 @@ def batch_mark_read(
         q=q,
         page=page,
         page_size=page_size,
+        unread=unread,
     )
 
 
@@ -414,6 +427,7 @@ def batch_mark_unread(
     q: Optional[str] = Form(None),
     page: int = Form(1),
     page_size: int = Form(DEFAULT_PAGE_SIZE),
+    unread: bool = Form(False),
     db: Session = Depends(get_db),
 ):
     account_id_int = _coerce_int(account_id)
@@ -430,6 +444,7 @@ def batch_mark_unread(
         q=q,
         page=page,
         page_size=page_size,
+        unread=unread,
     )
 
 
@@ -442,6 +457,7 @@ def batch_delete(
     q: Optional[str] = Form(None),
     page: int = Form(1),
     page_size: int = Form(DEFAULT_PAGE_SIZE),
+    unread: bool = Form(False),
     db: Session = Depends(get_db),
 ):
     account_id_int = _coerce_int(account_id)
@@ -459,6 +475,7 @@ def batch_delete(
         q=q,
         page=page,
         page_size=page_size,
+        unread=unread,
     )
 
 

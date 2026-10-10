@@ -3,8 +3,8 @@
 {% block body_class %}has-drawer{% endblock %}
 
 {% set keep_account = current_account_id if current_account_id else '' %}
-{% macro view_link(target_kind, account_value=keep_account, query=q, page_num=1, per_page=page_size) -%}
-/messages/?kind={{ target_kind }}&account_id={{ account_value }}&q={{ query|urlencode }}&page={{ page_num }}&page_size={{ per_page }}
+{% macro view_link(target_kind, account_value=keep_account, query=q, page_num=1, per_page=page_size, only_unread=unread_only) -%}
+/messages/?kind={{ target_kind }}&account_id={{ account_value }}&q={{ query|urlencode }}&page={{ page_num }}&page_size={{ per_page }}{% if only_unread %}&unread=1{% endif %}
 {%- endmacro %}
 {% set self_url = view_link(kind, keep_account, q, page, page_size) %}
 
@@ -113,6 +113,7 @@
             <input type="hidden" name="q" value="{{ q }}">
             <input type="hidden" name="page" value="{{ page }}">
             <input type="hidden" name="page_size" value="{{ page_size }}">
+            {% if unread_only %}<input type="hidden" name="unread" value="1">{% endif %}
         </form>
 
         <div class="rcm-toolbar">
@@ -145,6 +146,7 @@
                     <input type="hidden" name="q" value="{{ q }}">
                     <input type="hidden" name="page" value="{{ page }}">
                     <input type="hidden" name="page_size" value="{{ page_size }}">
+                    {% if unread_only %}<input type="hidden" name="unread" value="1">{% endif %}
                     <button type="submit" class="rcm-tool-btn" {% if not unread_total %}disabled{% endif %}
                             title="全部标记为已读">
                         <i class="bi bi-check2-all"></i><span>已读</span>
@@ -183,9 +185,9 @@
                             </form>
                         </li>
                         {% endif %}
-                        {% if q or current_account_id %}
+                        {% if q or current_account_id or unread_only %}
                         <li>
-                            <a class="dropdown-item" href="{{ view_link(kind, '', '') }}">
+                            <a class="dropdown-item" href="{{ view_link(kind, '', '', only_unread=False) }}">
                                 <i class="bi bi-x-circle me-2"></i>清除搜索与筛选
                             </a>
                         </li>
@@ -220,16 +222,24 @@
                 {% endif %}
                 {% if total %}
                 <span class="rcm-toolbar-title-info">
-                    {% if unread_total %}<strong>{{ unread_total }}</strong> 未读 / {% endif %}{{ total }} 封
+                    {% if unread_only %}<strong>{{ total }}</strong> 封未读{% else %}{% if unread_total %}<strong>{{ unread_total }}</strong> 未读 / {% endif %}{{ total }} 封{% endif %}
                 </span>
                 {% endif %}
             </div>
+
+            <a class="rcm-filter-chip {% if unread_only %}is-active{% endif %}"
+               href="{{ view_link(kind, keep_account, q, 1, page_size, not unread_only) }}"
+               aria-pressed="{{ 'true' if unread_only else 'false' }}"
+               title="{{ '显示全部邮件' if unread_only else '只显示未读邮件' }}">
+                <i class="bi {{ 'bi-check2' if unread_only else 'bi-envelope' }}"></i><span>仅看未读</span>
+            </a>
 
             <div class="rcm-toolbar-search">
                 <form method="get" action="{{ url_for('messages.list') }}" class="rcm-search m-0" data-no-loading>
                     <input type="hidden" name="kind" value="{{ kind }}">
                     <input type="hidden" name="account_id" value="{{ keep_account }}">
                     <input type="hidden" name="page_size" value="{{ page_size }}">
+                    {% if unread_only %}<input type="hidden" name="unread" value="1">{% endif %}
                     <i class="bi bi-search rcm-search-icon"></i>
                     <input type="search" name="q" value="{{ q }}" class="rcm-search-input"
                            placeholder="搜索邮件…" autocomplete="off">
@@ -322,10 +332,12 @@
                     <tr class="rcm-row-empty">
                         <td colspan="7">
                             <div class="rcm-empty">
-                                <i class="bi bi-inbox"></i>
-                                <div class="rcm-empty-title">这里还没有邮件</div>
+                                <i class="bi {{ 'bi-envelope-check' if unread_only else 'bi-inbox' }}"></i>
+                                <div class="rcm-empty-title">{{ '没有未读邮件' if unread_only else '这里还没有邮件' }}</div>
                                 <div class="rcm-empty-hint">
-                                    {% if selected_account %}
+                                    {% if unread_only %}
+                                        所有邮件都已读，<a href="{{ view_link(kind, keep_account, q, 1, page_size, False) }}">查看全部邮件</a>
+                                    {% elif selected_account %}
                                         点工具栏 <strong>刷新</strong> 拉取 {{ selected_account.email }} 的最新邮件
                                     {% elif accounts %}
                                         点工具栏 <strong>刷新</strong> 拉取最新邮件
