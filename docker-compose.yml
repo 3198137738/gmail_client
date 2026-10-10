@@ -25,6 +25,10 @@ services:
     environment:
       TZ: Asia/Shanghai
       PYTHONUNBUFFERED: "1"
+      # 可信代理：只有这些地址发来的 X-Forwarded-For 才会被当作真实客户端 IP。
+      # nginx 通过服务器公网地址 168.110.213.213 转发，必须列入，否则所有访客
+      # 都会被识别成这个 IP（登录失败封禁会波及所有人）。换服务器时记得修改。
+      FORWARDED_ALLOW_IPS: "127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7,168.110.213.213"
       # 会话 cookie 默认只走 HTTPS；只能用 http:// 访问时在 .env 设 SESSION_COOKIE_SECURE=false
       # 登录有效期（天）可用 SESSION_MAX_AGE_DAYS 调整，默认 7
 

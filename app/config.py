@@ -125,7 +125,8 @@ def _get_csv_set(name: str) -> set[str]:
 
 
 def _get_proxy_networks(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
-    raw = os.getenv(name, "").strip()
+    # 未单独配置时沿用 uvicorn 的 FORWARDED_ALLOW_IPS，保证两边信任同一批代理
+    raw = (os.getenv(name, "") or os.getenv("FORWARDED_ALLOW_IPS", "")).strip()
     values = [item.strip() for item in raw.split(",") if item.strip()] if raw else list(default)
     valid: list[str] = []
     for item in values:

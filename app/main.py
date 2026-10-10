@@ -115,6 +115,31 @@ async def add_security_headers(request: Request, call_next):
     return response
 
 
+class ForwardedProtoMiddleware:
+    """按 X-Forwarded-Proto 设置请求协议，与代理是否可信无关。
+
+    nginx 终止 HTTPS 后用 http 转发过来，必须知道原始协议才能生成 https://
+    的链接；否则 https 页面引用 http 资源会被浏览器拦截（样式丢失、表单无法提交）。
+    伪造该头只会影响伪造者自己收到的页面，没有安全风险；
+    客户端 IP 仍只采信可信代理（见 FORWARDED_ALLOW_IPS）。
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] in ("http", "websocket"):
+            for key, value in scope.get("headers", []):
+                if key == b"x-forwarded-proto":
+                    proto = value.decode("latin-1").split(",")[0].strip().lower()
+                    if proto in ("http", "https"):
+                        if scope["type"] == "websocket":
+                            proto = "wss" if proto == "https" else "ws"
+                        scope = dict(scope, scheme=proto)
+                    break
+        await self.app(scope, receive, send)
+
+
 app.middleware("http")(require_app_password)
 app.middleware("http")(add_security_headers)
 app.add_middleware(
@@ -125,6 +150,9 @@ app.add_middleware(
     same_site="lax",
     https_only=SESSION_COOKIE_SECURE,
 )
+
+# 最外层：先确定协议，后面的中间件和路由生成的链接才是 https
+app.add_middleware(ForwardedProtoMiddleware)
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
