@@ -3,18 +3,21 @@
 For every enabled account we keep one long-lived IMAP connection per watched
 folder (INBOX, and the Sent folder when sent-sync is on) parked in the IMAP
 ``IDLE`` state. Gmail pushes an untagged ``EXISTS``/``RECENT`` response as soon
-as a message arrives; the worker reacts by queueing an incremental
-``safe_sync_account`` on the shared background pool, which in turn persists the
-message and publishes a ``new_mail`` event for connected browsers.
+as a message arrives; the worker leaves IDLE and fetches the new message
+directly on the same (already authenticated and selected) connection via
+``sync_folder_with_client``, which persists it and publishes a ``new_mail``
+event for connected browsers.
 
 Design notes
 ------------
-* IDLE connections are **separate** from the connections used by
-  ``safe_sync_account``; the sync still acquires the per-account lock, so an
-  IDLE-triggered sync and a manual/scheduled sync never collide.
+* New mail is fetched on the IDLE connection itself (only the watched folder),
+  avoiding a fresh TLS handshake + LOGIN per message. The fetch still acquires
+  the per-account lock, so it never collides with a manual/scheduled sync; if
+  the lock is busy, a full ``safe_sync_account`` runs as soon as it is freed.
 * ``idle_check`` blocks only ``IDLE_POLL_SEC`` at a time so a stop request is
-  honoured promptly, and the IDLE command is re-issued every
-  ``IDLE_REFRESH_SEC`` to stay under Gmail's idle timeout.
+  honoured promptly. Every ``IDLE_REFRESH_SEC`` the worker leaves IDLE, runs a
+  cheap catch-up check (UID SEARCH) and re-enters IDLE; together with TCP
+  keepalive this detects dead connections quickly and covers missed pushes.
 * All failures are caught and retried with a fixed backoff; a permanently bad
   account simply keeps retrying without taking the process down. The periodic
   scheduler remains as a safety net for anything IDLE misses.
@@ -22,6 +25,7 @@ Design notes
 from __future__ import annotations
 
 import logging
+import socket
 import threading
 from time import monotonic
 from typing import Optional
@@ -48,6 +52,7 @@ from .imap_service import (
     _discover_sent_folder,
     _imap_client,
     safe_sync_account,
+    sync_folder_with_client,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,6 +60,8 @@ logger = logging.getLogger(__name__)
 # Give IDLE sockets enough headroom to outlast a poll wait without tripping the
 # read timeout.
 _IDLE_SOCKET_TIMEOUT = IDLE_POLL_SEC + 30
+# 账号没有对应文件夹（如无 Sent/Junk）时，隔多久重新登录检查一次。
+_NO_FOLDER_RECHECK_SEC = 600
 
 
 def _has_new_mail(responses) -> bool:
@@ -68,6 +75,19 @@ def _has_new_mail(responses) -> bool:
             if token in (b"EXISTS", b"RECENT"):
                 return True
     return False
+
+
+def _enable_tcp_keepalive(client) -> None:
+    """开启 TCP keepalive，尽快发现被 NAT/防火墙静默断开的 IDLE 连接。"""
+    try:
+        sock = client.socket()
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        # 空闲 60 秒后开始探测，每 15 秒一次，连续 4 次无响应即判定断开（约 2 分钟）。
+        for name, value in (("TCP_KEEPIDLE", 60), ("TCP_KEEPINTVL", 15), ("TCP_KEEPCNT", 4)):
+            if hasattr(socket, name):
+                sock.setsockopt(socket.IPPROTO_TCP, getattr(socket, name), value)
+    except Exception:
+        logger.debug("Failed to enable TCP keepalive on IDLE socket", exc_info=True)
 
 
 class IdleWorker(threading.Thread):
@@ -132,12 +152,13 @@ class IdleWorker(threading.Thread):
                     "No folder to IDLE-watch account=%s kind=%s; idling out",
                     self.account_id, self.folder_kind,
                 )
-                self._stop.wait(IDLE_REFRESH_SEC)
+                self._stop.wait(_NO_FOLDER_RECHECK_SEC)
                 return
 
+            _enable_tcp_keepalive(client)
             client.select_folder(folder, readonly=True)
             # Catch up on anything that arrived while we were disconnected.
-            self._trigger_sync()
+            self._sync_on_connection(client, folder)
 
             client.idle()
             in_idle = True
@@ -147,16 +168,13 @@ class IdleWorker(threading.Thread):
                     responses = client.idle_check(timeout=IDLE_POLL_SEC)
                     if self._stop.is_set():
                         break
-                    if _has_new_mail(responses):
+                    # 收到新邮件通知时立即同步；否则每 IDLE_REFRESH_SEC 秒退出 IDLE 做一次
+                    # 兜底检查（只做 UID SEARCH，无新邮件时开销极小），既能补上 Gmail
+                    # 偶尔漏发的通知，也能尽快发现已失效的连接。
+                    if _has_new_mail(responses) or monotonic() - idle_since >= IDLE_REFRESH_SEC:
                         client.idle_done()
                         in_idle = False
-                        self._trigger_sync()
-                        client.idle()
-                        in_idle = True
-                        idle_since = monotonic()
-                    elif monotonic() - idle_since >= IDLE_REFRESH_SEC:
-                        client.idle_done()
-                        in_idle = False
+                        self._sync_on_connection(client, folder)
                         client.idle()
                         in_idle = True
                         idle_since = monotonic()
@@ -167,8 +185,14 @@ class IdleWorker(threading.Thread):
                     except (IMAPClientError, OSError):
                         pass
 
-    def _trigger_sync(self) -> None:
-        submit_bg(safe_sync_account, self.account_id)
+    def _sync_on_connection(self, client, folder: str) -> None:
+        """直接在当前 IDLE 连接上拉取新邮件，省去新建连接和登录的时间。"""
+        try:
+            sync_folder_with_client(client, self.account_id, folder, self.folder_kind)
+        except Exception:
+            # 连接可能已损坏：先用新连接做一次完整同步，避免漏信，再由外层重连。
+            submit_bg(safe_sync_account, self.account_id)
+            raise
 
 
 class IdleManager:

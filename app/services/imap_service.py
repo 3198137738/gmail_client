@@ -404,6 +404,8 @@ def _sync_one_folder(
 
     scanned = len(uids)
     saved = 0
+    # 本批新邮件中最新的 Gmail 接收时间（INTERNALDATE），用于计算「Gmail 收到 → 入库」延迟。
+    newest_received: Optional[datetime] = None
     if not uids:
         _update_sync_state(account_id, folder, uidvalidity=uidvalidity, new_last_uid=None)
         return {"saved": 0, "scanned": 0, "folder": folder, "folder_kind": folder_kind}
@@ -413,7 +415,7 @@ def _sync_one_folder(
     for start in range(0, len(uids), batch_size):
         chunk = uids[start:start + batch_size]
         try:
-            fetched = client.fetch(chunk, ["RFC822", "FLAGS"])
+            fetched = client.fetch(chunk, ["RFC822", "FLAGS", "INTERNALDATE"])
         except IMAPClientError as exc:
             logger.warning(
                 "IMAP fetch failed account=%s folder=%s uids=%s: %s",
@@ -427,6 +429,10 @@ def _sync_one_folder(
         )
         existing = _existing_uids(account_id, folder, [uid for uid, _ in fetched_items])
         new_items = [(uid, data) for uid, data in fetched_items if uid not in existing]
+        for _uid, data in new_items:
+            received = data.get(b"INTERNALDATE")
+            if isinstance(received, datetime) and (newest_received is None or received > newest_received):
+                newest_received = received
         records = _parse_fetched_messages(
             account_id=account_id,
             folder=folder,
@@ -467,11 +473,61 @@ def _sync_one_folder(
         new_last_uid=max(uids),
     )
     elapsed = perf_counter() - started
+    # 仅增量同步时统计延迟；首次同步拉的是历史邮件，延迟无意义。
+    # INTERNALDATE 由 IMAPClient 转换为本地时间（无时区），与 datetime.now() 直接比较；精度为秒。
+    latency = ""
+    if saved and last_uid > 0 and newest_received is not None:
+        latency = f" latency={(datetime.now() - newest_received).total_seconds():.1f}s"
     logger.info(
-        "Synced folder account=%s folder=%s kind=%s scanned=%s saved=%s elapsed=%.2fs",
-        account_id, folder, folder_kind, scanned, saved, elapsed,
+        "Synced folder account=%s folder=%s kind=%s scanned=%s saved=%s elapsed=%.2fs%s",
+        account_id, folder, folder_kind, scanned, saved, elapsed, latency,
     )
     return {"saved": saved, "scanned": scanned, "folder": folder, "folder_kind": folder_kind}
+
+
+def _announce_new_mail(account_id: int, results: dict[str, dict]) -> None:
+    """有新邮件入库时推送网页事件；收件箱/已发送再发 Telegram 通知。"""
+    inbox_new = int(results.get("inbox", {}).get("saved", 0) or 0)
+    sent_new = int(results.get("sent", {}).get("saved", 0) or 0)
+    junk_new = int(results.get("junk", {}).get("saved", 0) or 0)
+    if inbox_new or sent_new or junk_new:
+        try:
+            publish_new_mail(account_id, inbox=inbox_new, sent=sent_new, junk=junk_new)
+        except Exception:
+            logger.debug("Failed to publish new_mail event", exc_info=True)
+    # 垃圾邮件只推送到网页，不发 Telegram 通知，避免刷屏。
+    if inbox_new or sent_new:
+        try:
+            submit_bg(notify_new_mail, account_id, inbox=inbox_new, sent=sent_new)
+        except Exception:
+            logger.debug("Failed to schedule Telegram notification", exc_info=True)
+
+
+def sync_folder_with_client(
+    client: IMAPClient,
+    account_id: int,
+    folder: str,
+    folder_kind: str,
+) -> Optional[dict]:
+    """在调用方已登录的 IMAP 连接上增量同步单个文件夹（供 IDLE 使用）。
+
+    省去新建连接、TLS 握手、登录和文件夹发现的开销，并且只同步发生变化的文件夹。
+    账号锁被占用时返回 ``None``，并登记一次补同步（锁释放后执行完整同步）。
+    IMAP 出错时向上抛出，由调用方决定是否重连。
+    """
+    lock = _account_lock(account_id)
+    if not _try_acquire_for_sync(account_id, lock):
+        logger.info("Account busy, sync deferred until lock release account=%s", account_id)
+        return None
+    try:
+        result = _sync_one_folder(client, account_id, folder, folder_kind)
+    except IMAPSyncError as exc:
+        _record_error(account_id, folder, str(exc))
+        raise
+    finally:
+        _release_account_lock(account_id, lock)
+    _announce_new_mail(account_id, {folder_kind: result})
+    return result
 
 
 def safe_sync_account(account_id: int, folder: Optional[str] = None) -> dict:
@@ -550,20 +606,7 @@ def safe_sync_account(account_id: int, folder: Optional[str] = None) -> dict:
             account_id, ",".join(results.keys()) or "none", perf_counter() - started,
         )
 
-        inbox_new = int(results.get("inbox", {}).get("saved", 0) or 0)
-        sent_new = int(results.get("sent", {}).get("saved", 0) or 0)
-        junk_new = int(results.get("junk", {}).get("saved", 0) or 0)
-        if inbox_new or sent_new or junk_new:
-            try:
-                publish_new_mail(account_id, inbox=inbox_new, sent=sent_new, junk=junk_new)
-            except Exception:
-                logger.debug("Failed to publish new_mail event", exc_info=True)
-        # 垃圾邮件只推送到网页，不发 Telegram 通知，避免刷屏。
-        if inbox_new or sent_new:
-            try:
-                submit_bg(notify_new_mail, account_id, inbox=inbox_new, sent=sent_new)
-            except Exception:
-                logger.debug("Failed to schedule Telegram notification", exc_info=True)
+        _announce_new_mail(account_id, results)
         return results
 
     except Exception as exc:

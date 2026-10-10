@@ -144,9 +144,10 @@ REALTIME_ENABLED = _get_bool("REALTIME_ENABLED", True)
 # How long a single IDLE wait blocks before we loop and re-check the stop flag.
 # Keep well under the IMAP socket timeout used for IDLE connections.
 IDLE_POLL_SEC = _get_positive_int("IDLE_POLL_SEC", 30)
-# Re-issue IDLE before Gmail drops an idle connection (it closes after ~10-30
-# min). Refreshing every ~9 minutes keeps the channel alive.
-IDLE_REFRESH_SEC = _get_positive_int("IDLE_REFRESH_SEC", 540)
+# 每隔多少秒退出 IDLE 做一次兜底检查（UID SEARCH）后重新进入 IDLE。
+# 既能补上 Gmail 偶尔漏发的新邮件通知，也能尽快发现已失效的连接；
+# 远小于 Gmail 断开空闲连接的时间（约 10-30 分钟），同时起到保活作用。
+IDLE_REFRESH_SEC = _get_positive_int("IDLE_REFRESH_SEC", 60)
 # Backoff after an IDLE connection error before reconnecting.
 IDLE_RECONNECT_BACKOFF_SEC = _get_positive_int("IDLE_RECONNECT_BACKOFF_SEC", 30)
 

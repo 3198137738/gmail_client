@@ -543,7 +543,7 @@
         // 因此有勾选时也可以安全地自动刷新。
         if (canAutoRefresh) {
             clearTimeout(debounceTimer);
-            debounceTimer = setTimeout(refreshList, 800);
+            debounceTimer = setTimeout(refreshList, 100);
         } else {
             showBanner();
         }
