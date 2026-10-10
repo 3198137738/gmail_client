@@ -16,6 +16,8 @@ from .config import (
     BACKGROUND_MAX_WORKERS,
     IMAP_FETCH_BATCH_SIZE,
     INITIAL_SYNC_LIMIT,
+    SESSION_COOKIE_SECURE,
+    SESSION_MAX_AGE_SEC,
     STATIC_DIR,
     SYNC_INTERVAL_MINUTES,
     SYNC_JUNK_ENABLED,
@@ -115,7 +117,9 @@ app.add_middleware(
     SessionMiddleware,
     secret_key=load_session_secret(),
     session_cookie="gmail_client_session",
+    max_age=SESSION_MAX_AGE_SEC,
     same_site="lax",
+    https_only=SESSION_COOKIE_SECURE,
 )
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

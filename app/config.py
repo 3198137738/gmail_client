@@ -208,6 +208,13 @@ TRUSTED_PROXY_NETWORKS = _get_proxy_networks(
     ),
 )
 SESSION_SECRET_PATH = SECRETS_DIR / "session_secret.txt"
+# 会话 cookie 只通过 HTTPS 发送。仅用 http:// 访问（如本地调试）时需设为 false，
+# 否则浏览器不会回传 cookie，表现为登录后又跳回登录页。
+SESSION_COOKIE_SECURE = _get_bool("SESSION_COOKIE_SECURE", True)
+# 登录有效期（天）：从登录那一刻起计算的绝对期限，到期必须重新输入密码，
+# 不会因为持续访问而无限续期。
+SESSION_MAX_AGE_DAYS = _get_positive_int("SESSION_MAX_AGE_DAYS", 7)
+SESSION_MAX_AGE_SEC = SESSION_MAX_AGE_DAYS * 24 * 3600
 
 
 def load_session_secret() -> str:

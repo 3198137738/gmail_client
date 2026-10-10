@@ -23,6 +23,8 @@ services:
     environment:
       TZ: Asia/Shanghai
       PYTHONUNBUFFERED: "1"
+      # 会话 cookie 默认只走 HTTPS；只能用 http:// 访问时在 .env 设 SESSION_COOKIE_SECURE=false
+      # 登录有效期（天）可用 SESSION_MAX_AGE_DAYS 调整，默认 7
 
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/healthz"]

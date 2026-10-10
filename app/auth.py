@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import secrets
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from ipaddress import ip_address, ip_network
@@ -13,6 +14,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 
 from .config import (
+    SESSION_MAX_AGE_SEC,
     WEB_AUTH_BLOCKED_IPS,
     WEB_AUTH_ENABLED,
     WEB_AUTH_LOCKOUT_MINUTES,
@@ -27,6 +29,7 @@ from .models import LoginThrottle
 logger = logging.getLogger(__name__)
 
 AUTH_SESSION_KEY = "authenticated"
+AUTH_AT_SESSION_KEY = "authenticated_at"
 AUTH_ERROR_SESSION_KEY = "auth_error"
 LOGIN_PATH = "/login"
 LOGOUT_PATH = "/logout"
@@ -60,15 +63,27 @@ class LoginThrottleStatus:
 
 
 def is_authenticated(request: Request) -> bool:
-    return bool(request.session.get(AUTH_SESSION_KEY))
+    """会话有效：已登录且未超过绝对有效期（旧版本没有登录时间的会话视为过期）。"""
+    auth_at = request.session.get(AUTH_AT_SESSION_KEY)
+    if not request.session.get(AUTH_SESSION_KEY) or not isinstance(auth_at, (int, float)):
+        return False
+    age = time.time() - auth_at
+    if age < 0 or age > SESSION_MAX_AGE_SEC:
+        clear_auth(request)
+        return False
+    return True
 
 
 def mark_authenticated(request: Request) -> None:
+    # 登录时清空旧会话内容，防止会话固定
+    request.session.clear()
     request.session[AUTH_SESSION_KEY] = True
+    request.session[AUTH_AT_SESSION_KEY] = int(time.time())
 
 
 def clear_auth(request: Request) -> None:
     request.session.pop(AUTH_SESSION_KEY, None)
+    request.session.pop(AUTH_AT_SESSION_KEY, None)
 
 
 def set_auth_error(request: Request, message: str | None) -> None:
