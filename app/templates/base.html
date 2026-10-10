@@ -17,7 +17,7 @@
         <span>Roundcube</span>
     </a>
     <nav class="rcm-topnav">
-        <a class="rcm-topnav-item {% if request.url.path.startswith('/messages') %}is-active{% endif %}"
+        <a class="rcm-topnav-item {% if request.url.path.startswith('/messages') and not request.url.path.startswith('/messages/blocked-senders') %}is-active{% endif %}"
            href="{{ url_for('messages.list') }}">
             <i class="bi bi-envelope"></i><span>邮件</span>
         </a>

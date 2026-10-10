@@ -1,114 +1,142 @@
 {% extends "base.html" %}
 {% block title %}{{ message.subject or "(无主题)" }}{% endblock %}
+{% set folder_labels = {'inbox': '收件箱', 'sent': '已发送', 'junk': '垃圾邮件'} %}
+{% set sender_label = message.from_addr|addr_name %}
 {% block content %}
-<div class="card shadow-sm">
-    <div class="card-header bg-white d-flex justify-content-between align-items-center">
-        <a href="{{ url_for('messages.list').include_query_params(kind=message.folder_kind) }}" class="text-decoration-none">&larr; 返回列表</a>
-        <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end">
-            <a href="{{ url_for('compose.form').include_query_params(reply_to=message.id) }}"
-               class="btn btn-sm btn-outline-primary">
-                <i class="bi bi-reply"></i> 回复
-            </a>
-            <a href="{{ url_for('compose.form').include_query_params(reply_to=message.id, mode='all') }}"
-               class="btn btn-sm btn-outline-primary">
-                <i class="bi bi-reply-all"></i> 回复全部
-            </a>
-            <a href="{{ url_for('compose.form').include_query_params(forward=message.id) }}"
-               class="btn btn-sm btn-outline-primary">
-                <i class="bi bi-forward"></i> 转发
-            </a>
-            <form method="post" action="{{ url_for('messages.mark_unread', message_id=message.id) }}" class="m-0">
-                <button type="submit" class="btn btn-sm btn-outline-secondary">标记为未读</button>
-            </form>
-            <form method="post" action="{{ url_for('messages.delete_one', message_id=message.id) }}" class="m-0"
-                  onsubmit="return confirm('确定删除这封邮件吗？此操作会同步删除服务器上的对应邮件。');">
-                <button type="submit" class="btn btn-sm btn-outline-danger">删除</button>
-            </form>
-            {% if message.folder_kind == 'junk' %}
-            <form method="post" action="{{ url_for('messages.not_spam', message_id=message.id) }}" class="m-0"
-                  onsubmit="return confirm({{ ('这不是垃圾邮件？\n将把该发件人的垃圾邮件全部移回收件箱，并信任 ' ~ (sender_email or '该发件人') ~ '：以后其邮件即使被 Gmail 判为垃圾邮件，也会自动移回收件箱。')|tojson|forceescape }});">
-                <button type="submit" class="btn btn-sm btn-outline-success">
-                    <i class="bi bi-check2-circle"></i> 这不是垃圾邮件
-                </button>
-            </form>
-            {% endif %}
-            {% if sender_email and message.folder_kind != 'sent' %}
+<div class="gm-detail">
+    <div class="gm-detail-toolbar">
+        <a class="rcm-icon-btn" href="{{ url_for('messages.list').include_query_params(kind=message.folder_kind) }}"
+           title="返回列表" aria-label="返回列表">
+            <i class="bi bi-arrow-left"></i>
+        </a>
+        <span class="gm-sep"></span>
+        <form method="post" action="{{ url_for('messages.delete_one', message_id=message.id) }}"
+              onsubmit="return confirm('确定删除这封邮件吗？此操作会同步删除服务器上的对应邮件。');">
+            <button type="submit" class="rcm-icon-btn" title="删除" aria-label="删除">
+                <i class="bi bi-trash3"></i>
+            </button>
+        </form>
+        <form method="post" action="{{ url_for('messages.mark_unread', message_id=message.id) }}">
+            <button type="submit" class="rcm-icon-btn" title="标记为未读" aria-label="标记为未读">
+                <i class="bi bi-envelope"></i>
+            </button>
+        </form>
+        {% if sender_email and message.folder_kind != 'sent' %}
             {% if sender_blocked %}
-            <a class="btn btn-sm btn-outline-success"
-               href="{{ url_for('messages.blocked_senders').include_query_params(account_id=message.account_id, q=sender_email) }}">
-                查看屏蔽列表
+            <a class="rcm-icon-btn"
+               href="{{ url_for('messages.blocked_senders').include_query_params(account_id=message.account_id, q=sender_email) }}"
+               title="已屏蔽该发件人，查看屏蔽列表" aria-label="查看屏蔽列表">
+                <i class="bi bi-shield-check"></i>
             </a>
             {% else %}
-            <form method="post" action="{{ url_for('messages.block_sender', message_id=message.id) }}" class="m-0"
-                  onsubmit="return confirm('永久屏蔽 {{ sender_email }}？\\n后续同步将自动忽略该发件人，并隐藏当前账号已有同发件人邮件。');">
-                <button type="submit" class="btn btn-sm btn-outline-warning">
-                    屏蔽发件人
+            <form method="post" action="{{ url_for('messages.block_sender', message_id=message.id) }}"
+                  onsubmit="return confirm({{ ('永久屏蔽 ' ~ sender_email ~ '？\n后续同步将自动忽略该发件人，并隐藏当前账号已有同发件人邮件。')|tojson|forceescape }});">
+                <button type="submit" class="rcm-icon-btn" title="屏蔽发件人" aria-label="屏蔽发件人">
+                    <i class="bi bi-slash-circle"></i>
                 </button>
             </form>
             {% endif %}
-            {% endif %}
+        {% endif %}
+        {% if message.folder_kind == 'junk' %}
+        <span class="gm-sep"></span>
+        <form method="post" action="{{ url_for('messages.not_spam', message_id=message.id) }}"
+              onsubmit="return confirm({{ ('这不是垃圾邮件？\n将把该发件人的垃圾邮件全部移回收件箱，并信任 ' ~ (sender_email or '该发件人') ~ '：以后其邮件即使被 Gmail 判为垃圾邮件，也会自动移回收件箱。')|tojson|forceescape }});">
+            <button type="submit" class="gm-action-pill is-success">
+                <i class="bi bi-check2-circle"></i> 这不是垃圾邮件
+            </button>
+        </form>
+        {% endif %}
+        <span class="gm-spacer"></span>
+        <a class="rcm-icon-btn" href="{{ url_for('compose.form').include_query_params(reply_to=message.id) }}"
+           title="回复" aria-label="回复"><i class="bi bi-reply"></i></a>
+        <a class="rcm-icon-btn" href="{{ url_for('compose.form').include_query_params(forward=message.id) }}"
+           title="转发" aria-label="转发"><i class="bi bi-forward"></i></a>
+    </div>
+
+    <h1 class="gm-subject">
+        <span>{{ message.subject or "(无主题)" }}</span>
+        <span class="gm-label {% if message.folder_kind == 'junk' %}is-junk{% endif %}">
+            {{ folder_labels.get(message.folder_kind, message.folder_kind) }}
+        </span>
+    </h1>
+
+    <div class="gm-sender">
+        <div class="gm-sender-avatar" aria-hidden="true">{{ (sender_label or '?')[:1]|upper }}</div>
+        <div class="gm-sender-main">
+            <div class="gm-sender-line">
+                <span class="gm-sender-name">{{ sender_label or '(未知发件人)' }}</span>
+                {% set raw_sender_email = message.from_addr|addr_email %}
+                {% if raw_sender_email and sender_label != raw_sender_email %}
+                <span class="gm-sender-email">&lt;{{ raw_sender_email }}&gt;</span>
+                {% endif %}
+            </div>
+            <div class="gm-recipients">
+                发送至 {{ message.to_addr or message.account.email }}
+                {% if message.cc_addr %}<br>抄送 {{ message.cc_addr }}{% endif %}
+                <br>账号 {{ message.account.email }}
+            </div>
+        </div>
+        <div class="gm-date" title="{{ message.date|fmt_dt('%Y-%m-%d %H:%M:%S') }} · UID {{ message.uid }}">
+            {{ message.date|fmt_dt('%Y-%m-%d %H:%M') }}
         </div>
     </div>
-    <div class="card-body">
-        <h4 class="mb-3">{{ message.subject or "(无主题)" }}</h4>
-        <div class="row text-muted small mb-3">
-            <div class="col-md-9">
-                <div><strong>账号：</strong> {{ message.account.email }}</div>
-                <div><strong>From：</strong> {{ message.from_addr }}</div>
-                <div><strong>To：</strong> {{ message.to_addr }}</div>
-                {% if message.cc_addr %}<div><strong>Cc：</strong> {{ message.cc_addr }}</div>{% endif %}
-            </div>
-            <div class="col-md-3 text-md-end">
-                <div><strong>{{ message.date|fmt_dt('%Y-%m-%d %H:%M:%S') }}</strong></div>
-                <div>UID: {{ message.uid }}</div>
-            </div>
-        </div>
 
-        <hr>
-
-        <div class="email-body border rounded p-3 bg-white">
+    <div class="gm-body">
+        <div class="email-body">
             {% if message.body_html %}
                 {{ message.body_html|safe_html }}
             {% elif message.body_text %}
                 <pre style="white-space: pre-wrap;">{{ message.body_text }}</pre>
             {% else %}
-                <em>邮件内容为空</em>
+                <em class="text-muted">邮件内容为空</em>
             {% endif %}
         </div>
+    </div>
 
-        {% if file_attachments %}
-        <h5 class="mt-4"><i class="bi bi-paperclip"></i> 附件 ({{ file_attachments|length }})</h5>
-        <ul class="list-group">
+    {% if file_attachments %}
+    <div class="gm-attachments">
+        <div class="gm-attachments-title">{{ file_attachments|length }} 个附件</div>
+        <div class="gm-attachment-grid">
             {% for a in file_attachments %}
-            <li class="list-group-item d-flex justify-content-between align-items-center">
-                <div class="text-truncate me-3">
-                    <strong>{{ a.display_name or a.filename }}</strong>
-                    <span class="text-muted small ms-2">{{ a.mime_type }} · {{ a.size|filesizeformat }}</span>
-                </div>
-                <a class="btn btn-sm btn-outline-primary flex-shrink-0" href="{{ a.public_url }}" download>
-                    <i class="bi bi-download"></i> 下载
-                </a>
-            </li>
+            <a class="gm-attachment" href="{{ a.public_url }}" download title="下载 {{ a.display_name or a.filename }}">
+                <i class="bi bi-file-earmark-arrow-down"></i>
+                <span class="gm-attachment-text">
+                    <span class="gm-attachment-name">{{ a.display_name or a.filename }}</span>
+                    <span class="gm-attachment-meta">{{ a.size|filesizeformat }} · {{ a.mime_type }}</span>
+                </span>
+            </a>
             {% endfor %}
-        </ul>
-        {% endif %}
+        </div>
+    </div>
+    {% endif %}
 
-        {% if inline_attachments %}
-        <h5 class="mt-4"><i class="bi bi-image"></i> 内嵌图片 ({{ inline_attachments|length }})</h5>
-        <ul class="list-group">
+    {% if inline_attachments %}
+    <div class="gm-attachments">
+        <div class="gm-attachments-title">{{ inline_attachments|length }} 张内嵌图片</div>
+        <div class="gm-attachment-grid">
             {% for a in inline_attachments %}
-            <li class="list-group-item d-flex justify-content-between align-items-center">
-                <div class="text-truncate me-3">
-                    <strong>{{ a.display_name or a.filename }}</strong>
-                    <span class="text-muted small ms-2">{{ a.mime_type }} · {{ a.size|filesizeformat }}</span>
-                </div>
-                <a class="btn btn-sm btn-outline-primary flex-shrink-0" href="{{ a.public_url }}?download=true" download>
-                    <i class="bi bi-download"></i> 下载
-                </a>
-            </li>
+            <a class="gm-attachment" href="{{ a.public_url }}?download=true" download title="下载 {{ a.display_name or a.filename }}">
+                <i class="bi bi-file-earmark-image" style="color: #1a73e8;"></i>
+                <span class="gm-attachment-text">
+                    <span class="gm-attachment-name">{{ a.display_name or a.filename }}</span>
+                    <span class="gm-attachment-meta">{{ a.size|filesizeformat }} · {{ a.mime_type }}</span>
+                </span>
+            </a>
             {% endfor %}
-        </ul>
-        {% endif %}
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="gm-reply-row">
+        <a class="gm-reply-btn" href="{{ url_for('compose.form').include_query_params(reply_to=message.id) }}">
+            <i class="bi bi-reply"></i> 回复
+        </a>
+        <a class="gm-reply-btn" href="{{ url_for('compose.form').include_query_params(reply_to=message.id, mode='all') }}">
+            <i class="bi bi-reply-all"></i> 回复全部
+        </a>
+        <a class="gm-reply-btn" href="{{ url_for('compose.form').include_query_params(forward=message.id) }}">
+            <i class="bi bi-forward"></i> 转发
+        </a>
     </div>
 </div>
 {% endblock %}

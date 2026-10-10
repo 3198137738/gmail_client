@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+from email.utils import parseaddr
 from datetime import datetime, timezone
 
 from fastapi.templating import Jinja2Templates
@@ -130,7 +131,20 @@ def _initials(value: str) -> str:
     return (parts[0][0] + parts[1][0]).upper()
 
 
+def _addr_name(value: str | None) -> str:
+    """地址头中的显示名；没有显示名时返回邮箱地址。"""
+    name, addr = parseaddr(value or "")
+    return (name or addr or (value or "")).strip()
+
+
+def _addr_email(value: str | None) -> str:
+    """地址头中的邮箱地址部分。"""
+    return parseaddr(value or "")[1].strip()
+
+
 templates.env.filters["safe_html"] = _safe_html
+templates.env.filters["addr_name"] = _addr_name
+templates.env.filters["addr_email"] = _addr_email
 templates.env.filters["fmt_dt"] = _fmt_dt
 templates.env.filters["utc_to_local"] = utc_to_local
 templates.env.filters["fmt_rel_dt"] = _fmt_rel_dt

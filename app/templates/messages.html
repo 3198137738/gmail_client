@@ -289,7 +289,7 @@
                         {% if kind == 'sent' %}
                         <td class="rcm-col-truncate" title="{{ m.to_addr }}">{{ m.to_addr }}</td>
                         {% else %}
-                        <td class="rcm-col-truncate" title="{{ m.from_addr }}">{{ m.from_addr }}</td>
+                        <td class="rcm-col-truncate" title="{{ m.from_addr }}">{{ m.from_addr|addr_name }}</td>
                         {% endif %}
                         <td class="rcm-col-truncate">
                             <a class="rcm-subject-link" href="{{ url_for('messages.detail', message_id=m.id) }}">

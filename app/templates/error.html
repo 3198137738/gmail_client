@@ -1,13 +1,9 @@
 {% extends "base.html" %}
 {% block title %}{{ status_code }}{% endblock %}
 {% block content %}
-<div class="container py-5">
-    <div class="card shadow-sm mx-auto" style="max-width: 560px;">
-        <div class="card-body text-center">
-            <h1 class="display-5 text-danger">{{ status_code }}</h1>
-            <p class="lead">{{ detail }}</p>
-            <a href="/" class="btn btn-primary">返回首页</a>
-        </div>
-    </div>
+<div class="gm-error">
+    <div class="gm-error-code">{{ status_code }}</div>
+    <p class="gm-error-detail">{{ detail }}</p>
+    <a href="/" class="btn btn-primary">返回首页</a>
 </div>
 {% endblock %}
