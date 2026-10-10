@@ -24,6 +24,14 @@
                   onsubmit="return confirm('确定删除这封邮件吗？此操作会同步删除服务器上的对应邮件。');">
                 <button type="submit" class="btn btn-sm btn-outline-danger">删除</button>
             </form>
+            {% if message.folder_kind == 'junk' %}
+            <form method="post" action="{{ url_for('messages.not_spam', message_id=message.id) }}" class="m-0"
+                  onsubmit="return confirm({{ ('这不是垃圾邮件？\n将把该发件人的垃圾邮件全部移回收件箱，并信任 ' ~ (sender_email or '该发件人') ~ '：以后其邮件即使被 Gmail 判为垃圾邮件，也会自动移回收件箱。')|tojson|forceescape }});">
+                <button type="submit" class="btn btn-sm btn-outline-success">
+                    <i class="bi bi-check2-circle"></i> 这不是垃圾邮件
+                </button>
+            </form>
+            {% endif %}
             {% if sender_email and message.folder_kind != 'sent' %}
             {% if sender_blocked %}
             <a class="btn btn-sm btn-outline-success"

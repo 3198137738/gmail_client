@@ -65,4 +65,43 @@
         </div>
     </div>
 </div>
+
+<div class="card shadow-sm mt-3">
+    <div class="card-header bg-white">
+        <strong>信任的发件人</strong>
+        <span class="text-muted small ms-2">在垃圾邮件中点「这不是垃圾邮件」后加入；其邮件被 Gmail 判为垃圾邮件时会自动移回收件箱</span>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>发件人邮箱</th>
+                    <th>账号</th>
+                    <th>信任时间</th>
+                    <th class="text-end">操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in trusted_rows %}
+                <tr>
+                    <td><code>{{ row.sender_email }}</code></td>
+                    <td>{{ row.account.display_name or row.account.email }}</td>
+                    <td>{{ row.created_at|utc_to_local|fmt_dt('%Y-%m-%d %H:%M:%S') }}</td>
+                    <td class="text-end">
+                        <form method="post" action="{{ url_for('messages.untrust_sender', trusted_id=row.id) }}" class="d-inline"
+                              onsubmit="return confirm({{ ('确定取消信任 ' ~ row.sender_email ~ ' 吗？')|tojson|forceescape }});">
+                            <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+                            <button type="submit" class="btn btn-sm btn-outline-secondary">取消信任</button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="4" class="text-center text-muted py-4">当前没有信任的发件人</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
 {% endblock %}

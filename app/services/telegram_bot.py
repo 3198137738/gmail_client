@@ -23,7 +23,13 @@ from ..config import (
     TELEGRAM_POLL_TIMEOUT_SEC,
 )
 from . import telegram_service as tg
-from .message_actions import count_unread, delete_by_id, list_unread, mark_read_by_id
+from .message_actions import (
+    count_unread,
+    delete_by_id,
+    list_unread,
+    mark_not_spam,
+    mark_read_by_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +131,9 @@ class TelegramBot(threading.Thread):
                 f"  \U0001F4E5 <code>{account}</code>"
             )
             tg.send_message(
-                body, chat_id=chat_id, reply_markup=tg._action_keyboard(item["id"])
+                body,
+                chat_id=chat_id,
+                reply_markup=tg._action_keyboard(item["id"], junk=item.get("folder_kind") == "junk"),
             )
 
     def _handle_callback(self, cq: dict[str, Any]) -> None:
@@ -155,6 +163,10 @@ class TelegramBot(threading.Thread):
             ok, info = delete_by_id(target_id)
             toast = "已删除" if ok else f"失败：{info}"
             done_note = "\U0001F5D1 已删除"
+        elif action == "notspam":
+            ok, info = mark_not_spam(target_id)
+            toast = info if ok else f"失败：{info}"
+            done_note = "\u2705 已移回收件箱，并信任该发件人"
         else:
             tg.answer_callback_query(cq_id, "未知操作")
             return

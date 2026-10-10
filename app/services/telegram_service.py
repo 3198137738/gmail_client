@@ -264,15 +264,16 @@ def send_test_message() -> tuple[bool, str]:
     )
 
 
-def _action_keyboard(message_id: int) -> dict:
-    return {
-        "inline_keyboard": [
-            [
-                {"text": "\u2713 标记已读", "callback_data": f"read:{message_id}"},
-                {"text": "\U0001F5D1 删除", "callback_data": f"del:{message_id}"},
-            ]
+def _action_keyboard(message_id: int, *, junk: bool = False) -> dict:
+    rows = [
+        [
+            {"text": "\u2713 标记已读", "callback_data": f"read:{message_id}"},
+            {"text": "\U0001F5D1 删除", "callback_data": f"del:{message_id}"},
         ]
-    }
+    ]
+    if junk:
+        rows.append([{"text": "\u2705 这不是垃圾邮件", "callback_data": f"notspam:{message_id}"}])
+    return {"inline_keyboard": rows}
 
 
 def _format_message_line(msg: Message) -> str:
@@ -368,7 +369,7 @@ def _notify_message_detail(msg: Message, safe_email: str, *, junk: bool = False)
     )
     _send_message_chunked(
         header + body,
-        reply_markup=_action_keyboard(int(msg.id)),
+        reply_markup=_action_keyboard(int(msg.id), junk=junk),
     )
 
     files = [a for a in (msg.attachments or []) if not a.is_inline]

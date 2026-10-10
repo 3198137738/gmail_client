@@ -45,6 +45,9 @@ class Account(Base):
     blocked_senders = relationship(
         "BlockedSender", back_populates="account", cascade="all, delete-orphan"
     )
+    trusted_senders = relationship(
+        "TrustedSender", back_populates="account", cascade="all, delete-orphan"
+    )
 
 
 class Message(Base):
@@ -185,4 +188,23 @@ class BlockedSender(Base):
     __table_args__ = (
         UniqueConstraint("account_id", "sender_email", name="uq_blocked_sender_account_email"),
         Index("ix_blocked_senders_account_sender", "account_id", "sender_email"),
+    )
+
+
+class TrustedSender(Base):
+    """「这不是垃圾邮件」的发件人：其邮件即使被 Gmail 判为垃圾邮件，同步时也会自动移回收件箱。"""
+
+    __tablename__ = "trusted_senders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sender_email: Mapped[str] = mapped_column(String(320), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
+
+    account = relationship("Account", back_populates="trusted_senders")
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "sender_email", name="uq_trusted_sender_account_email"),
     )

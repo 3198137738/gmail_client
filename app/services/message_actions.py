@@ -17,9 +17,14 @@ from sqlalchemy.orm import Session, selectinload
 
 from ..config import ATTACHMENTS_DIR
 from ..database import session_scope
-from ..models import Message
+from ..models import Message, TrustedSender
 from .background import submit_bg
-from .imap_service import delete_imap_messages, update_imap_flags
+from .imap_service import (
+    _normalize_sender_email,
+    delete_imap_messages,
+    move_imap_messages,
+    update_imap_flags,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +112,78 @@ def toggle_messages_read_state(
 
 
 # --- Standalone helpers for the Telegram bot (own session lifecycle) --------
+
+
+def mark_not_spam(message_id: int) -> tuple[bool, str]:
+    """「这不是垃圾邮件」：信任该发件人，并把其在垃圾邮件中的所有邮件移回收件箱。
+
+    在 Gmail 上从垃圾邮件移到收件箱，等同于在 Gmail 中点「不是垃圾邮件」。
+    之后该发件人的邮件即使又被判为垃圾邮件，同步时也会自动移回收件箱。
+    移动成功后才删除本地的垃圾邮件记录，收件箱同步会把它们作为新邮件收进来。
+    返回 ``(ok, 提示信息)``。
+    """
+    try:
+        with session_scope() as db:
+            message = db.get(Message, message_id)
+            if message is None:
+                return False, "邮件不存在或已删除"
+            if message.folder_kind != "junk":
+                return False, "这封邮件不在垃圾邮件中"
+            account_id = int(message.account_id)
+            sender = _normalize_sender_email(message.from_addr)
+
+            targets = [message]
+            if sender:
+                exists = db.execute(
+                    select(TrustedSender.id).where(
+                        TrustedSender.account_id == account_id,
+                        TrustedSender.sender_email == sender,
+                    )
+                ).first()
+                if exists is None:
+                    db.add(TrustedSender(account_id=account_id, sender_email=sender))
+                candidates = db.execute(
+                    select(Message).where(
+                        Message.account_id == account_id,
+                        Message.folder_kind == "junk",
+                        Message.from_addr.ilike(f"%{sender}%"),
+                    )
+                ).scalars().all()
+                targets = [m for m in candidates if _normalize_sender_email(m.from_addr) == sender]
+
+            groups: dict[str, dict[int, int]] = defaultdict(dict)  # folder -> {uid: message_id}
+            for m in targets:
+                groups[m.folder][int(m.uid)] = int(m.id)
+
+        moved_ids: list[int] = []
+        errors: list[str] = []
+        for folder, uid_map in groups.items():
+            result = move_imap_messages(account_id, folder, sorted(uid_map))
+            if result["ok"]:
+                moved_ids.extend(uid_map.values())
+            else:
+                errors.append(str(result["error"]))
+
+        if moved_ids:
+            with session_scope() as db:
+                moved = db.execute(
+                    select(Message)
+                    .options(selectinload(Message.attachments))
+                    .where(Message.id.in_(moved_ids))
+                ).scalars().all()
+                delete_local_messages(db, moved)
+
+        logger.info(
+            "not-spam account=%s sender=%s moved=%s errors=%s",
+            account_id, sender, len(moved_ids), errors,
+        )
+        if errors:
+            return False, f"移回收件箱失败：{errors[0]}"
+        who = f"，已信任发件人 {sender}" if sender else ""
+        return True, f"已移回收件箱 {len(moved_ids)} 封{who}"
+    except Exception as exc:
+        logger.exception("mark_not_spam failed id=%s", message_id)
+        return False, str(exc)
 
 
 def mark_read_by_id(message_id: int) -> tuple[bool, str]:

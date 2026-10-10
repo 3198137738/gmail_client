@@ -14,7 +14,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..database import get_db
-from ..models import Account, BlockedSender, Message
+from ..models import Account, BlockedSender, Message, TrustedSender
 from ..services.background import submit_bg
 from ..services.imap_service import (
     delete_imap_messages,
@@ -24,6 +24,7 @@ from ..services.imap_service import (
 )
 from ..services.message_actions import (
     delete_local_messages as _delete_local_messages,
+    mark_not_spam,
     toggle_messages_read_state as _toggle_messages_read_state,
 )
 from ..templating import templates
@@ -500,6 +501,35 @@ def delete_one(
     )
 
 
+@router.post("/{message_id}/not-spam", name="messages.not_spam")
+def not_spam(
+    request: Request,
+    message_id: int,
+    next: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    """「这不是垃圾邮件」：信任发件人，并把其垃圾邮件移回收件箱。"""
+    message = db.get(Message, message_id)
+    if message is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    account_id = int(message.account_id)
+    db.close()  # 释放连接；后续操作在 mark_not_spam 内自行开启会话
+
+    ok, info = mark_not_spam(message_id)
+    if not ok:
+        raise HTTPException(status_code=502, detail=info)
+    if next:
+        return RedirectResponse(url=next, status_code=303)
+    return _redirect_to_list(
+        request,
+        kind="junk",
+        account_id=account_id,
+        q="",
+        page=1,
+        page_size=DEFAULT_PAGE_SIZE,
+    )
+
+
 @router.post("/{message_id}/block-sender", name="messages.block_sender")
 def block_sender(
     request: Request,
@@ -581,12 +611,22 @@ def blocked_senders(
         stmt.order_by(BlockedSender.created_at.desc(), BlockedSender.id.desc())
     ).scalars().all()
 
+    trusted_stmt = select(TrustedSender).options(selectinload(TrustedSender.account))
+    if account_id_int:
+        trusted_stmt = trusted_stmt.where(TrustedSender.account_id == account_id_int)
+    if q_clean:
+        trusted_stmt = trusted_stmt.where(TrustedSender.sender_email.ilike(f"%{q_clean}%"))
+    trusted_rows = db.execute(
+        trusted_stmt.order_by(TrustedSender.created_at.desc(), TrustedSender.id.desc())
+    ).scalars().all()
+
     return templates.TemplateResponse(
         request,
         "blocked_senders.html",
         {
             "accounts": accounts,
             "blocked_rows": blocked_rows,
+            "trusted_rows": trusted_rows,
             "current_account_id": account_id_int,
             "q": q,
         },
@@ -618,6 +658,29 @@ def unblock_sender(
         1,
         blocked_at.isoformat(),
     )
+    if next:
+        return RedirectResponse(url=next, status_code=303)
+    return RedirectResponse(
+        url=request.url_for("messages.blocked_senders").include_query_params(account_id=account_id),
+        status_code=303,
+    )
+
+
+@router.post("/trusted-senders/{trusted_id}/remove", name="messages.untrust_sender")
+def untrust_sender(
+    request: Request,
+    trusted_id: int,
+    next: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    """取消信任发件人：之后其邮件若被 Gmail 判为垃圾邮件，将正常留在垃圾邮件中。"""
+    row = db.get(TrustedSender, trusted_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Trusted sender not found")
+    account_id = int(row.account_id)
+    logger.info("untrust-sender account_id=%s sender=%s", account_id, row.sender_email)
+    db.delete(row)
+    db.commit()
     if next:
         return RedirectResponse(url=next, status_code=303)
     return RedirectResponse(

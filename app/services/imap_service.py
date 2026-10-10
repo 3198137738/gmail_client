@@ -33,6 +33,7 @@ Strategy
 from __future__ import annotations
 
 import logging
+import shutil
 import socket
 import ssl
 import threading
@@ -60,9 +61,9 @@ from ..config import (
 )
 from ..crypto import decrypt_password
 from ..database import session_scope
-from ..models import Account, Attachment, BlockedSender, Message, SyncState
+from ..models import Account, Attachment, BlockedSender, Message, SyncState, TrustedSender
 from .background import submit_bg
-from .email_parser import parse_email
+from .email_parser import _message_base_dir, parse_email
 from .events import publish_new_mail
 from .telegram_service import notify_new_mail
 
@@ -248,6 +249,14 @@ def _load_blocked_sender_emails(account_id: int) -> set[str]:
     return {str(v).strip().lower() for v in rows if v}
 
 
+def _load_trusted_sender_emails(account_id: int) -> set[str]:
+    with session_scope() as db:
+        rows = db.execute(
+            select(TrustedSender.sender_email).where(TrustedSender.account_id == account_id)
+        ).scalars().all()
+    return {str(v).strip().lower() for v in rows if v}
+
+
 def _existing_uids(account_id: int, folder: str, uids: list[int]) -> set[int]:
     if not uids:
         return set()
@@ -428,6 +437,8 @@ def _sync_one_folder(
 
     batch_size = IMAP_FETCH_BATCH_SIZE
     blocked_senders = _load_blocked_sender_emails(account_id)
+    trusted_senders = _load_trusted_sender_emails(account_id) if folder_kind == "junk" else set()
+    rescue_uids: list[int] = []
     for start in range(0, len(uids), batch_size):
         chunk = uids[start:start + batch_size]
         try:
@@ -456,6 +467,20 @@ def _sync_one_folder(
             fetched_items=new_items,
             blocked_senders=blocked_senders,
         )
+        if trusted_senders:
+            # 信任发件人的邮件被 Gmail 判为垃圾邮件时，不入库，改为移回收件箱，
+            # 收件箱同步会再把它作为新邮件收进来。
+            kept = []
+            for record in records:
+                if _normalize_sender_email(record["from_addr"]) in trusted_senders:
+                    rescue_uids.append(int(record["uid"]))
+                    shutil.rmtree(
+                        _message_base_dir(account_id, folder_kind, int(record["uid"])),
+                        ignore_errors=True,
+                    )
+                else:
+                    kept.append(record)
+            records = kept
         if not records:
             continue
 
@@ -488,6 +513,12 @@ def _sync_one_folder(
         uidvalidity=uidvalidity,
         new_last_uid=max(uids),
     )
+    if rescue_uids:
+        logger.info(
+            "Trusted sender mail found in junk, moving to inbox account=%s uids=%s",
+            account_id, rescue_uids,
+        )
+        submit_bg(move_imap_messages, account_id, folder, rescue_uids)
     elapsed = perf_counter() - started
     # 仅增量同步时统计延迟；首次同步拉的是历史邮件，延迟无意义。
     # INTERNALDATE 由 IMAPClient 转换为本地时间（无时区），与 datetime.now() 直接比较；精度为秒。
@@ -957,3 +988,56 @@ def delete_imap_messages(
         _release_account_lock(account_id, lock)
 
     return result
+
+def move_imap_messages(
+    account_id: int,
+    folder: str,
+    uids: list[int],
+    target: str = DEFAULT_FOLDER,
+    *,
+    lock_timeout: float = 30.0,
+) -> dict:
+    """把 ``folder`` 中的邮件移动到 ``target``（默认收件箱）。
+
+    从 Gmail 垃圾邮件文件夹移到收件箱即等同于在 Gmail 中点「不是垃圾邮件」，
+    Gmail 会据此调整垃圾邮件过滤。返回 ``{"ok": bool, "moved": n, "error": ...}``。
+    """
+    if not uids:
+        return {"ok": True, "moved": 0, "error": None}
+    try:
+        with session_scope() as db:
+            account = db.get(Account, account_id)
+            if account is None:
+                return {"ok": False, "moved": 0, "error": "account_not_found"}
+            email = account.email
+            encrypted = account.encrypted_password
+        password = decrypt_password(encrypted)
+    except ValueError:
+        return {"ok": False, "moved": 0, "error": "decrypt_failed"}
+    except Exception:
+        logger.exception("Failed to load account for IMAP move id=%s", account_id)
+        return {"ok": False, "moved": 0, "error": "db_load_failed"}
+
+    lock = _account_lock(account_id)
+    if not lock.acquire(blocking=True, timeout=lock_timeout):
+        logger.warning("Timed out acquiring lock for move account=%s", account_id)
+        return {"ok": False, "moved": 0, "error": "busy"}
+    try:
+        with _imap_client(email, password) as client:
+            client.select_folder(folder, readonly=False)
+            if client.has_capability("MOVE"):
+                client.move(uids, target)
+            else:
+                client.copy(uids, target)
+                client.delete_messages(uids)
+                client.expunge()
+        logger.info("Moved IMAP messages account=%s %s -> %s uids=%s", account_id, folder, target, uids)
+        return {"ok": True, "moved": len(uids), "error": None}
+    except (IMAPSyncError, IMAPClientError) as exc:
+        logger.warning("Failed to move IMAP messages account=%s folder=%s: %s", account_id, folder, exc)
+        return {"ok": False, "moved": 0, "error": str(exc)}
+    except Exception as exc:
+        logger.exception("Unexpected move_imap_messages failure account=%s", account_id)
+        return {"ok": False, "moved": 0, "error": exc.__class__.__name__}
+    finally:
+        _release_account_lock(account_id, lock)
