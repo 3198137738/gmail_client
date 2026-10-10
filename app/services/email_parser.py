@@ -61,14 +61,27 @@ class ParsedMessage:
 
 
 _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._\-]+")
+_EXTENSION_RE = re.compile(r"\.([A-Za-z0-9]{1,10})$")
 
 
 def _safe_filename(name: str, fallback: str) -> str:
-    """Return a filesystem-safe filename, falling back when empty."""
+    """Return a filesystem-safe filename, falling back when empty.
+
+    扩展名单独保留：像「十月发票.pdf」这样主体全是非 ASCII 字符的文件名，
+    主体部分用 fallback 的主体代替，仍保留 .pdf，而不是只剩下 "pdf"。
+    """
     if not name:
         return fallback
-    cleaned = _SAFE_FILENAME_RE.sub("_", name).strip("._") or fallback
-    return cleaned[:200]
+    ext_match = _EXTENSION_RE.search(name)
+    ext = ext_match.group(1) if ext_match else ""
+    stem = name[: ext_match.start()] if ext_match else name
+    clean_stem = _SAFE_FILENAME_RE.sub("_", stem).strip("._-")
+    if not clean_stem:
+        if not ext:
+            return fallback
+        clean_stem = fallback.rsplit(".", 1)[0] if "." in fallback else fallback
+    cleaned = f"{clean_stem}.{ext}" if ext else clean_stem
+    return cleaned[-200:] if len(cleaned) > 200 else cleaned
 
 
 def _decode_header_value(value: Optional[str]) -> Optional[str]:
