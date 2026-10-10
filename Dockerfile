@@ -8,6 +8,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     TZ=Asia/Shanghai
 
+# uvicorn 只信任本机与 Docker/内网段（nginx 容器）发来的 X-Forwarded-For；
+# 不能用 "*"，否则任何人都能伪造来源 IP，绕过登录失败封禁。
+ENV FORWARDED_ALLOW_IPS="127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7"
+
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -40,4 +44,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8000/healthz >/dev/null || exit 1
 
 ENTRYPOINT ["/docker-entrypoint.sh"]
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]

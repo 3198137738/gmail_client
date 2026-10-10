@@ -8,7 +8,9 @@ from ipaddress import ip_network
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-ENV_FILE_PATH = BASE_DIR / ".env"
+# 测试时可通过环境变量把 .env 和数据目录指向临时位置，避免读写真实数据。
+ENV_FILE_PATH = Path(os.getenv("APP_ENV_FILE") or (BASE_DIR / ".env"))
+DATA_ROOT = Path(os.getenv("APP_DATA_ROOT") or BASE_DIR)
 
 
 def _load_dotenv(path: Path) -> None:
@@ -38,10 +40,10 @@ def _load_dotenv(path: Path) -> None:
 
 _load_dotenv(ENV_FILE_PATH)
 
-DATA_DIR = BASE_DIR / "data"
-ATTACHMENTS_DIR = BASE_DIR / "attachments"
-SECRETS_DIR = BASE_DIR / "secrets"
-LOGS_DIR = BASE_DIR / "logs"
+DATA_DIR = DATA_ROOT / "data"
+ATTACHMENTS_DIR = DATA_ROOT / "attachments"
+SECRETS_DIR = DATA_ROOT / "secrets"
+LOGS_DIR = DATA_ROOT / "logs"
 TEMPLATES_DIR = BASE_DIR / "app" / "templates"
 STATIC_DIR = BASE_DIR / "app" / "static"
 
@@ -186,9 +188,18 @@ WEB_AUTH_PERMANENT_BLOCK_AFTER_FAILURES = _get_bool(
 )
 WEB_AUTH_BLOCKED_IPS = _get_csv_set("WEB_AUTH_BLOCKED_IPS")
 TRUST_PROXY_HEADERS = _get_bool("TRUST_PROXY_HEADERS", True)
+# 只有来自这些网段的直连请求，才会采信其 X-Forwarded-For / X-Real-IP。
+# 默认包含本机和私有网段（nginx 容器通过 Docker 内网转发过来）；公网地址永远不被信任。
 TRUSTED_PROXY_NETWORKS = _get_proxy_networks(
     "TRUSTED_PROXY_NETWORKS",
-    ("127.0.0.0/8", "::1/128"),
+    (
+        "127.0.0.0/8",
+        "::1/128",
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "fc00::/7",
+    ),
 )
 SESSION_SECRET_PATH = SECRETS_DIR / "session_secret.txt"
 

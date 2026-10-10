@@ -140,15 +140,24 @@ def _is_trusted_proxy(ip_value: str | None) -> bool:
 
 
 def get_client_ip(request: Request) -> str:
+    """返回用于登录限流的客户端 IP。
+
+    只有直连方是可信代理时才看 X-Forwarded-For，并且从右往左找第一个
+    非可信代理的地址：最左边的值完全由客户端填写，取它等于允许伪造 IP。
+    """
     direct_ip = _normalize_ip(request.client.host if request.client else None)
 
     if direct_ip and _is_trusted_proxy(direct_ip):
         forwarded_for = request.headers.get("x-forwarded-for", "")
         if forwarded_for:
-            for part in forwarded_for.split(","):
-                forwarded_ip = _normalize_ip(part)
-                if forwarded_ip:
-                    return forwarded_ip[:255]
+            hops = [_normalize_ip(part) for part in forwarded_for.split(",")]
+            hops = [hop for hop in hops if hop]
+            for hop in reversed(hops):
+                if not _is_trusted_proxy(hop):
+                    return hop[:255]
+            if hops:
+                # 整条链都在内网：取最靠近客户端的一跳
+                return hops[0][:255]
 
         real_ip = _normalize_ip(request.headers.get("x-real-ip"))
         if real_ip:
