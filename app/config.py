@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+from logging.handlers import RotatingFileHandler
 import secrets
 from ipaddress import ip_network
 from pathlib import Path
@@ -207,6 +208,9 @@ TRUSTED_PROXY_NETWORKS = _get_proxy_networks(
         "fc00::/7",
     ),
 )
+LOG_MAX_MB = _get_positive_int("LOG_MAX_MB", 10)
+LOG_BACKUP_COUNT = _get_positive_int("LOG_BACKUP_COUNT", 5)
+
 SESSION_SECRET_PATH = SECRETS_DIR / "session_secret.txt"
 # 会话 cookie 只通过 HTTPS 发送。仅用 http:// 访问（如本地调试）时需设为 false，
 # 否则浏览器不会回传 cookie，表现为登录后又跳回登录页。
@@ -236,13 +240,18 @@ def setup_logging() -> None:
     """Configure root logger; never write secrets to logs."""
     log_file = LOGS_DIR / "app.log"
     fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    # 按大小轮转：单个文件超过 LOG_MAX_MB 后切分，最多保留 LOG_BACKUP_COUNT 个旧文件
+    file_handler = RotatingFileHandler(
+        log_file,
+        maxBytes=LOG_MAX_MB * 1024 * 1024,
+        backupCount=LOG_BACKUP_COUNT,
+        encoding="utf-8",
+    )
     logging.basicConfig(
         level=logging.INFO,
         format=fmt,
-        handlers=[
-            logging.FileHandler(log_file, encoding="utf-8"),
-            logging.StreamHandler(),
-        ],
+        handlers=[file_handler, logging.StreamHandler()],
+        force=True,
     )
     logging.getLogger("apscheduler").setLevel(logging.WARNING)
     logging.getLogger("imapclient").setLevel(logging.WARNING)
