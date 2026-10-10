@@ -31,3 +31,19 @@ def client(app):
 
     with TestClient(app, base_url="http://testserver") as c:
         yield c
+
+
+@pytest.fixture(autouse=True)
+def _no_background_network(monkeypatch):
+    """测试中不真正提交 IMAP/SMTP 后台任务，只记录调用。"""
+    calls: list[tuple] = []
+
+    def fake_submit(fn, *args, **kwargs):
+        calls.append((getattr(fn, "__name__", fn), args, kwargs))
+
+    import app.routes.messages as messages_routes
+    import app.routes.sync as sync_routes
+
+    monkeypatch.setattr(messages_routes, "submit_bg", fake_submit)
+    monkeypatch.setattr(sync_routes, "submit_bg", fake_submit)
+    return calls

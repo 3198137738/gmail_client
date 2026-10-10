@@ -18,5 +18,5 @@ IMAPClient==3.0.1
 # Scheduler
 APScheduler==3.10.4
 
-# HTML sanitization (CSSSanitizer requires the [css] extra -> tinycss2)
-bleach[css]==6.2.0
+# HTML sanitization（Rust ammonia 绑定，替代已停止维护的 bleach）
+nh3==0.3.7

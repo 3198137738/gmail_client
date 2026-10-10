@@ -1,0 +1,13 @@
+{# 邮件正文：放在 sandbox iframe 中渲染（不允许脚本），高度由 base.html 中的脚本自适应。 #}
+{% if has_remote_images and not show_images %}
+<div class="gm-images-banner">
+    <i class="bi bi-image"></i>
+    <span>为保护隐私，已阻止加载外部图片。</span>
+    <a href="{{ request.url.include_query_params(images=1) }}">显示图片</a>
+</div>
+{% endif %}
+<iframe class="gm-body-frame"
+        src="{{ body_url }}"
+        sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+        referrerpolicy="no-referrer"
+        title="邮件正文"></iframe>

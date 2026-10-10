@@ -39,14 +39,9 @@
 
         <hr>
 
-        <div class="email-body border rounded p-3 bg-white">
-            {% if message.body_html %}
-                {{ message.body_html|safe_html }}
-            {% elif message.body_text %}
-                <pre style="white-space: pre-wrap;">{{ message.body_text }}</pre>
-            {% else %}
-                <em>邮件内容为空</em>
-            {% endif %}
+        <div class="border rounded p-3 bg-white">
+            {% set body_url = url_for('compose.sent_body', sent_id=message.id).include_query_params(images=1) if show_images else url_for('compose.sent_body', sent_id=message.id) %}
+            {% include "_mail_body_frame.html" %}
         </div>
     </div>
 </div>

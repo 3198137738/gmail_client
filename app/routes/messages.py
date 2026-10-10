@@ -17,6 +17,7 @@ from ..auth import is_safe_redirect
 from ..database import get_db
 from ..models import Account, BlockedSender, Message, TrustedSender
 from ..services.background import submit_bg
+from ..services.mail_body import body_document_response, body_has_remote_images
 from ..services.imap_service import (
     delete_imap_messages,
     is_account_busy,
@@ -690,10 +691,26 @@ def untrust_sender(
     )
 
 
+@router.get("/{message_id}/body", response_class=HTMLResponse, name="messages.body")
+def message_body(
+    message_id: int,
+    images: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    """邮件正文文档，只在详情页的 sandbox iframe 中加载。"""
+    row = db.execute(
+        select(Message.body_html, Message.body_text).where(Message.id == message_id)
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    return body_document_response(row.body_html, row.body_text, allow_remote_images=images)
+
+
 @router.get("/{message_id}", response_class=HTMLResponse, name="messages.detail")
 def view_message(
     request: Request,
     message_id: int,
+    images: bool = Query(False),
     db: Session = Depends(get_db),
 ):
     message = db.execute(
@@ -737,5 +754,7 @@ def view_message(
             "inline_attachments": inline_attachments,
             "sender_email": sender_email,
             "sender_blocked": sender_blocked,
+            "show_images": images,
+            "has_remote_images": body_has_remote_images(message.body_html),
         },
     )

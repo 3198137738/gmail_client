@@ -6,10 +6,8 @@ from email.utils import parseaddr
 from datetime import datetime, timezone
 
 from fastapi.templating import Jinja2Templates
-from markupsafe import Markup
 
 from .config import REALTIME_ENABLED, STATIC_DIR, SYNC_JUNK_ENABLED, TEMPLATES_DIR, WEB_AUTH_ENABLED
-from .services.html_sanitizer import sanitize_html
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
@@ -26,17 +24,6 @@ def _static_version() -> str:
             digest.update(path.relative_to(STATIC_DIR).as_posix().encode())
             digest.update(path.read_bytes())
     return digest.hexdigest()[:10]
-
-
-def _safe_html(value: str) -> Markup:
-    """Render stored ``body_html`` through the current sanitizer.
-
-    Re-running sanitisation on render is intentional: it lets us retroactively
-    clean up legacy rows whose ``body_html`` was produced by an older, buggier
-    version of the sanitizer (e.g. leaked CSS from ``<style>`` blocks).
-    Idempotent thanks to the post-process anchor-tag guard.
-    """
-    return Markup(sanitize_html(value or ""))
 
 
 def utc_to_local(value: datetime | None) -> datetime | None:
@@ -147,7 +134,6 @@ def _avatar_tone(value: str | None) -> int:
     return sum(ord(ch) for ch in (value or "")) % 6
 
 
-templates.env.filters["safe_html"] = _safe_html
 templates.env.filters["avatar_tone"] = _avatar_tone
 templates.env.filters["addr_name"] = _addr_name
 templates.env.filters["addr_email"] = _addr_email

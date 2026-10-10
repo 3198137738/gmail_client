@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from html import escape
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import HTTPException
@@ -78,7 +79,38 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# 主页面的 CSP。邮件正文在 sandbox iframe 中渲染，有自己更严格的 CSP
+# （见 services/mail_body.py），这里不会覆盖已存在的 CSP 头。
+_CDN = "https://cdn.jsdelivr.net"
+_PAGE_CSP = "; ".join(
+    [
+        "default-src 'self'",
+        f"script-src 'self' 'unsafe-inline' {_CDN}",
+        f"style-src 'self' 'unsafe-inline' {_CDN}",
+        f"font-src 'self' data: {_CDN}",
+        "img-src 'self' data: blob: https:",
+        "connect-src 'self'",
+        "frame-src 'self'",
+        "frame-ancestors 'self'",
+        "object-src 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+    ]
+)
+
+
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    headers = response.headers
+    headers.setdefault("Content-Security-Policy", _PAGE_CSP)
+    headers.setdefault("X-Content-Type-Options", "nosniff")
+    headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    headers.setdefault("Referrer-Policy", "same-origin")
+    return response
+
+
 app.middleware("http")(require_app_password)
+app.middleware("http")(add_security_headers)
 app.add_middleware(
     SessionMiddleware,
     secret_key=load_session_secret(),
@@ -119,6 +151,6 @@ async def http_exception_handler(request: Request, exc: HTTPException):
                 status_code=exc.status_code,
             )
     return HTMLResponse(
-        content=f"<h1>{exc.status_code}</h1><p>{exc.detail}</p>",
+        content=f"<h1>{exc.status_code}</h1><p>{escape(str(exc.detail))}</p>",
         status_code=exc.status_code,
     )

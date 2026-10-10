@@ -11,7 +11,7 @@ from email.utils import getaddresses
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
@@ -20,6 +20,7 @@ from ..config import ATTACHMENTS_DIR, SYNC_SENT_ENABLED
 from ..auth import is_safe_redirect
 from ..database import get_db
 from ..models import Account, Attachment, Message, SentMessage
+from ..services.mail_body import body_document_response, body_has_remote_images
 from ..services.smtp_service import SMTPSendError, send_email
 from ..templating import templates, utc_to_local
 
@@ -500,8 +501,28 @@ def sent_list(request: Request, db: Session = Depends(get_db)):
     )
 
 
+@router.get("/sent/{sent_id}/body", response_class=HTMLResponse, name="compose.sent_body")
+def sent_body(
+    sent_id: int,
+    images: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    """发件记录正文文档，只在详情页的 sandbox iframe 中加载。"""
+    row = db.execute(
+        select(SentMessage.body_html, SentMessage.body_text).where(SentMessage.id == sent_id)
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Sent message not found")
+    return body_document_response(row.body_html, row.body_text, allow_remote_images=images)
+
+
 @router.get("/sent/{sent_id}", response_class=HTMLResponse, name="compose.sent_detail")
-def sent_detail(request: Request, sent_id: int, db: Session = Depends(get_db)):
+def sent_detail(
+    request: Request,
+    sent_id: int,
+    images: bool = Query(False),
+    db: Session = Depends(get_db),
+):
     record = db.execute(
         select(SentMessage)
         .options(selectinload(SentMessage.account))
@@ -512,7 +533,11 @@ def sent_detail(request: Request, sent_id: int, db: Session = Depends(get_db)):
     return templates.TemplateResponse(
         request,
         "sent_detail.html",
-        {"message": record},
+        {
+            "message": record,
+            "show_images": images,
+            "has_remote_images": body_has_remote_images(record.body_html),
+        },
     )
 
 

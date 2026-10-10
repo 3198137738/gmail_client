@@ -197,6 +197,37 @@
     });
 })();
 </script>
+<script>
+// 邮件正文 iframe 高度自适应（iframe 带 allow-same-origin，父页面可以读取其文档高度；
+// 正文内部不允许执行脚本）。
+(function () {
+    function fit(frame) {
+        try {
+            var doc = frame.contentDocument;
+            if (!doc || !doc.documentElement) return;
+            frame.style.height = doc.documentElement.scrollHeight + "px";
+        } catch (err) {}
+    }
+    document.querySelectorAll("iframe.gm-body-frame").forEach(function (frame) {
+        function onLoad() {
+            fit(frame);
+            try {
+                // 图片加载完、窗口宽度变化时内容高度会变
+                new ResizeObserver(function () { fit(frame); })
+                    .observe(frame.contentDocument.documentElement);
+            } catch (err) {}
+        }
+        frame.addEventListener("load", onLoad);
+        if (frame.contentDocument && frame.contentDocument.readyState === "complete"
+            && frame.contentDocument.URL !== "about:blank") {
+            onLoad();
+        }
+    });
+    window.addEventListener("resize", function () {
+        document.querySelectorAll("iframe.gm-body-frame").forEach(fit);
+    });
+})();
+</script>
 {% block extra_scripts %}{% endblock %}
 </body>
 </html>

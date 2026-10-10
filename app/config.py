@@ -64,27 +64,33 @@ SMTP_TIMEOUT_SEC = 30
 
 ATTACHMENTS_URL_PREFIX = "/attachments"
 
-ALLOWED_TAGS = [
+ALLOWED_TAGS = {
     "p", "br", "div", "span",
-    "table", "thead", "tbody", "tr", "td", "th",
+    "table", "thead", "tbody", "tfoot", "tr", "td", "th", "caption", "colgroup", "col",
     "a", "img",
-    "strong", "em", "b", "i", "u",
+    "strong", "em", "b", "i", "u", "s", "small", "sub", "sup", "font", "center",
     "ul", "ol", "li",
     "blockquote", "pre", "code",
     "h1", "h2", "h3", "h4", "h5", "h6",
     "hr",
-]
-
-ALLOWED_ATTRIBUTES = {
-    "*": ["style", "class", "id", "title"],
-    "a": ["href", "title", "rel", "target"],
-    "img": ["src", "alt", "width", "height", "style", "title"],
-    "td": ["colspan", "rowspan", "align", "valign", "style"],
-    "th": ["colspan", "rowspan", "align", "valign", "style"],
-    "table": ["border", "cellpadding", "cellspacing", "style", "width"],
 }
 
-ALLOWED_PROTOCOLS = ["http", "https", "data", "mailto"]
+# 不再允许 class / id：邮件自带的 <style> 会被整体删除，class 没有用处，
+# 反而可能被用来套用本站样式伪造界面；id 可能造成 DOM clobbering。
+# <a> 的 rel 由清洗器统一设置为 noopener noreferrer，不能出现在这里。
+ALLOWED_ATTRIBUTES = {
+    "*": {"style", "title", "align", "dir"},
+    "a": {"href"},
+    "img": {"src", "alt", "width", "height"},
+    "td": {"colspan", "rowspan", "valign", "width", "height", "bgcolor"},
+    "th": {"colspan", "rowspan", "valign", "width", "height", "bgcolor"},
+    "table": {"border", "cellpadding", "cellspacing", "width", "bgcolor"},
+    "col": {"span", "width"},
+    "colgroup": {"span", "width"},
+    "font": {"color", "face", "size"},
+}
+
+ALLOWED_PROTOCOLS = {"http", "https", "data", "mailto"}
 
 
 def _get_positive_int(name: str, default: int) -> int:

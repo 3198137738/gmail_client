@@ -918,31 +918,28 @@ a:hover { color: var(--rcm-primary-hover); }
 }
 
 /* ---- 邮件正文 -------------------------------------------------------- */
-.email-body {
-    max-width: 100%;
-    overflow-x: auto;
-    word-wrap: break-word;
-    font-size: 14px;
-    line-height: 1.6;
+/* 邮件正文 iframe（内容样式见 services/mail_body.py） */
+.gm-body-frame {
+    display: block;
+    width: 100%;
+    min-height: 80px;
+    border: 0;
+    background: #fff;
 }
-.email-body img {
-    max-width: 100%;
-    height: auto;
+.gm-images-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: #f1f4f9;
+    color: #444746;
+    font-size: 13px;
+    white-space: normal;
 }
-.email-body table { max-width: 100% !important; }
-.email-body pre {
-    background: transparent;
-    padding: 0;
-    margin: 0;
-    font-family: inherit;
-    font-size: 14px;
-}
-.email-body blockquote {
-    margin: 0 0 0 .8ex;
-    padding-left: 1ex;
-    border-left: 1px solid #ccc;
-    color: #5e5e5e;
-}
+.gm-images-banner a { font-weight: 500; }
 
 .account-avatar {
     display: inline-flex;
