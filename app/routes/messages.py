@@ -9,13 +9,14 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..auth import is_safe_redirect
 from ..database import get_db
 from ..models import Account, BlockedSender, Message, TrustedSender
 from ..services.background import submit_bg
+from ..services.search import message_search_filter
 from ..services.mail_body import body_document_response, body_has_remote_images
 from ..services.imap_service import (
     delete_imap_messages,
@@ -229,15 +230,7 @@ def list_messages(
     )
 
     q_clean = (q or "").strip()
-    search_filter = None
-    if q_clean:
-        pattern = f"%{q_clean}%"
-        search_filter = or_(
-            Message.subject.ilike(pattern),
-            Message.from_addr.ilike(pattern),
-            Message.to_addr.ilike(pattern),
-            Message.body_text.ilike(pattern),
-        )
+    search_filter = message_search_filter(q_clean)
 
     # Main result query (kind + account + search).
     stmt = select(Message).options(selectinload(Message.account))
@@ -343,16 +336,9 @@ def mark_all_read(
 
     stmt = select(Message).where(Message.is_read.is_(False))
     stmt = _apply_kind_account_filters(stmt, kind, account_id)
-    if q:
-        pattern = f"%{q.strip()}%"
-        stmt = stmt.where(
-            or_(
-                Message.subject.ilike(pattern),
-                Message.from_addr.ilike(pattern),
-                Message.to_addr.ilike(pattern),
-                Message.body_text.ilike(pattern),
-            )
-        )
+    search_filter = message_search_filter(q)
+    if search_filter is not None:
+        stmt = stmt.where(search_filter)
 
     unread = db.execute(stmt).scalars().all()
     affected = _toggle_messages_read_state(db, unread, is_read=True)

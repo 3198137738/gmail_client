@@ -88,7 +88,6 @@ class Message(Base):
     __table_args__ = (
         UniqueConstraint("account_id", "folder", "uid", name="uq_messages_account_folder_uid"),
         Index("ix_messages_account_date", "account_id", "date"),
-        Index("ix_messages_subject", "subject"),
         Index("ix_messages_kind_date", "folder_kind", "date"),
         Index("ix_messages_kind_unread", "folder_kind", "is_read"),
     )
