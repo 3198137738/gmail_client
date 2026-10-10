@@ -33,6 +33,7 @@ from .routes import accounts as accounts_routes
 from .routes import attachments as attachments_routes
 from .routes import events as events_routes
 from .routes import messages as messages_routes
+from .routes import senders as senders_routes
 from .routes import send as send_routes
 from .routes import sync as sync_routes
 from .services.background import shutdown_executor
@@ -129,6 +130,8 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 app.include_router(auth_routes.router)
 app.include_router(accounts_routes.router)
+# senders 必须先于 messages：/messages/blocked-senders 不能被 /messages/{message_id} 抢先匹配
+app.include_router(senders_routes.router)
 app.include_router(messages_routes.router)
 app.include_router(events_routes.router)
 app.include_router(sync_routes.router)
