@@ -162,6 +162,15 @@
                                         同步中
                                     </span>
                                 {% endif %}
+                                <span class="badge bg-light text-dark border ms-1" title="本地已同步的邮件数">
+                                    {{ message_counts.get(a.id, 0) }} 封
+                                </span>
+                                {% if backfilling.get(a.id) %}
+                                    <span class="badge bg-warning text-dark ms-1" title="正在后台同步更早的历史邮件，刷新页面查看进度">
+                                        <span class="spinner-border spinner-border-sm align-middle" style="width:.7rem;height:.7rem"></span>
+                                        同步历史邮件中
+                                    </span>
+                                {% endif %}
                                 {% if a.notify_enabled %}
                                     <span class="badge bg-primary ms-1" title="新邮件会推送到 Telegram"><i class="bi bi-bell"></i> 通知</span>
                                 {% else %}

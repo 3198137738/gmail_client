@@ -131,6 +131,11 @@ class SyncState(Base):
     uidvalidity: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     last_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # 历史邮件回填进度：UID 小于该值的邮件尚未处理（NULL 表示还没开始）
+    backfill_before_uid: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    backfill_done: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
 
     account = relationship("Account", back_populates="sync_states")
 

@@ -26,7 +26,8 @@ Concurrency / SQLite locking
 
 Strategy
 --------
-* On first sync of a folder, fetch the most recent ``INITIAL_SYNC_LIMIT`` UIDs.
+* On first sync of a folder, fetch the most recent ``INITIAL_SYNC_LIMIT`` UIDs;
+  older mail is then backfilled in the background by ``imap_backfill``.
 * Subsequent runs request UIDs strictly greater than ``last_uid`` (incremental).
 * If ``UIDVALIDITY`` changes for a folder, its local state is reset.
 
@@ -35,11 +36,13 @@ Strategy
 * ``imap_client``：连接、账号/文件夹锁、特殊文件夹识别。
 * ``imap_ops``：对已入库邮件的远程操作（标记、删除、移动）。
 * ``imap_restore``：解除屏蔽后回填邮件。
+* ``imap_backfill``：后台回填首次同步之前的全部历史邮件。
 """
 from __future__ import annotations
 
 import logging
 import shutil
+from dataclasses import dataclass, field
 from datetime import datetime
 from email.utils import parseaddr
 from time import perf_counter
@@ -261,6 +264,10 @@ def _update_sync_state(
 ) -> None:
     with session_scope() as db:
         state = _get_or_create_sync_state(db, account_id, folder)
+        if uidvalidity and state.uidvalidity and state.uidvalidity != uidvalidity:
+            # 服务器 UID 体系已变，历史回填需要从头开始
+            state.backfill_before_uid = None
+            state.backfill_done = False
         if uidvalidity:
             state.uidvalidity = uidvalidity
         if new_last_uid is not None:
@@ -307,56 +314,31 @@ def _plan_fetch_batches(
     return batches
 
 
-def _sync_one_folder(
+@dataclass
+class IngestResult:
+    saved: int = 0
+    # 信任发件人被判为垃圾邮件、需要移回收件箱的 UID
+    rescue_uids: list[int] = field(default_factory=list)
+    newest_received: Optional[datetime] = None
+    # 有批次下载失败（网络等原因），这些邮件没有入库
+    failed: bool = False
+
+
+def _ingest_uids(
     client: IMAPClient,
     account_id: int,
     folder: str,
     folder_kind: str,
-) -> dict:
-    """Sync a single IMAP folder using an already-opened client."""
-    started = perf_counter()
-    with session_scope() as db:
-        state = _get_or_create_sync_state(db, account_id, folder)
-        last_uid = int(state.last_uid or 0)
-        prev_uidvalidity = state.uidvalidity
-
-    try:
-        select_info = client.select_folder(folder, readonly=True)
-    except IMAPClientError as exc:
-        raise IMAPSyncError(f"Failed to select folder '{folder}': {exc}") from exc
-
-    uidvalidity = int(select_info.get(b"UIDVALIDITY") or 0)
-    if prev_uidvalidity and uidvalidity and prev_uidvalidity != uidvalidity:
-        logger.warning(
-            "UIDVALIDITY changed account=%s folder=%s; resetting",
-            account_id, folder,
-        )
-        last_uid = 0
-
-    if last_uid > 0:
-        try:
-            raw_uids = client.search(["UID", f"{last_uid + 1}:*"])
-        except IMAPClientError as exc:
-            raise IMAPSyncError(f"IMAP search failed: {exc}") from exc
-        uids = sorted({int(u) for u in raw_uids if int(u) > last_uid})
-    else:
-        try:
-            raw_uids = client.search(["ALL"])
-        except IMAPClientError as exc:
-            raise IMAPSyncError(f"IMAP search failed: {exc}") from exc
-        uids = sorted(int(u) for u in raw_uids)[-INITIAL_SYNC_LIMIT:]
-
-    scanned = len(uids)
-    saved = 0
-    # 本批新邮件中最新的 Gmail 接收时间（INTERNALDATE），用于计算「Gmail 收到 → 入库」延迟。
-    newest_received: Optional[datetime] = None
-    if not uids:
-        _update_sync_state(account_id, folder, uidvalidity=uidvalidity, new_last_uid=None)
-        return {"saved": 0, "scanned": 0, "folder": folder, "folder_kind": folder_kind}
-
+    uids: list[int],
+) -> IngestResult:
+    """下载、解析并保存指定 UID 的邮件（已入库的跳过）。增量同步与历史回填共用。"""
     blocked_senders = _load_blocked_sender_emails(account_id)
     trusted_senders = _load_trusted_sender_emails(account_id) if folder_kind == "junk" else set()
     rescue_uids: list[int] = []
+    saved = 0
+    failed = False
+    # 本批新邮件中最新的 Gmail 接收时间（INTERNALDATE），用于计算「Gmail 收到 → 入库」延迟。
+    newest_received: Optional[datetime] = None
     # 本地已有的邮件不必再下载正文
     existing_before = _existing_uids(account_id, folder, uids)
     to_fetch = [uid for uid in uids if uid not in existing_before]
@@ -368,6 +350,7 @@ def _sync_one_folder(
                 "IMAP fetch failed account=%s folder=%s uids=%s: %s",
                 account_id, folder, chunk, exc,
             )
+            failed = True
             continue
 
         fetched_items = sorted(
@@ -427,18 +410,78 @@ def _sync_one_folder(
                 account_id, folder, chunk,
             )
 
-    _update_sync_state(
-        account_id,
-        folder,
-        uidvalidity=uidvalidity,
-        new_last_uid=max(uids),
+    return IngestResult(
+        saved=saved,
+        rescue_uids=rescue_uids,
+        newest_received=newest_received,
+        failed=failed,
     )
+
+
+def _move_rescued_to_inbox(account_id: int, folder: str, rescue_uids: list[int]) -> None:
     if rescue_uids:
         logger.info(
             "Trusted sender mail found in junk, moving to inbox account=%s uids=%s",
             account_id, rescue_uids,
         )
         submit_bg(move_imap_messages, account_id, folder, rescue_uids)
+
+
+def _sync_one_folder(
+    client: IMAPClient,
+    account_id: int,
+    folder: str,
+    folder_kind: str,
+) -> dict:
+    """Sync a single IMAP folder using an already-opened client."""
+    started = perf_counter()
+    with session_scope() as db:
+        state = _get_or_create_sync_state(db, account_id, folder)
+        last_uid = int(state.last_uid or 0)
+        prev_uidvalidity = state.uidvalidity
+
+    try:
+        select_info = client.select_folder(folder, readonly=True)
+    except IMAPClientError as exc:
+        raise IMAPSyncError(f"Failed to select folder '{folder}': {exc}") from exc
+
+    uidvalidity = int(select_info.get(b"UIDVALIDITY") or 0)
+    if prev_uidvalidity and uidvalidity and prev_uidvalidity != uidvalidity:
+        logger.warning(
+            "UIDVALIDITY changed account=%s folder=%s; resetting",
+            account_id, folder,
+        )
+        last_uid = 0
+
+    if last_uid > 0:
+        try:
+            raw_uids = client.search(["UID", f"{last_uid + 1}:*"])
+        except IMAPClientError as exc:
+            raise IMAPSyncError(f"IMAP search failed: {exc}") from exc
+        uids = sorted({int(u) for u in raw_uids if int(u) > last_uid})
+    else:
+        try:
+            raw_uids = client.search(["ALL"])
+        except IMAPClientError as exc:
+            raise IMAPSyncError(f"IMAP search failed: {exc}") from exc
+        uids = sorted(int(u) for u in raw_uids)[-INITIAL_SYNC_LIMIT:]
+
+    scanned = len(uids)
+    if not uids:
+        _update_sync_state(account_id, folder, uidvalidity=uidvalidity, new_last_uid=None)
+        return {"saved": 0, "scanned": 0, "folder": folder, "folder_kind": folder_kind}
+
+    result = _ingest_uids(client, account_id, folder, folder_kind, uids)
+    saved = result.saved
+    newest_received = result.newest_received
+
+    _update_sync_state(
+        account_id,
+        folder,
+        uidvalidity=uidvalidity,
+        new_last_uid=max(uids),
+    )
+    _move_rescued_to_inbox(account_id, folder, result.rescue_uids)
     elapsed = perf_counter() - started
     # 仅增量同步时统计延迟；首次同步拉的是历史邮件，延迟无意义。
     # INTERNALDATE 由 IMAPClient 转换为本地时间（无时区），与 datetime.now() 直接比较；精度为秒。
@@ -499,6 +542,24 @@ def sync_folder_with_client(
     return result
 
 
+def sync_targets(client: IMAPClient, account_id: int) -> list[tuple[str, str]]:
+    """本账号需要同步的 (文件夹名, 类型) 列表：收件箱，以及按配置开启的已发送 / 垃圾邮件。"""
+    targets: list[tuple[str, str]] = [(DEFAULT_FOLDER, "inbox")]
+    if SYNC_SENT_ENABLED:
+        sent_folder = _discover_sent_folder(client)
+        if sent_folder and sent_folder != DEFAULT_FOLDER:
+            targets.append((sent_folder, "sent"))
+        else:
+            logger.info("No Sent folder discovered for account=%s", account_id)
+    if SYNC_JUNK_ENABLED:
+        junk_folder = _discover_junk_folder(client)
+        if junk_folder and junk_folder != DEFAULT_FOLDER:
+            targets.append((junk_folder, "junk"))
+        else:
+            logger.info("No Junk folder discovered for account=%s", account_id)
+    return targets
+
+
 def safe_sync_account(account_id: int, folder: Optional[str] = None) -> dict:
     """Sync INBOX and Sent folder for one account. Never raises.
 
@@ -535,21 +596,7 @@ def safe_sync_account(account_id: int, folder: Optional[str] = None) -> dict:
         results: dict[str, dict] = {}
         try:
             with _imap_client(email, password) as client:
-                targets: list[tuple[str, str]] = [(DEFAULT_FOLDER, "inbox")]
-                if SYNC_SENT_ENABLED:
-                    sent_folder = _discover_sent_folder(client)
-                    if sent_folder and sent_folder != DEFAULT_FOLDER:
-                        targets.append((sent_folder, "sent"))
-                    else:
-                        logger.info("No Sent folder discovered for account=%s", account_id)
-                if SYNC_JUNK_ENABLED:
-                    junk_folder = _discover_junk_folder(client)
-                    if junk_folder and junk_folder != DEFAULT_FOLDER:
-                        targets.append((junk_folder, "junk"))
-                    else:
-                        logger.info("No Junk folder discovered for account=%s", account_id)
-
-                for folder_name, kind in targets:
+                for folder_name, kind in sync_targets(client, account_id):
                     folder_lock = _folder_lock(account_id, folder_name)
                     if not folder_lock.acquire(timeout=_FOLDER_LOCK_TIMEOUT_SEC):
                         logger.warning(

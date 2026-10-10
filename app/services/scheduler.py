@@ -7,6 +7,7 @@ concurrent manual sync.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from sqlalchemy import select
@@ -22,6 +23,7 @@ from ..database import session_scope
 from ..models import Account
 from .background import submit_bg
 from .backup import safe_run_backup
+from .imap_backfill import schedule_all_backfills
 from .imap_service import safe_sync_account
 
 logger = logging.getLogger(__name__)
@@ -45,6 +47,8 @@ def sync_all_accounts() -> None:
 
     for aid in account_ids:
         submit_bg(safe_sync_account, aid, DEFAULT_FOLDER)
+    # 还没回填完历史邮件的账号继续回填（已在回填中的不会重复启动）
+    schedule_all_backfills()
 
     logger.info("Background sync tick: queued %d accounts", len(account_ids))
 
@@ -62,6 +66,14 @@ def start_scheduler() -> BackgroundScheduler:
         replace_existing=True,
         max_instances=1,
         coalesce=True,
+    )
+    # 启动后稍等片刻（让首次同步 / IDLE 先跑），开始回填历史邮件
+    sched.add_job(
+        schedule_all_backfills,
+        "date",
+        run_date=datetime.now(timezone.utc) + timedelta(seconds=60),
+        id="initial-backfill",
+        replace_existing=True,
     )
     if BACKUP_ENABLED:
         sched.add_job(

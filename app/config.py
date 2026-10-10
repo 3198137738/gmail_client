@@ -142,6 +142,14 @@ DEFAULT_FOLDER = "INBOX"
 INITIAL_SYNC_LIMIT = _get_positive_int("INITIAL_SYNC_LIMIT", 100)
 SYNC_INTERVAL_MINUTES = _get_positive_int("SYNC_INTERVAL_MINUTES", 5)
 IMAP_FETCH_BATCH_SIZE = _get_positive_int("IMAP_FETCH_BATCH_SIZE", 50)
+# 同步全部历史邮件：首次同步先取最新 INITIAL_SYNC_LIMIT 封，之后在后台按
+# BACKFILL_BATCH_SIZE 一批批回填更早的邮件，直到全部同步完（不发送通知）。
+SYNC_FULL_HISTORY = _get_bool("SYNC_FULL_HISTORY", True)
+BACKFILL_BATCH_SIZE = _get_positive_int("BACKFILL_BATCH_SIZE", 200)
+# 每批之间的间隔（秒），避免长时间占满 IMAP 带宽
+BACKFILL_PAUSE_SEC = _get_positive_int("BACKFILL_PAUSE_SEC", 1)
+# 同时回填的账号数（独立线程池，不占用常规同步的后台线程）
+BACKFILL_MAX_CONCURRENT = _get_positive_int("BACKFILL_MAX_CONCURRENT", 2)
 # 每批下载的邮件总大小上限（MB），避免大附件邮件导致内存峰值过高
 IMAP_FETCH_MAX_MB = _get_positive_int("IMAP_FETCH_MAX_MB", 20)
 IMAP_FETCH_MAX_BYTES = IMAP_FETCH_MAX_MB * 1024 * 1024

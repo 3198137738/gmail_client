@@ -7,16 +7,18 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..config import TELEGRAM_CHAT_ID, TELEGRAM_NOTIFY_SENT
 from ..crypto import encrypt_password
 from ..database import get_db
-from ..models import Account, SyncState
+from ..models import Account, Message, SyncState
 from ..services import telegram_service
 from ..services.idle_service import reconcile_idle
+from ..services.background import submit_bg
+from ..services.imap_backfill import is_backfilling, sync_then_backfill
 from ..services.imap_client import IMAPSyncError, is_account_busy, verify_credentials
 from ..templating import templates
 
@@ -78,6 +80,12 @@ def list_accounts(request: Request, db: Session = Depends(get_db)):
             states_by_account.setdefault(st.account_id, []).append(st)
 
     busy = {int(a.id): is_account_busy(int(a.id)) for a in accounts}
+    backfilling = {int(a.id): is_backfilling(int(a.id)) for a in accounts}
+    message_counts = dict(
+        db.execute(
+            select(Message.account_id, func.count(Message.id)).group_by(Message.account_id)
+        ).all()
+    )
 
     flash = request.query_params.get("flash")
     flash_level = request.query_params.get("level", "info")
@@ -89,6 +97,8 @@ def list_accounts(request: Request, db: Session = Depends(get_db)):
             "accounts": accounts,
             "states_by_account": states_by_account,
             "busy": busy,
+            "backfilling": backfilling,
+            "message_counts": message_counts,
             "flash": flash,
             "flash_level": flash_level if flash_level in ("info", "success", "warning", "danger") else "info",
             "telegram_configured": telegram_service.is_configured(),
@@ -133,6 +143,8 @@ def create_account(
         db.rollback()
         raise HTTPException(status_code=409, detail="Account already exists") from None
     reconcile_idle()
+    # 首次同步后立即开始回填全部历史邮件
+    submit_bg(sync_then_backfill, int(account.id))
     return RedirectResponse(url=request.url_for("accounts.list"), status_code=303)
 
 
@@ -203,6 +215,7 @@ def batch_create_accounts(
             skipped_dup += 1
             continue
         added += 1
+        submit_bg(sync_then_backfill, int(account.id))
 
     if added:
         reconcile_idle()

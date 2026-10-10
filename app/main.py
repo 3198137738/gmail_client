@@ -37,6 +37,7 @@ from .routes import senders as senders_routes
 from .routes import send as send_routes
 from .routes import sync as sync_routes
 from .services.background import shutdown_executor
+from .services.imap_backfill import shutdown_backfill, start_backfill
 from .services.idle_service import shutdown_idle, start_idle
 from .services.scheduler import shutdown_scheduler, start_scheduler
 from .services.telegram_bot import shutdown_bot, start_bot
@@ -49,6 +50,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    start_backfill()
     start_scheduler()
     start_idle()
     start_bot()
@@ -69,6 +71,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        shutdown_backfill()
         shutdown_bot()
         shutdown_idle()
         shutdown_scheduler()
