@@ -25,7 +25,7 @@
                    class="rcm-folder {% if not current_account_id and kind == 'inbox' %}is-active{% endif %}">
                     <i class="bi bi-inbox-fill"></i>
                     <span class="rcm-folder-name">收件箱</span>
-                    {% if nav_unread_all %}<span class="rcm-folder-count">{{ nav_unread_all }}</span>{% endif %}
+                    {% if nav_unread_inbox %}<span class="rcm-folder-count">{{ nav_unread_inbox }}</span>{% endif %}
                 </a>
                 <a href="{{ view_link('sent', '') }}"
                    class="rcm-folder {% if not current_account_id and kind == 'sent' %}is-active{% endif %}">
@@ -37,6 +37,7 @@
                    class="rcm-folder {% if not current_account_id and kind == 'junk' %}is-active{% endif %}">
                     <i class="bi bi-exclamation-octagon"></i>
                     <span class="rcm-folder-name">垃圾邮件</span>
+                    {% if nav_unread_junk %}<span class="rcm-folder-count">{{ nav_unread_junk }}</span>{% endif %}
                 </a>
                 {% endif %}
                 <a href="{{ view_link('all', '') }}"
@@ -79,6 +80,8 @@
                        class="rcm-folder {% if is_account_selected and kind == 'junk' %}is-active{% endif %}">
                         <i class="bi bi-exclamation-octagon"></i>
                         <span class="rcm-folder-name">垃圾邮件</span>
+                        {% set acc_junk_unread = junk_unread_by_account.get(a.id, 0) %}
+                        {% if acc_junk_unread %}<span class="rcm-folder-count">{{ acc_junk_unread }}</span>{% endif %}
                     </a>
                     {% endif %}
                     <a href="{{ view_link('all', a.id) }}"

@@ -263,25 +263,22 @@ def list_messages(
     first_index = (page - 1) * page_size + 1 if total else 0
     last_index = first_index + len(messages) - 1 if first_index else 0
 
-    # Sidebar stats: per-account unread + total counts. We deliberately scope
-    # only by ``kind`` (no search filter, no account filter) so the sidebar
-    # always reflects each mailbox's true unread state.
-    side_unread_stmt = (
-        select(Message.account_id, func.count(Message.id))
+    # 侧边栏未读数：按「账号 + 文件夹类型」统计，与当前视图、搜索、所选账号无关，
+    # 保证每个文件夹旁边显示的始终是它自己的未读数。
+    unread_rows = db.execute(
+        select(Message.account_id, Message.folder_kind, func.count(Message.id))
         .where(Message.is_read.is_(False))
-        .group_by(Message.account_id)
-    )
-    side_total_stmt = (
-        select(Message.account_id, func.count(Message.id))
-        .group_by(Message.account_id)
-    )
-    side_unread_stmt = side_unread_stmt.where(_kind_condition(kind))
-    side_total_stmt = side_total_stmt.where(_kind_condition(kind))
-
-    unread_by_account = {row[0]: row[1] for row in db.execute(side_unread_stmt).all()}
-    total_by_account = {row[0]: row[1] for row in db.execute(side_total_stmt).all()}
-    grand_unread = sum(unread_by_account.values())
-    grand_total = sum(total_by_account.values())
+        .group_by(Message.account_id, Message.folder_kind)
+    ).all()
+    unread_by_account: dict[int, int] = {}
+    junk_unread_by_account: dict[int, int] = {}
+    for acc_id, folder_kind, count in unread_rows:
+        if folder_kind == "inbox":
+            unread_by_account[acc_id] = count
+        elif folder_kind == "junk":
+            junk_unread_by_account[acc_id] = count
+    nav_unread_inbox = sum(unread_by_account.values())
+    nav_unread_junk = sum(junk_unread_by_account.values())
 
     busy_by_account = {int(a.id): is_account_busy(int(a.id)) for a in accounts}
     any_busy = any(busy_by_account.values())
@@ -290,24 +287,6 @@ def list_messages(
         (a for a in accounts if int(a.id) == selected_account_id),
         None,
     )
-
-    # Navigation-level unread counts: account-scoped (if any selected), kind
-    # independent. Lets the sidebar always show "收件箱 [12]" / "全部 [N]"
-    # numbers that don't shift when the user is browsing 已发送 etc.
-    nav_inbox_stmt = (
-        select(func.count(Message.id))
-        .where(Message.is_read.is_(False), Message.folder_kind == "inbox")
-    )
-    nav_all_stmt = (
-        select(func.count(Message.id)).where(
-            Message.is_read.is_(False), _kind_condition("all")
-        )
-    )
-    if selected_account_id:
-        nav_inbox_stmt = nav_inbox_stmt.where(Message.account_id == selected_account_id)
-        nav_all_stmt = nav_all_stmt.where(Message.account_id == selected_account_id)
-    nav_unread_inbox = db.execute(nav_inbox_stmt).scalar_one() or 0
-    nav_unread_all = db.execute(nav_all_stmt).scalar_one() or 0
 
     response = templates.TemplateResponse(
         request,
@@ -325,13 +304,11 @@ def list_messages(
             "total": total,
             "unread_total": unread_total,
             "unread_by_account": unread_by_account,
-            "total_by_account": total_by_account,
-            "grand_unread": grand_unread,
-            "grand_total": grand_total,
+            "junk_unread_by_account": junk_unread_by_account,
             "busy_by_account": busy_by_account,
             "any_busy": any_busy,
             "nav_unread_inbox": nav_unread_inbox,
-            "nav_unread_all": nav_unread_all,
+            "nav_unread_junk": nav_unread_junk,
             "first_index": first_index,
             "last_index": last_index,
             "page_size": page_size,
