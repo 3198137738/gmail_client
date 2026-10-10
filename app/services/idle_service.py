@@ -160,7 +160,7 @@ class IdleWorker(threading.Thread):
             _enable_tcp_keepalive(client)
             client.select_folder(folder, readonly=True)
             # Catch up on anything that arrived while we were disconnected.
-            self._sync_on_connection(client, folder)
+            self._sync_on_connection(client, folder, trigger="connect")
 
             client.idle()
             in_idle = True
@@ -173,10 +173,13 @@ class IdleWorker(threading.Thread):
                     # 收到新邮件通知时立即同步；否则每 IDLE_REFRESH_SEC 秒退出 IDLE 做一次
                     # 兜底检查（只做 UID SEARCH，无新邮件时开销极小），既能补上 Gmail
                     # 偶尔漏发的通知，也能尽快发现已失效的连接。
-                    if _has_new_mail(responses) or monotonic() - idle_since >= IDLE_REFRESH_SEC:
+                    pushed = _has_new_mail(responses)
+                    if pushed or monotonic() - idle_since >= IDLE_REFRESH_SEC:
                         client.idle_done()
                         in_idle = False
-                        self._sync_on_connection(client, folder)
+                        self._sync_on_connection(
+                            client, folder, trigger="push" if pushed else "periodic"
+                        )
                         client.idle()
                         in_idle = True
                         idle_since = monotonic()
@@ -187,10 +190,19 @@ class IdleWorker(threading.Thread):
                     except (IMAPClientError, OSError):
                         pass
 
-    def _sync_on_connection(self, client, folder: str) -> None:
-        """直接在当前 IDLE 连接上拉取新邮件，省去新建连接和登录的时间。"""
+    def _sync_on_connection(self, client, folder: str, *, trigger: str) -> None:
+        """直接在当前 IDLE 连接上拉取新邮件，省去新建连接和登录的时间。
+
+        ``trigger`` 记录本次收信的触发来源，便于分析延迟：
+        push = Gmail IDLE 推送，periodic = 定时兜底检查，connect = 连接建立后的补收。
+        """
         try:
-            sync_folder_with_client(client, self.account_id, folder, self.folder_kind)
+            result = sync_folder_with_client(client, self.account_id, folder, self.folder_kind)
+            if result and result.get("saved"):
+                logger.info(
+                    "IDLE fetched account=%s kind=%s trigger=%s saved=%s",
+                    self.account_id, self.folder_kind, trigger, result["saved"],
+                )
         except Exception:
             # 连接可能已损坏：先用新连接做一次完整同步，避免漏信，再由外层重连。
             submit_bg(safe_sync_account, self.account_id)
