@@ -180,15 +180,39 @@ def healthz():
     return PlainTextResponse("ok")
 
 
+# 错误页上显示的中文说明（接口内部仍使用英文 detail）
+_ERROR_TEXT = {
+    "Not Found": "找不到您要访问的页面。",
+    "Message not found": "找不到这封邮件，它可能已被删除。",
+    "Sent message not found": "找不到这条发件记录，它可能已被删除。",
+    "Account not found": "找不到该账号。",
+    "Account already exists": "该账号已经添加过了。",
+    "App password is required": "请填写应用专用密码。",
+    "App password is too short": "应用专用密码太短。",
+    "At least one recipient is required": "请至少填写一个收件人。",
+    "Attachment not found": "找不到该附件。",
+    "Inline image not found": "找不到该图片。",
+    "Blocked sender not found": "找不到该屏蔽记录。",
+    "Trusted sender not found": "找不到该信任记录。",
+    "Cannot parse sender email": "无法识别发件人地址。",
+    "Invalid email address": "邮箱地址格式不正确。",
+    "Selected account is not available": "所选账号不可用（可能已停用）。",
+    "Invalid folder kind": "无效的文件夹。",
+    "Invalid path": "无效的路径。",
+    "Method Not Allowed": "不支持该操作。",
+}
+
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     if 400 <= exc.status_code < 500:
         accept = request.headers.get("accept", "")
         if "text/html" in accept:
+            detail = _ERROR_TEXT.get(str(exc.detail), exc.detail)
             return templates.TemplateResponse(
                 request,
                 "error.html",
-                {"status_code": exc.status_code, "detail": exc.detail},
+                {"status_code": exc.status_code, "detail": detail},
                 status_code=exc.status_code,
             )
     return HTMLResponse(

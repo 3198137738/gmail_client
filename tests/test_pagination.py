@@ -100,5 +100,5 @@ def test_list_endpoint_pages(client):
 
     # 末页（不带游标）与按页码 OFFSET 的结果一致
     p3 = client.get("/messages/", params={**params, "page": 3})
-    assert "51 – 60 / 60" in p3.text
+    assert "第 51-60 封，共 60 封" in p3.text
     assert len(set(_subjects(p3.text))) == 10

@@ -22,7 +22,7 @@ def test_csp_forbids_inline_scripts(client):
 @pytest.mark.parametrize(
     "path",
     ["/login", "/messages/", "/messages/?kind=junk", "/accounts/", "/compose/",
-     "/compose/sent", "/messages/blocked-senders"],
+     "/compose/?embed=1", "/compose/sent", "/messages/blocked-senders", "/messages/999999"],
 )
 def test_pages_have_no_inline_scripts(client, path):
     if path != "/login":

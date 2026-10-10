@@ -26,6 +26,7 @@ from ..services.mail_body import (
     remote_images_allowed,
 )
 from ..services.smtp_service import SMTPSendError, send_email
+from ..navigation import sidebar_data
 from ..templating import templates, utc_to_local
 
 logger = logging.getLogger(__name__)
@@ -266,6 +267,7 @@ def compose_form(
     reply_to: Optional[int] = None,
     mode: Optional[str] = None,
     forward: Optional[int] = None,
+    embed: bool = Query(False),
 ):
     accounts = db.execute(
         select(Account).where(Account.enabled.is_(True)).order_by(Account.email)
@@ -288,7 +290,14 @@ def compose_form(
             prefill = _build_forward_prefill(message)
         else:
             prefill = _build_reply_prefill(message, reply_all=(mode == "all"))
+    else:
+        # 新邮件默认用当前选中的账号发送（与左侧导航一致）
+        prefill = {"account_id": sidebar_data(request).preferred_account_id}
 
+    return _render_compose(request, db, accounts, prefill=prefill, error=error, embed=embed)
+
+
+def _render_compose(request: Request, db: Session, accounts, *, prefill, error, embed, status_code=200):
     return templates.TemplateResponse(
         request,
         "compose.html",
@@ -297,7 +306,9 @@ def compose_form(
             "error": error,
             "prefill": prefill,
             "contacts": _recent_contacts(db),
+            "embed": embed,
         },
+        status_code=status_code,
     )
 
 
@@ -315,9 +326,11 @@ async def send(
     in_reply_to: Optional[str] = Form(None),
     references: Optional[str] = Form(None),
     forward_message_id: Optional[str] = Form(None),
+    embed: Optional[str] = Form(None),
     attachments: List[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
 ):
+    is_embed = embed in ("1", "true", "on")
     account = db.get(Account, account_id)
     if account is None or not account.enabled:
         raise HTTPException(status_code=400, detail="Selected account is not available")
@@ -410,9 +423,34 @@ async def send(
         db.commit()
 
         if status == "failed":
+            # 发送失败：带着已填写的内容重新显示写邮件界面（附件需要重新添加）
+            uploaded = any(u and u.filename for u in (attachments or []))
+            fwd_names = [p.name for p in saved_paths] if fwd_id else []
+            prefill = {
+                "account_id": account_id,
+                "to": to,
+                "cc": cc or "",
+                "bcc": bcc or "",
+                "subject": subject,
+                "body_html": body_html or _text_to_html(body_text or ""),
+                "body_text": body_text or "",
+                "in_reply_to": in_reply_to or "",
+                "references": references or "",
+                "is_reply": bool(in_reply_to),
+                "is_forward": bool(fwd_id),
+                "forward_message_id": fwd_id or "",
+                "forward_attachments": fwd_names,
+            }
+            accounts = db.execute(
+                select(Account).where(Account.enabled.is_(True)).order_by(Account.email)
+            ).scalars().all()
+            message = error + ("（附件需要重新添加）" if uploaded else "")
+            return _render_compose(
+                request, db, accounts, prefill=prefill, error=message, embed=is_embed, status_code=400
+            )
+        if is_embed:
             return RedirectResponse(
-                url=request.url_for("compose.form").include_query_params(error=error),
-                status_code=303,
+                url=request.url_for("compose.sent_done", sent_id=record.id), status_code=303
             )
         return RedirectResponse(url=request.url_for("compose.sent_list"), status_code=303)
     finally:
@@ -472,8 +510,10 @@ def sent_list(request: Request, db: Session = Depends(get_db)):
         items.append({
             "source": "gmail",
             "account": m.account.email if m.account else f"#{m.account_id}",
+            "account_id": m.account_id,
             "to_addr": m.to_addr or "",
             "subject": m.subject,
+            "body_text": m.body_text,
             "time": m.date,
             "status": "sent",
             "error": None,
@@ -487,8 +527,10 @@ def sent_list(request: Request, db: Session = Depends(get_db)):
         items.append({
             "source": "local",
             "account": r.account.email if r.account else f"#{r.account_id}",
+            "account_id": r.account_id,
             "to_addr": r.to_addr or "",
             "subject": r.subject,
+            "body_text": r.body_text,
             "time": utc_to_local(r.sent_at),
             "status": r.status,
             "error": r.error,
@@ -502,6 +544,19 @@ def sent_list(request: Request, db: Session = Depends(get_db)):
         request,
         "sent.html",
         {"sent": items[:SENT_LIST_LIMIT], "sync_sent_enabled": SYNC_SENT_ENABLED},
+    )
+
+
+@router.get("/sent/{sent_id}/done", response_class=HTMLResponse, name="compose.sent_done")
+def sent_done(request: Request, sent_id: int):
+    """悬浮写邮件窗口发送成功后的落地页：通知父页面关闭窗口并提示「邮件已发送」。"""
+    return templates.TemplateResponse(
+        request,
+        "compose_done.html",
+        {
+            "embed": True,
+            "sent_url": str(request.url_for("compose.sent_detail", sent_id=sent_id)),
+        },
     )
 
 

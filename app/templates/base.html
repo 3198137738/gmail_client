@@ -1,107 +1,100 @@
+{#
+  Gmail 式整体框架：顶栏（菜单 / 品牌 / 搜索 / 设置）+ 左侧导航 + 右侧白色内容卡片。
+  登录页、错误页和写邮件悬浮窗（embed）不显示框架。
+#}
+{% set bare = request.url.path == '/login' or status_code is defined or (embed is defined and embed) %}
 <!doctype html>
 <html lang="zh-CN">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#f6f8fc">
-    <title>{% block title %}Gmail Client{% endblock %} :: Roundcube</title>
+    <title>{% block title %}邮件{% endblock %} - Roundcube</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', path='img/favicon.svg') }}">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
     <link rel="stylesheet" href="{{ url_for('static', path='css/app.css') }}?v={{ static_version }}">
 </head>
-<body class="rcm {% block body_class %}{% endblock %}">
+<body class="gm {% if bare %}gm-bare{% endif %} {% block body_class %}{% endblock %}">
 
-{% if request.url.path != '/login' %}
-<header class="rcm-topbar">
-    <button type="button" class="rcm-icon-btn rcm-drawer-toggle" aria-label="打开文件夹菜单"
-            aria-controls="rcm-drawer" aria-expanded="false">
-        <i class="bi bi-list"></i>
-    </button>
-    <a class="rcm-brand" href="{{ url_for('messages.list') }}">
-        <i class="bi bi-envelope-fill"></i>
-        <span>Roundcube</span>
-    </a>
-    <nav class="rcm-topnav">
-        <a class="rcm-topnav-item {% if request.url.path.startswith('/messages') and not request.url.path.startswith('/messages/blocked-senders') %}is-active{% endif %}"
-           href="{{ url_for('messages.list') }}">
-            <i class="bi bi-envelope"></i><span>邮件</span>
+{% if not bare %}
+<header class="gm-header">
+    <div class="gm-header-start">
+        <button type="button" class="gm-icon-btn gm-menu-btn" aria-label="主菜单"
+                aria-controls="gm-nav" aria-expanded="true" title="主菜单">
+            {{ icon('menu') }}
+        </button>
+        <a class="gm-brand" href="{{ url_for('messages.list') }}" title="收件箱">
+            <img src="{{ url_for('static', path='img/logo.svg') }}" alt="" width="40" height="30">
+            <span>Roundcube</span>
         </a>
-        <a class="rcm-topnav-item {% if request.url.path == '/compose/' %}is-active{% endif %}"
-           href="{{ url_for('compose.form') }}">
-            <i class="bi bi-pencil-square"></i><span>写邮件</span>
-        </a>
-        <a class="rcm-topnav-item {% if request.url.path == '/compose/sent' %}is-active{% endif %}"
-           href="{{ url_for('compose.sent_list') }}">
-            <i class="bi bi-send-check"></i><span>发件记录</span>
-        </a>
-        <a class="rcm-topnav-item {% if request.url.path.startswith('/messages/blocked-senders') %}is-active{% endif %}"
-           href="{{ url_for('messages.blocked_senders') }}">
-            <i class="bi bi-shield-slash"></i><span>屏蔽列表</span>
-        </a>
-        <a class="rcm-topnav-item {% if request.url.path.startswith('/accounts') %}is-active{% endif %}"
-           href="{{ url_for('accounts.list') }}">
-            <i class="bi bi-person-gear"></i><span>账号</span>
-        </a>
-    </nav>
-    <div class="rcm-topbar-right">
+    </div>
+
+    <form class="gm-search" method="get" action="{{ url_for('messages.list') }}" role="search" data-no-loading>
+        {% block search_hidden %}{% endblock %}
+        <button type="submit" class="gm-icon-btn gm-search-submit" aria-label="搜索" title="搜索">
+            {{ icon('search') }}
+        </button>
+        <input type="search" name="q" class="gm-search-input" placeholder="搜索邮件"
+               value="{% block search_value %}{% endblock %}" autocomplete="off" aria-label="搜索邮件">
+        {% block search_clear %}{% endblock %}
+    </form>
+
+    <div class="gm-header-end">
         {% if realtime_enabled %}
-        <span class="rcm-rt" id="rcm-rt" data-state="connecting" title="正在连接实时推送…">
-            <span class="rcm-rt-dot"></span>
-            <span class="rcm-rt-text">实时</span>
+        <span class="gm-rt" id="rcm-rt" data-state="connecting" title="正在连接实时推送…" role="status">
+            <span class="gm-rt-dot"></span>
         </span>
         {% endif %}
-        <form action="{{ url_for('sync.all') }}" method="post" class="m-0" data-no-loading>
+        <form action="{{ url_for('sync.all') }}" method="post" class="gm-header-form" data-no-loading>
             {{ csrf_input() }}
             <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
-            <button type="submit" class="rcm-icon-btn" title="同步所有账号">
-                <i class="bi bi-arrow-clockwise"></i>
+            <button type="submit" class="gm-icon-btn" title="同步所有账号" aria-label="同步所有账号">
+                {{ icon('sync') }}
             </button>
         </form>
+        <a class="gm-icon-btn {% if request.url.path.startswith('/accounts') %}is-active{% endif %}"
+           href="{{ url_for('accounts.list') }}" title="设置" aria-label="设置">
+            {{ icon('settings') }}
+        </a>
         {% if web_auth_enabled %}
-        <form action="{{ url_for('auth.logout') }}" method="post" class="m-0" data-no-loading>
+        <form action="{{ url_for('auth.logout') }}" method="post" class="gm-header-form" data-no-loading>
             {{ csrf_input() }}
-            <button type="submit" class="rcm-icon-btn" title="退出登录" aria-label="退出登录">
-                <i class="bi bi-box-arrow-right"></i>
+            <button type="submit" class="gm-icon-btn" title="退出登录" aria-label="退出登录">
+                {{ icon('logout') }}
             </button>
         </form>
         {% endif %}
+        {% set header_nav = sidebar_data(request) %}
+        {% set header_me = header_nav.account(header_nav.preferred_account_id) or (header_nav.accounts[0] if header_nav.accounts else None) %}
+        <a class="gm-avatar-btn" href="{{ url_for('accounts.list') }}"
+           title="{{ ('Roundcube 账号\n' ~ header_me.email) if header_me else '添加账号' }}" aria-label="账号">
+            <span class="gm-avatar" style="background: {{ header_me.color if header_me else '#5f6368' }}">
+                {{ ((header_me.name if header_me else '我')[:1])|upper }}
+            </span>
+        </a>
     </div>
 </header>
+
+<div class="gm-app">
+    {% block sidebar %}{% include "_sidebar.html" %}{% endblock %}
+    <main class="gm-main" id="gm-main">
+        {% block body %}
+        <div class="gm-card gm-page">
+            {% block content %}{% endblock %}
+        </div>
+        {% endblock %}
+    </main>
+</div>
+<div class="gm-drawer-backdrop" aria-hidden="true"></div>
+{% else %}
+    {% block bare_body %}{% endblock %}
 {% endif %}
 
-{% block body %}
-<main class="rcm-content rcm-content-padded">
-    {% block content %}{% endblock %}
-</main>
-{% endblock %}
-
-{% if request.url.path != '/login' %}
-{# 手机端底部导航（小屏才显示） #}
-{% set path = request.url.path %}
-<nav class="rcm-bottomnav" aria-label="主导航">
-    <a class="rcm-bottomnav-item {% if path.startswith('/messages') and not path.startswith('/messages/blocked-senders') %}is-active{% endif %}"
-       href="{{ url_for('messages.list') }}">
-        <span class="rcm-bottomnav-icon"><i class="bi bi-envelope"></i></span><span>邮件</span>
-    </a>
-    <a class="rcm-bottomnav-item {% if path == '/compose/sent' %}is-active{% endif %}"
-       href="{{ url_for('compose.sent_list') }}">
-        <span class="rcm-bottomnav-icon"><i class="bi bi-send"></i></span><span>发件记录</span>
-    </a>
-    <a class="rcm-bottomnav-item {% if path.startswith('/messages/blocked-senders') %}is-active{% endif %}"
-       href="{{ url_for('messages.blocked_senders') }}">
-        <span class="rcm-bottomnav-icon"><i class="bi bi-shield-slash"></i></span><span>屏蔽</span>
-    </a>
-    <a class="rcm-bottomnav-item {% if path.startswith('/accounts') %}is-active{% endif %}"
-       href="{{ url_for('accounts.list') }}">
-        <span class="rcm-bottomnav-icon"><i class="bi bi-person-gear"></i></span><span>账号</span>
-    </a>
-</nav>
-<div class="rcm-drawer-backdrop" aria-hidden="true"></div>
-{% endif %}
+<div class="gm-snackbar" id="gm-snackbar" role="status" aria-live="polite" hidden></div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="{{ url_for('static', path='js/app.js') }}?v={{ static_version }}"></script>
-{% if realtime_enabled and request.url.path != '/login' %}
+{% if realtime_enabled and not bare %}
 <script src="{{ url_for('static', path='js/realtime.js') }}?v={{ static_version }}"></script>
 {% endif %}
 {% block extra_scripts %}{% endblock %}

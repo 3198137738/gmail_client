@@ -1,46 +1,75 @@
 {% extends "base.html" %}
 {% block title %}{{ message.subject or "(无主题)" }}{% endblock %}
+{% block body_class %}page-detail{% endblock %}
+{% set nav_section = 'sent_log' %}
+{% set me = message.account.display_name or message.account.email %}
+{% set sent_local = message.sent_at|utc_to_local %}
+
 {% block content %}
-<div class="card shadow-sm">
-    <div class="card-header bg-white d-flex justify-content-between align-items-center">
-        <a href="{{ url_for('compose.sent_list') }}" class="text-decoration-none">&larr; 返回发件记录</a>
-        <div class="d-flex align-items-center gap-2">
-            {% if message.status == 'sent' %}
-                <span class="badge bg-success">已发送</span>
-            {% else %}
-                <span class="badge bg-danger">失败</span>
-            {% endif %}
-            <form method="post" action="{{ url_for('compose.sent_delete', sent_id=message.id) }}" class="m-0"
+<div class="gm-detail">
+    <div class="gm-toolbar gm-detail-toolbar">
+        <div class="gm-toolbar-start">
+            <a class="gm-icon-btn" href="{{ url_for('compose.sent_list') }}" title="返回发件记录" aria-label="返回发件记录">{{ icon('arrow_back') }}</a>
+            <span class="gm-toolbar-gap"></span>
+            <form method="post" action="{{ url_for('compose.sent_delete', sent_id=message.id) }}"
                   data-confirm="确定删除这条发件记录吗？">
                 {{ csrf_input() }}
                 <input type="hidden" name="next" value="{{ url_for('compose.sent_list') }}">
-                <button type="submit" class="btn btn-sm btn-outline-danger">删除记录</button>
+                <button type="submit" class="gm-icon-btn" title="删除记录" aria-label="删除记录">{{ icon('delete') }}</button>
             </form>
         </div>
     </div>
-    <div class="card-body">
-        <h4 class="mb-3">{{ message.subject or "(无主题)" }}</h4>
-        <div class="row text-muted small mb-3">
-            <div class="col-md-9">
-                <div><strong>发件账号：</strong> {{ message.account.email }}</div>
-                <div><strong>To：</strong> {{ message.to_addr }}</div>
-                {% if message.cc_addr %}<div><strong>Cc：</strong> {{ message.cc_addr }}</div>{% endif %}
-                {% if message.bcc_addr %}<div><strong>Bcc：</strong> {{ message.bcc_addr }}</div>{% endif %}
-            </div>
-            <div class="col-md-3 text-md-end">
-                <div><strong>{{ message.sent_at|utc_to_local|fmt_dt('%Y-%m-%d %H:%M:%S') }}</strong></div>
+
+    <div class="gm-thread">
+        <div class="gm-subject-row">
+            <h2 class="gm-subject">
+                <span class="gm-subject-text">{{ message.subject or "(无主题)" }}</span>
+                {% if message.status == 'sent' %}
+                <span class="gm-label-chip gm-folder-chip">已发送</span>
+                {% else %}
+                <span class="gm-label-chip gm-folder-chip is-junk">发送失败</span>
+                {% endif %}
+            </h2>
+            <div class="gm-subject-actions">
+                <button type="button" class="gm-icon-btn" data-print title="打印" aria-label="打印">{{ icon('print') }}</button>
             </div>
         </div>
 
         {% if message.status != 'sent' and message.error %}
-        <div class="alert alert-danger py-2">
-            <strong>发送失败：</strong> {{ message.error }}
-        </div>
+        <div class="gm-msg-alert">{{ icon('error', filled=True) }}<span>发送失败：{{ message.error }}</span></div>
         {% endif %}
 
-        <hr>
+        <div class="gm-msg-head">
+            <div class="gm-msg-avatar tone-{{ me|avatar_tone }}" aria-hidden="true">{{ me[:1]|upper }}</div>
+            <div class="gm-msg-from">
+                <div class="gm-msg-from-line">
+                    <span class="gm-msg-name">{{ me }}</span>
+                    <span class="gm-msg-email">&lt;{{ message.account.email }}&gt;</span>
+                </div>
+                <div class="dropdown gm-msg-to">
+                    <button type="button" class="gm-msg-to-btn" data-bs-toggle="dropdown" aria-expanded="false" title="显示详细信息">
+                        发送至 {{ message.to_addr|recipients }}{% if message.cc_addr %}、{{ message.cc_addr|recipients }}{% endif %}
+                        {{ icon('arrow_drop_down') }}
+                    </button>
+                    <div class="dropdown-menu gm-menu gm-msg-details">
+                        <table>
+                            <tr><th>发件人：</th><td>{{ message.account.email }}</td></tr>
+                            <tr><th>收件人：</th><td>{{ message.to_addr }}</td></tr>
+                            {% if message.cc_addr %}<tr><th>抄送：</th><td>{{ message.cc_addr }}</td></tr>{% endif %}
+                            {% if message.bcc_addr %}<tr><th>密送：</th><td>{{ message.bcc_addr }}</td></tr>{% endif %}
+                            <tr><th>日期：</th><td>{{ sent_local|fmt_dt('%Y年%m月%d日 %H:%M') }}</td></tr>
+                            <tr><th>主题：</th><td>{{ message.subject or "(无主题)" }}</td></tr>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <div class="gm-msg-meta">
+                <span class="gm-msg-date" title="{{ sent_local|fmt_dt('%Y-%m-%d %H:%M:%S') }}">{{ sent_local|gmail_full_date }}</span>
+                <span class="gm-msg-date-short">{{ sent_local|gmail_date }}</span>
+            </div>
+        </div>
 
-        <div class="border rounded p-3 bg-white">
+        <div class="gm-msg-body">
             {% set body_url = url_for('compose.sent_body', sent_id=message.id).include_query_params(images=1) if show_images else url_for('compose.sent_body', sent_id=message.id) %}
             {% include "_mail_body_frame.html" %}
         </div>

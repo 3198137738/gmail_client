@@ -1,0 +1,98 @@
+{#
+  左侧导航（Gmail 式）：写邮件按钮、文件夹、「账号」分组（类似 Gmail 的「标签」）。
+
+  页面可以提供以下变量来决定高亮：
+    kind               当前文件夹（邮件列表页）
+    current_account_id 当前账号（邮件列表页；None 表示全部账号）
+    nav_kind           非列表页要高亮的文件夹（如详情页所在文件夹）
+    nav_section        'sent_log' / 'blocked' 等非文件夹页面
+    unread_only        列表页「仅看未读」，切换文件夹时保留
+#}
+{% set nav = sidebar_data(request) %}
+{% set nav_account_id = current_account_id if current_account_id is defined else nav.preferred_account_id %}
+{% set nav_acc = nav.account(nav_account_id) %}
+{% set active_kind = nav_kind if nav_kind is defined else (kind if kind is defined else None) %}
+{% set active_section = nav_section if nav_section is defined else None %}
+{% set acc_param = nav_acc.id if nav_acc else '' %}
+{% set unread_param = '&unread=1' if (unread_only is defined and unread_only) else '' %}
+
+{% macro nav_item(href, icon_name, label, count=0, active=False, title='') -%}
+<a class="gm-nav-item {% if active %}is-active{% endif %} {% if count %}has-unread{% endif %}"
+   href="{{ href }}" {% if title %}title="{{ title }}"{% endif %} {% if active %}aria-current="page"{% endif %}>
+    <span class="gm-nav-icon">{{ icon(icon_name, filled=active) }}</span>
+    <span class="gm-nav-label">{{ label }}</span>
+    {% if count %}<span class="gm-nav-count">{{ count }}</span>{% endif %}
+</a>
+{%- endmacro %}
+
+<aside class="gm-nav" id="gm-nav" aria-label="导航">
+    <div class="gm-nav-brand">
+        <img src="{{ url_for('static', path='img/logo.svg') }}" alt="" width="32" height="24">
+        <span>Roundcube</span>
+    </div>
+    <div class="gm-nav-compose">
+        <a class="gm-compose-btn" href="{{ url_for('compose.form') }}" data-compose title="写邮件">
+            {{ icon('edit') }}<span>写邮件</span>
+        </a>
+    </div>
+
+    <nav class="gm-nav-list" aria-label="文件夹">
+        {% set inbox_count = nav_acc.unread_inbox if nav_acc else nav.unread_inbox %}
+        {% set junk_count = nav_acc.unread_junk if nav_acc else nav.unread_junk %}
+        {{ nav_item('/messages/?kind=inbox&account_id=' ~ acc_param ~ unread_param, 'inbox', '收件箱',
+                    inbox_count, active_kind == 'inbox' and not active_section) }}
+        {{ nav_item('/messages/?kind=sent&account_id=' ~ acc_param ~ unread_param, 'send', '已发送',
+                    0, active_kind == 'sent' and not active_section) }}
+        {% if sync_junk_enabled %}
+        {{ nav_item('/messages/?kind=junk&account_id=' ~ acc_param ~ unread_param, 'report', '垃圾邮件',
+                    junk_count, active_kind == 'junk' and not active_section) }}
+        {% endif %}
+        {{ nav_item('/messages/?kind=all&account_id=' ~ acc_param ~ unread_param, 'mail', '所有邮件',
+                    0, active_kind == 'all' and not active_section) }}
+        {{ nav_item(url_for('compose.sent_list'), 'outbox', '发件记录', 0, active_section == 'sent_log') }}
+        {{ nav_item(url_for('messages.blocked_senders'), 'block', '屏蔽的发件人', 0, active_section == 'blocked') }}
+    </nav>
+
+    <div class="gm-nav-heading">
+        <span>账号</span>
+        <a class="gm-icon-btn gm-icon-btn-sm" href="{{ url_for('accounts.list') }}" title="添加或管理账号" aria-label="添加或管理账号">
+            {{ icon('add') }}
+        </a>
+    </div>
+    <nav class="gm-nav-list gm-nav-labels" aria-label="账号">
+        {% set label_kind = active_kind if active_kind in ('inbox', 'sent', 'junk', 'all') else 'inbox' %}
+        {{ nav_item('/messages/?kind=' ~ label_kind ~ '&account_id=' ~ unread_param, 'stacks', '全部账号',
+                    0, not nav_acc and active_kind and not active_section) }}
+        {% for a in nav.accounts %}
+        <a class="gm-nav-item gm-nav-label-item {% if nav_acc and nav_acc.id == a.id and active_kind and not active_section %}is-active{% endif %} {% if a.unread_inbox %}has-unread{% endif %}"
+           href="/messages/?kind={{ label_kind }}&account_id={{ a.id }}{{ unread_param }}" title="{{ a.email }}">
+            <span class="gm-nav-icon" style="color: {{ a.color }}">{{ icon('label', filled=True) }}</span>
+            <span class="gm-nav-label">{{ a.name }}</span>
+            {% if a.unread_inbox %}<span class="gm-nav-count">{{ a.unread_inbox }}</span>{% endif %}
+        </a>
+        {% else %}
+        <div class="gm-nav-empty">还没有账号，点 <a href="{{ url_for('accounts.list') }}">+</a> 添加</div>
+        {% endfor %}
+    </nav>
+
+    {# 手机端顶栏只有搜索条，设置 / 同步 / 退出放在抽屉里 #}
+    <nav class="gm-nav-list gm-nav-mobile-only" aria-label="更多">
+        <div class="gm-nav-divider"></div>
+        {{ nav_item(url_for('accounts.list'), 'settings', '设置', 0, active_section == 'settings') }}
+        <form class="gm-nav-form" action="{{ url_for('sync.all') }}" method="post" data-no-loading>
+            {{ csrf_input() }}
+            <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+            <button type="submit" class="gm-nav-item">
+                <span class="gm-nav-icon">{{ icon('sync') }}</span><span class="gm-nav-label">同步所有账号</span>
+            </button>
+        </form>
+        {% if web_auth_enabled %}
+        <form class="gm-nav-form" action="{{ url_for('auth.logout') }}" method="post" data-no-loading>
+            {{ csrf_input() }}
+            <button type="submit" class="gm-nav-item">
+                <span class="gm-nav-icon">{{ icon('logout') }}</span><span class="gm-nav-label">退出登录</span>
+            </button>
+        </form>
+        {% endif %}
+    </nav>
+</aside>

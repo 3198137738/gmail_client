@@ -1,109 +1,72 @@
 {% extends "base.html" %}
-{% block title %}屏蔽发件人{% endblock %}
+{% block title %}设置 - 过滤器和屏蔽的地址{% endblock %}
+{% block body_class %}page-settings{% endblock %}
+{% set nav_section = 'blocked' %}
+{% set settings_tab = 'blocked' %}
+{% set back_here = request.url.path ~ ('?' ~ request.url.query if request.url.query else '') %}
 {% block content %}
-<div class="card shadow-sm">
-    <div class="card-header bg-white d-flex justify-content-between align-items-center">
-        <strong><i class="bi bi-shield-slash me-1"></i> 屏蔽发件人列表</strong>
-        <a href="{{ url_for('messages.list') }}" class="btn btn-sm btn-outline-secondary">返回邮件</a>
-    </div>
-    <div class="card-body">
-        <form method="get" action="{{ url_for('messages.blocked_senders') }}" class="row g-2 mb-3">
-            <div class="col-md-4">
-                <label class="form-label mb-1">账号</label>
-                <select class="form-select" name="account_id">
-                    <option value="">全部账号</option>
-                    {% for a in accounts %}
-                    <option value="{{ a.id }}" {% if current_account_id == a.id %}selected{% endif %}>
-                        {{ a.display_name or a.email }}
-                    </option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="col-md-5">
-                <label class="form-label mb-1">发件人搜索</label>
-                <input type="search" class="form-control" name="q" value="{{ q or '' }}" placeholder="输入邮箱关键字">
-            </div>
-            <div class="col-md-3 d-flex align-items-end gap-2">
-                <button type="submit" class="btn btn-primary w-100">查询</button>
-            </div>
-        </form>
-        <div class="alert alert-info py-2 small" role="alert">
-            解除屏蔽后，系统会自动回补该发件人在“屏蔽期间”被忽略的邮件（按账号后台同步，稍后出现在邮件列表）。
-        </div>
+<div class="gm-settings">
+    {% include "_settings_tabs.html" %}
 
-        <div class="table-responsive">
-            <table class="table table-hover align-middle mb-0">
-                <thead class="table-light">
-                    <tr>
-                        <th>发件人邮箱</th>
-                        <th>账号</th>
-                        <th>屏蔽时间</th>
-                        <th class="text-end">操作</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for row in blocked_rows %}
-                    <tr>
-                        <td><code>{{ row.sender_email }}</code></td>
-                        <td>{{ row.account.display_name or row.account.email }}</td>
-                        <td>{{ row.created_at|utc_to_local|fmt_dt('%Y-%m-%d %H:%M:%S') }}</td>
-                        <td class="text-end">
-                            <form method="post" action="{{ url_for('messages.unblock_sender', blocked_id=row.id) }}" class="d-inline"
-                                  data-confirm="确定解除对 {{ row.sender_email }} 的屏蔽吗？">
-                                {{ csrf_input() }}
-                                <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
-                                <button type="submit" class="btn btn-sm btn-outline-success">解除屏蔽</button>
-                            </form>
-                        </td>
-                    </tr>
-                    {% else %}
-                    <tr>
-                        <td colspan="4" class="text-center text-muted py-4">当前没有屏蔽记录</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </div>
-</div>
+    <form method="get" action="{{ url_for('messages.blocked_senders') }}" class="gm-settings-filter">
+        <select class="gm-input gm-select-input" name="account_id" aria-label="账号">
+            <option value="">全部账号</option>
+            {% for a in accounts %}
+            <option value="{{ a.id }}" {% if current_account_id == a.id %}selected{% endif %}>{{ a.display_name or a.email }}</option>
+            {% endfor %}
+        </select>
+        <input type="search" class="gm-input" name="q" value="{{ q or '' }}" placeholder="按发件人地址搜索" aria-label="按发件人地址搜索">
+        <button type="submit" class="gm-btn gm-btn-tonal gm-btn-sm">搜索</button>
+    </form>
 
-<div class="card shadow-sm mt-3">
-    <div class="card-header bg-white">
-        <strong>信任的发件人</strong>
-        <span class="text-muted small ms-2">在垃圾邮件中点「这不是垃圾邮件」后加入；其邮件被 Gmail 判为垃圾邮件时会自动移回收件箱</span>
-    </div>
-    <div class="table-responsive">
-        <table class="table table-hover align-middle mb-0">
-            <thead class="table-light">
-                <tr>
-                    <th>发件人邮箱</th>
-                    <th>账号</th>
-                    <th>信任时间</th>
-                    <th class="text-end">操作</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for row in trusted_rows %}
-                <tr>
-                    <td><code>{{ row.sender_email }}</code></td>
-                    <td>{{ row.account.display_name or row.account.email }}</td>
-                    <td>{{ row.created_at|utc_to_local|fmt_dt('%Y-%m-%d %H:%M:%S') }}</td>
-                    <td class="text-end">
-                        <form method="post" action="{{ url_for('messages.untrust_sender', trusted_id=row.id) }}" class="d-inline"
-                              data-confirm="{{ ('确定取消信任 ' ~ row.sender_email ~ ' 吗？') }}">
-                            {{ csrf_input() }}
-                            <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
-                            <button type="submit" class="btn btn-sm btn-outline-secondary">取消信任</button>
-                        </form>
-                    </td>
-                </tr>
-                {% else %}
-                <tr>
-                    <td colspan="4" class="text-center text-muted py-4">当前没有信任的发件人</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
+    <section class="gm-settings-row">
+        <div class="gm-settings-label">
+            屏蔽的地址：
+            <div class="gm-settings-hint">同步时会忽略这些发件人的邮件。解除屏蔽后，会自动补回屏蔽期间被忽略的邮件。</div>
+        </div>
+        <div class="gm-settings-content">
+            <div class="gm-addr-list">
+            {% for row in blocked_rows %}
+                <div class="gm-addr">
+                    <span class="gm-addr-email">{{ row.sender_email }}</span>
+                    <span class="gm-addr-meta">{{ row.account.display_name or row.account.email }} · {{ row.created_at|utc_to_local|fmt_dt('%Y-%m-%d %H:%M') }}</span>
+                    <form method="post" action="{{ url_for('messages.unblock_sender', blocked_id=row.id) }}"
+                          data-confirm="确定解除对 {{ row.sender_email }} 的屏蔽吗？">
+                        {{ csrf_input() }}
+                        <input type="hidden" name="next" value="{{ back_here }}">
+                        <button type="submit" class="gm-link-btn">解除屏蔽</button>
+                    </form>
+                </div>
+            {% else %}
+                <div class="gm-settings-empty">您目前没有屏蔽任何地址。</div>
+            {% endfor %}
+            </div>
+        </div>
+    </section>
+
+    <section class="gm-settings-row">
+        <div class="gm-settings-label">
+            信任的发件人：
+            <div class="gm-settings-hint">在垃圾邮件中点「这不是垃圾邮件」后加入；其邮件被 Gmail 判为垃圾邮件时会自动移回收件箱。</div>
+        </div>
+        <div class="gm-settings-content">
+            <div class="gm-addr-list">
+            {% for row in trusted_rows %}
+                <div class="gm-addr">
+                    <span class="gm-addr-email">{{ row.sender_email }}</span>
+                    <span class="gm-addr-meta">{{ row.account.display_name or row.account.email }} · {{ row.created_at|utc_to_local|fmt_dt('%Y-%m-%d %H:%M') }}</span>
+                    <form method="post" action="{{ url_for('messages.untrust_sender', trusted_id=row.id) }}"
+                          data-confirm="{{ ('确定取消信任 ' ~ row.sender_email ~ ' 吗？') }}">
+                        {{ csrf_input() }}
+                        <input type="hidden" name="next" value="{{ back_here }}">
+                        <button type="submit" class="gm-link-btn">取消信任</button>
+                    </form>
+                </div>
+            {% else %}
+                <div class="gm-settings-empty">当前没有信任的发件人。</div>
+            {% endfor %}
+            </div>
+        </div>
+    </section>
 </div>
 {% endblock %}

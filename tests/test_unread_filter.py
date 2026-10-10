@@ -24,7 +24,7 @@ def test_unread_only_lists_unread(client):
     html = client.get("/messages/", params={"account_id": acc, "unread": 1}).text
     assert _subjects(html) == {"uf-unread-1", "uf-unread-2"}
     assert 'aria-pressed="true"' in html
-    assert "<strong>2</strong> 封未读" in html
+    assert "共 2 封" in html
     # 翻页、切换每页数量等链接都保留筛选
     assert "&amp;unread=1" in html
 

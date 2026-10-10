@@ -1,53 +1,49 @@
 {% extends "base.html" %}
 {% block title %}登录{% endblock %}
-{% block content %}
-<div class="gm-auth">
+{% block body_class %}page-auth{% endblock %}
+{% block bare_body %}
+<main class="gm-auth">
     <div class="gm-auth-card">
-        <i class="bi bi-envelope-paper-fill gm-auth-logo" aria-hidden="true"></i>
-        <h1 class="gm-auth-title">访问验证</h1>
-        <div class="gm-auth-sub">请输入访问密码后再进入邮箱界面</div>
-        {% if error %}
-        <div class="alert alert-danger py-2">{{ error }}</div>
-        {% endif %}
-        {% if is_blocked %}
-        <div class="alert alert-warning py-2">
-            {% if is_permanent_blocked %}
-            当前 IP 已被永久封禁。
-            {% else %}
-            当前 IP 已被临时封禁。
-            {% if remaining_lockout_minutes %}请约 {{ remaining_lockout_minutes }} 分钟后再试。{% endif %}
-            {% endif %}
+        <div class="gm-auth-intro">
+            <img class="gm-auth-logo" src="{{ url_for('static', path='img/logo.svg') }}" alt="" width="48" height="36">
+            <h1 class="gm-auth-title">访问验证</h1>
+            <p class="gm-auth-sub">输入访问密码以继续使用 Roundcube</p>
         </div>
-        {% endif %}
-        <form method="post" action="{{ url_for('auth.login_submit') }}">
+        <form class="gm-auth-form" method="post" action="{{ url_for('auth.login_submit') }}">
             {{ csrf_input() }}
             <input type="hidden" name="next" value="{{ next_url }}">
-            <div class="mb-4">
-                <label class="form-label" for="password">访问密码</label>
-                <input
-                    id="password"
-                    type="password"
-                    name="password"
-                    class="form-control"
-                    autocomplete="current-password"
-                    required
-                    autofocus
-                    {% if is_blocked %}disabled{% endif %}
-                >
+            {% if is_blocked %}
+            <div class="gm-auth-alert">
+                {{ icon('error', filled=True) }}
+                <span>
+                {% if is_permanent_blocked %}当前 IP 已被永久封禁。
+                {% else %}当前 IP 已被临时封禁。{% if remaining_lockout_minutes %}请约 {{ remaining_lockout_minutes }} 分钟后再试。{% endif %}
+                {% endif %}
+                </span>
             </div>
-            <div class="d-flex justify-content-end">
-                <button type="submit" class="btn btn-primary px-4" {% if is_blocked %}disabled{% endif %}>进入系统</button>
+            {% endif %}
+            <div class="gm-field {% if error %}is-error{% endif %}">
+                <input id="password" type="password" name="password" class="gm-field-input" placeholder=" "
+                       autocomplete="current-password" required autofocus {% if is_blocked %}disabled{% endif %}>
+                <label class="gm-field-label" for="password">访问密码</label>
+            </div>
+            {% if error %}
+            <div class="gm-field-error">{{ icon('error', filled=True) }}<span>{{ error }}</span></div>
+            {% endif %}
+            <div class="gm-auth-meta">
+                当前访问 IP：{{ client_ip }}<br>
+                {% if permanent_block_after_failures %}连续输错 {{ max_failures }} 次会永久封禁该 IP。
+                {% else %}连续输错 {{ max_failures }} 次会临时封禁该 IP {{ lockout_minutes }} 分钟。{% endif %}
+                {% if blocked_ips_count %}<br>当前还启用了手动永久封禁 IP 列表。{% endif %}
+            </div>
+            <div class="gm-auth-actions">
+                <button type="submit" class="gm-btn gm-btn-filled" {% if is_blocked %}disabled{% endif %}>下一步</button>
             </div>
         </form>
-        <div class="gm-auth-meta">
-            当前访问 IP：<code>{{ client_ip }}</code><br>
-            {% if permanent_block_after_failures %}
-            连续输错 {{ max_failures }} 次会永久封禁该 IP。
-            {% else %}
-            连续输错 {{ max_failures }} 次会临时封禁 IP {{ lockout_minutes }} 分钟。
-            {% endif %}
-            {% if blocked_ips_count %}<br>当前还启用了手动永久封禁 IP 列表。{% endif %}
-        </div>
     </div>
-</div>
+    <footer class="gm-auth-footer">
+        <span>简体中文</span>
+        <span>Roundcube 邮件客户端</span>
+    </footer>
+</main>
 {% endblock %}

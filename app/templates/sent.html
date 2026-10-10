@@ -1,63 +1,63 @@
 {% extends "base.html" %}
-{% block title %}已发送{% endblock %}
-{% block content %}
-<div class="card shadow-sm">
-    <div class="card-header bg-white"><strong>已发送邮件</strong></div>
+{% block title %}发件记录{% endblock %}
+{% block body_class %}page-list page-sent{% endblock %}
+{% set nav_section = 'sent_log' %}
+{% set nav = sidebar_data(request) %}
+
+{% block body %}
+<div class="gm-card gm-list-card">
+    <div class="gm-toolbar">
+        <div class="gm-toolbar-start">
+            <span class="gm-toolbar-title">发件记录</span>
+        </div>
+        <div class="gm-toolbar-end">
+            {% if sent %}<span class="gm-pager-info">共 {{ sent|length }} 封</span>{% endif %}
+        </div>
+    </div>
     {% if not sync_sent_enabled %}
-    <div class="alert alert-warning rounded-0 mb-0 small">
-        未开启 Gmail「已发送」同步，这里只显示通过本客户端发出的邮件。
-        在 <code>.env</code> 中设置 <code>SYNC_SENT_ENABLED=true</code> 并重启后，将与 Gmail 已发送邮件保持同步。
+    <div class="gm-folder-banner">
+        未开启 Gmail「已发送」同步，这里只显示通过本客户端发出的邮件。在 <code>.env</code> 中设置
+        <code>SYNC_SENT_ENABLED=true</code> 并重启后，将与 Gmail「已发送」保持同步。
     </div>
     {% endif %}
-    <div class="table-responsive">
-        <table class="table table-hover align-middle mb-0">
-            <thead class="table-light">
-                <tr>
-                    <th>账号</th>
-                    <th>收件人</th>
-                    <th>主题</th>
-                    <th>时间</th>
-                    <th>状态</th>
-                    <th class="text-end">操作</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for s in sent %}
-                <tr class="sent-row" style="cursor: pointer;" data-href="{{ s.detail_url }}">
-                    <td>{{ s.account }}</td>
-                    <td>{{ s.to_addr|shorten(40) }}</td>
-                    <td>
-                        <a class="text-decoration-none" href="{{ s.detail_url }}">
-                            {{ s.subject|shorten(80) or "(无主题)" }}
-                        </a>
-                    </td>
-                    <td>{{ s.time|fmt_dt }}</td>
-                    <td>
-                        {% if s.status == 'sent' %}
-                            <span class="badge bg-success">已发送</span>
-                        {% else %}
-                            <span class="badge bg-danger" title="{{ s.error or '' }}">失败</span>
-                        {% endif %}
-                        {% if s.source == 'gmail' %}
-                            <span class="badge text-bg-light border" title="已与 Gmail「已发送」同步">Gmail</span>
-                        {% else %}
-                            <span class="badge text-bg-light border" title="仅本客户端的发送记录">本地</span>
-                        {% endif %}
-                    </td>
-                    <td class="text-end">
-                        <form method="post" action="{{ s.delete_url }}" class="d-inline"
-                              data-confirm="{{ s.delete_confirm }}">
-                            {{ csrf_input() }}
-                            <input type="hidden" name="next" value="{{ url_for('compose.sent_list') }}">
-                            <button type="submit" class="btn btn-sm btn-outline-danger">删除</button>
-                        </form>
-                    </td>
-                </tr>
-                {% else %}
-                <tr><td colspan="6" class="text-center text-muted py-4">暂无发送记录。</td></tr>
-                {% endfor %}
-            </tbody>
-        </table>
+    <div class="gm-list" role="list">
+    {% for s in sent %}
+        {% set acc = nav.account(s.account_id) %}
+        <div class="gm-row sent-row" data-href="{{ s.detail_url }}" role="listitem">
+            <div class="gm-row-check">
+                <label class="gm-avatar-check tone-{{ (s.to_addr|addr_name)|avatar_tone }}" aria-hidden="true">
+                    <span class="gm-avatar-letter">{{ ((s.to_addr|addr_name) or '?')[:1]|upper }}</span>
+                </label>
+            </div>
+            <div class="gm-row-sender" title="{{ s.to_addr }}">收件人：{{ s.to_addr|recipients }}</div>
+            <div class="gm-row-main">
+                <div class="gm-row-line">
+                    {% if s.status != 'sent' %}<span class="gm-label-chip is-failed" title="{{ s.error or '' }}">发送失败</span>{% endif %}
+                    {% if acc and nav.accounts|length > 1 %}
+                    <span class="gm-label-chip is-account" style="--label: {{ acc.color }}" title="{{ acc.email }}">{{ acc.name }}</span>
+                    {% endif %}
+                    <a class="gm-row-subject" href="{{ s.detail_url }}">{{ s.subject or "(无主题)" }}</a>
+                    {% set snip = s.body_text|snippet %}
+                    {% if snip %}<span class="gm-row-snippet"><span class="gm-row-dash"> - </span>{{ snip }}</span>{% endif %}
+                </div>
+            </div>
+            <div class="gm-row-end">
+                <span class="gm-row-date" title="{{ s.time|gmail_full_date }}">{{ s.time|gmail_date }}</span>
+            </div>
+            <div class="gm-row-actions">
+                <form method="post" action="{{ s.delete_url }}" data-confirm="{{ s.delete_confirm }}" data-no-loading>
+                    {{ csrf_input() }}
+                    <input type="hidden" name="next" value="{{ url_for('compose.sent_list') }}">
+                    <button type="submit" class="gm-icon-btn gm-icon-btn-sm" title="删除" aria-label="删除">{{ icon('delete') }}</button>
+                </form>
+            </div>
+        </div>
+    {% else %}
+        <div class="gm-empty">
+            <div class="gm-empty-title">还没有发件记录</div>
+            <div class="gm-empty-hint">通过本客户端发出的邮件会显示在这里</div>
+        </div>
+    {% endfor %}
     </div>
 </div>
 {% endblock %}

@@ -58,6 +58,14 @@
             var checkedCount = rowChecks.filter(function (cb) { return cb.checked; }).length;
             hasCheckedRows = checkedCount > 0;
             bulkButtons.forEach(function (button) { button.disabled = checkedCount === 0; });
+            rowChecks.forEach(function (cb) {
+                var row = cb.closest(".rcm-row");
+                if (row) row.classList.toggle("is-selected", cb.checked);
+            });
+            var card = document.querySelector(".gm-list-card");
+            if (card) card.classList.toggle("has-selection", hasCheckedRows);
+            var countEl = document.querySelector(".gm-sel-count");
+            if (countEl) countEl.textContent = checkedCount ? String(checkedCount) : "";
             if (!selectAll) return;
             selectAll.checked = checkedCount > 0 && checkedCount === rowChecks.length;
             selectAll.indeterminate = checkedCount > 0 && checkedCount < rowChecks.length;
@@ -70,6 +78,33 @@
                 updateBulkState();
             });
         }
+        document.querySelectorAll("[data-select]").forEach(function (item) {
+            item.addEventListener("click", function () {
+                var mode = item.getAttribute("data-select");
+                rowChecks.forEach(function (cb) {
+                    var row = cb.closest(".rcm-row");
+                    var unread = row && row.classList.contains("is-unread");
+                    cb.checked = mode === "all" || (mode === "unread" && unread) || (mode === "read" && !unread);
+                });
+                updateBulkState();
+            });
+        });
+
+        // 行内悬停按钮：把邮件 id 填进共用表单后提交（删除需确认）
+        var rowForm = document.getElementById("gm-row-form");
+        document.querySelectorAll("[data-row-action]").forEach(function (btn) {
+            btn.addEventListener("click", function (ev) {
+                ev.stopPropagation();
+                if (!rowForm) return;
+                var message = btn.getAttribute("data-confirm");
+                if (message && !window.confirm(message)) return;
+                rowForm.action = btn.getAttribute("data-row-action");
+                document.getElementById("gm-row-id").value = btn.getAttribute("data-id");
+                saveListScroll();
+                rowForm.submit();
+            });
+        });
+
         restoreSelection();
         rowChecks.forEach(function (cb) { cb.addEventListener("change", updateBulkState); });
         updateBulkState();
@@ -137,7 +172,7 @@
     //   限速到最多每分钟执行一次，而网络请求的回调不受此限制。
     // - 刷新进行中又收到新事件时只做标记，结束后立刻再刷新一次，既不丢失更新，
     //   也能把短时间内的多个事件合并成一次请求。
-    function makeRefresher(selector, afterSwap) {
+    function makeRefresher(selectors, afterSwap) {
         var running = false;
         var pending = false;
         function run() {
@@ -155,16 +190,23 @@
                 return resp.text();
             }).then(function (text) {
                 var doc = new DOMParser().parseFromString(text, "text/html");
-                var fresh = doc.querySelector(selector);
-                var current = document.querySelector(selector);
-                if (fresh && current) {
-                    var sidebarScroll = getSidebarScroll();
-                    var oldList = document.querySelector(".rcm-list");
-                    var listScroll = oldList ? oldList.scrollTop : 0;
-                    current.replaceWith(fresh);
-                    setSidebarScroll(sidebarScroll);
+                var swapped = false;
+                var navScroll = getNavScroll();
+                var oldList = document.querySelector(".rcm-list");
+                var listScroll = oldList ? oldList.scrollTop : 0;
+                selectors.forEach(function (selector) {
+                    var fresh = doc.querySelector(selector);
+                    var current = document.querySelector(selector);
+                    if (fresh && current) {
+                        current.replaceWith(fresh);
+                        swapped = true;
+                    }
+                });
+                if (swapped) {
+                    setNavScroll(navScroll);
                     var newList = document.querySelector(".rcm-list");
                     if (newList && listScroll) newList.scrollTop = listScroll;
+                    if (doc.title) document.title = doc.title;
                     if (afterSwap) afterSwap();
                 }
             }).catch(function () {
@@ -177,22 +219,22 @@
         return run;
     }
 
-    var refreshList = makeRefresher(".rcm-body", function () {
+    var refreshList = makeRefresher([".gm-main", ".gm-nav"], function () {
         initMessageList();
         hideBanner();
     });
 
-    // 只刷新侧边栏（未读数），用于不属于当前列表的新邮件，
+    // 只刷新左侧导航（未读数），用于不属于当前列表的新邮件，
     // 例如正在看收件箱时收到垃圾邮件，或其他账号收到新邮件。
-    var refreshSidebar = makeRefresher(".rcm-sidebar");
+    var refreshSidebar = makeRefresher([".gm-nav"]);
 
-    function getSidebarScroll() {
-        var el = document.querySelector(".rcm-sidebar");
+    function getNavScroll() {
+        var el = document.querySelector(".gm-nav");
         return el ? el.scrollTop : 0;
     }
 
-    function setSidebarScroll(top) {
-        var el = document.querySelector(".rcm-sidebar");
+    function setNavScroll(top) {
+        var el = document.querySelector(".gm-nav");
         if (el) el.scrollTop = top;
     }
 
@@ -220,8 +262,8 @@
             });
             document.body.appendChild(banner);
         }
-        banner.innerHTML = '<i class="bi bi-envelope-arrow-down"></i> ' +
-            pendingCount + ' 封新邮件 · 点击查看';
+        banner.innerHTML = '<span class="ms" aria-hidden="true">arrow_upward</span> ' +
+            pendingCount + ' 封新邮件';
     }
 
     function onNewMail(ev) {
@@ -268,9 +310,28 @@
         hiddenAt = null;
     });
 
+    // 手机端「写邮件」悬浮按钮：列表向下滚动时收起成圆形，向上滚动时展开（与 Gmail App 一致）
+    (function () {
+        var lastTop = 0;
+        document.addEventListener("scroll", function (ev) {
+            var list = ev.target;
+            if (!list.classList || !list.classList.contains("rcm-list")) return;
+            var fab = document.querySelector(".gm-fab");
+            if (!fab) return;
+            var top = list.scrollTop;
+            if (Math.abs(top - lastTop) < 8) return;
+            fab.classList.toggle("is-collapsed", top > lastTop && top > 24);
+            lastTop = top;
+        }, true);
+    })();
+
     // ---- Fallback: keep the legacy auto-reload while a sync is running ----
     var anyBusy = !!ctx.anyBusy;
     if (anyBusy) {
-        setTimeout(function () { window.location.reload(); }, 5000);
+        setTimeout(function reload() {
+            // 写邮件窗口打开时推迟刷新，避免丢失正在编写的内容
+            if (window.GM && window.GM.composeOpen && window.GM.composeOpen()) { setTimeout(reload, 5000); return; }
+            window.location.reload();
+        }, 5000);
     }
 })();

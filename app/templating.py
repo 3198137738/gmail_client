@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from email.utils import parseaddr
 from datetime import datetime, timezone
 
 from fastapi.templating import Jinja2Templates
+from markupsafe import Markup, escape
 
 from .csrf import csrf_input, csrf_token
+from .navigation import sidebar_data
 from .config import REALTIME_ENABLED, STATIC_DIR, SYNC_JUNK_ENABLED, TEMPLATES_DIR, WEB_AUTH_ENABLED
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -135,7 +138,95 @@ def _avatar_tone(value: str | None) -> int:
     return sum(ord(ch) for ch in (value or "")) % 6
 
 
+def _icon(name: str, filled: bool = False, cls: str = "") -> Markup:
+    """Material Symbols 图标（与 Gmail 同一套图标）。filled=True 为实心样式。"""
+    classes = "ms" + (" ms-fill" if filled else "") + (f" {cls}" if cls else "")
+    return Markup(f'<span class="{escape(classes)}" aria-hidden="true">{escape(name)}</span>')
+
+
+_WEEKDAYS = "一二三四五六日"
+
+
+def _cn_time(value: datetime) -> str:
+    """Gmail 中文界面的时间：上午/下午 + 12 小时制，如「下午8:31」。"""
+    hour = value.hour
+    period = "上午" if hour < 12 else "下午"
+    hour12 = hour % 12 or 12
+    return f"{period}{hour12}:{value.minute:02d}"
+
+
+def _gmail_list_date(value) -> str:
+    """邮件列表日期（Gmail 中文）：今天「下午8:31」，今年「10月3日」，更早「2025/10/3」。"""
+    if value is None:
+        return ""
+    now = datetime.now()
+    if value.date() >= now.date():
+        return _cn_time(value)
+    if value.year == now.year:
+        return f"{value.month}月{value.day}日"
+    return f"{value.year}/{value.month}/{value.day}"
+
+
+def _relative_ago(value: datetime) -> str:
+    seconds = (datetime.now() - value).total_seconds()
+    if seconds < 0:
+        return ""
+    if seconds < 60:
+        return "刚刚"
+    if seconds < 3600:
+        return f"{int(seconds // 60)}分钟前"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)}小时前"
+    if seconds < 7 * 86400:
+        return f"{int(seconds // 86400)}天前"
+    return ""
+
+
+def _gmail_full_date(value) -> str:
+    """邮件详情日期（Gmail 中文）：「10月10日周五 下午8:31 (2小时前)」，往年带年份。"""
+    if value is None:
+        return ""
+    weekday = _WEEKDAYS[value.weekday()]
+    prefix = "" if value.year == datetime.now().year else f"{value.year}年"
+    text = f"{prefix}{value.month}月{value.day}日周{weekday} {_cn_time(value)}"
+    ago = _relative_ago(value)
+    return f"{text} ({ago})" if ago else text
+
+
+_WS_RE = re.compile(r"\s+")
+
+
+def _snippet(value: str | None, length: int = 200) -> str:
+    """列表中的正文摘要：合并空白，截断到 length 个字符。"""
+    if not value:
+        return ""
+    text = _WS_RE.sub(" ", str(value)).strip()
+    return text[:length]
+
+
+def _recipients(value: str | None, me: str | None = None) -> str:
+    """「发送至 我、李娜」：收件人显示名，账号本人显示为「我」。"""
+    from email.utils import getaddresses
+
+    names = []
+    me_lower = (me or "").lower()
+    for name, addr in getaddresses([value or ""]):
+        if not (name or addr):
+            continue
+        if me_lower and addr.lower() == me_lower:
+            names.append("我")
+        else:
+            names.append(name or addr.split("@")[0] or addr)
+    return "、".join(names)
+
+
 templates.env.filters["avatar_tone"] = _avatar_tone
+templates.env.filters["recipients"] = _recipients
+templates.env.filters["gmail_date"] = _gmail_list_date
+templates.env.filters["gmail_full_date"] = _gmail_full_date
+templates.env.filters["snippet"] = _snippet
+templates.env.globals["icon"] = _icon
+templates.env.globals["sidebar_data"] = sidebar_data
 templates.env.filters["addr_name"] = _addr_name
 templates.env.filters["addr_email"] = _addr_email
 templates.env.filters["fmt_dt"] = _fmt_dt

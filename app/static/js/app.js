@@ -20,7 +20,11 @@
     var el = document.querySelector("[data-auto-reload]");
     if (!el) return;
     var ms = parseInt(el.getAttribute("data-auto-reload"), 10);
-    if (ms > 0) setTimeout(function () { window.location.reload(); }, ms);
+    if (ms > 0) setTimeout(function reload() {
+        // 写邮件窗口打开时推迟刷新，避免丢失正在编写的内容
+        if (window.GM && window.GM.composeOpen && window.GM.composeOpen()) { setTimeout(reload, ms); return; }
+        window.location.reload();
+    }, ms);
 })();
 
 // 提交时按钮显示「处理中…」，防止重复提交
@@ -33,15 +37,16 @@
         if (!btn || btn.disabled) return;
         // Icon-only / small inline buttons opt out of the loading takeover
         if (btn.dataset.noLoading !== undefined
-            || btn.classList.contains("rcm-icon-btn")
-            || btn.classList.contains("rcm-icon-btn-sm")
-            || btn.classList.contains("rcm-tool-btn")) {
+            || btn.classList.contains("gm-icon-btn")
+            || btn.classList.contains("dropdown-item")
+            || btn.classList.contains("gm-link-btn")
+            || btn.classList.contains("gc-icon-btn")) {
             return;
         }
         var original = btn.innerHTML;
         btn.dataset.originalLabel = original;
         btn.disabled = true;
-        btn.innerHTML = '<span class="spinner-border spinner-border-sm align-middle me-1" role="status" aria-hidden="true"></span>处理中…';
+        btn.innerHTML = '<span class="gm-spinner" role="status" aria-hidden="true"></span> 处理中…';
         setTimeout(function () {
             if (btn.disabled && btn.innerHTML.indexOf("处理中") !== -1) {
                 btn.disabled = false;
@@ -51,30 +56,78 @@
     }, true);
 })();
 
-// 手机端侧边抽屉：打开状态记在 body 上，实时刷新替换侧边栏时不会被关闭。
+// 左上角菜单按钮（与 Gmail 一致）：
+//   电脑端：折叠 / 展开左侧导航（折叠后只显示图标，悬停时临时展开），状态记在 localStorage；
+//   手机端：从左侧滑出导航抽屉。
 (function () {
-    var toggle = document.querySelector(".rcm-drawer-toggle");
-    var backdrop = document.querySelector(".rcm-drawer-backdrop");
+    var toggle = document.querySelector(".gm-menu-btn");
+    var nav = document.getElementById("gm-nav");
+    var backdrop = document.querySelector(".gm-drawer-backdrop");
     if (!toggle) return;
-    if (!document.querySelector(".rcm-sidebar")) {
-        toggle.hidden = true;  // 没有侧边栏的页面不需要菜单按钮
-        return;
+    if (!nav) { toggle.hidden = true; return; }
+    var COLLAPSE_KEY = "gm:nav-collapsed";
+    var mobile = window.matchMedia("(max-width: 768px)");
+
+    function setCollapsed(collapsed) {
+        document.body.classList.toggle("gm-nav-collapsed", collapsed);
+        toggle.setAttribute("aria-expanded", String(!collapsed));
+        try { localStorage.setItem(COLLAPSE_KEY, collapsed ? "1" : "0"); } catch (e) {}
     }
-    function setOpen(open) {
-        document.body.classList.toggle("rcm-drawer-open", open);
+    function setDrawer(open) {
+        document.body.classList.toggle("gm-drawer-open", open);
         toggle.setAttribute("aria-expanded", String(open));
     }
+    try {
+        if (localStorage.getItem(COLLAPSE_KEY) === "1") {
+            document.body.classList.add("gm-nav-collapsed");
+            toggle.setAttribute("aria-expanded", "false");
+        }
+    } catch (e) {}
+
     toggle.addEventListener("click", function () {
-        setOpen(!document.body.classList.contains("rcm-drawer-open"));
+        if (mobile.matches) {
+            setDrawer(!document.body.classList.contains("gm-drawer-open"));
+        } else {
+            setCollapsed(!document.body.classList.contains("gm-nav-collapsed"));
+        }
     });
-    if (backdrop) backdrop.addEventListener("click", function () { setOpen(false); });
+    if (backdrop) backdrop.addEventListener("click", function () { setDrawer(false); });
     document.addEventListener("keydown", function (ev) {
-        if (ev.key === "Escape") setOpen(false);
+        if (ev.key === "Escape") setDrawer(false);
     });
-    // 点了抽屉里的文件夹链接后自动收起（页面跳转前的视觉反馈）
+    // 点了抽屉里的链接后自动收起（页面跳转前的视觉反馈）
     document.addEventListener("click", function (ev) {
-        if (ev.target.closest(".rcm-sidebar a.rcm-folder")) setOpen(false);
+        if (ev.target.closest && ev.target.closest(".gm-nav a")) setDrawer(false);
     });
+})();
+
+// 打印（详情页「全部打印」）
+document.addEventListener("click", function (ev) {
+    if (ev.target.closest && ev.target.closest("[data-print]")) window.print();
+});
+
+// 底部提示（Gmail snackbar）：window.GM.toast("邮件已发送", {href, linkText})
+(function () {
+    var el = document.getElementById("gm-snackbar");
+    var timer = null;
+    window.GM = window.GM || {};
+    window.GM.toast = function (text, opts) {
+        if (!el) return;
+        opts = opts || {};
+        el.textContent = "";
+        var span = document.createElement("span");
+        span.textContent = text;
+        el.appendChild(span);
+        if (opts.href) {
+            var link = document.createElement("a");
+            link.href = opts.href;
+            link.textContent = opts.linkText || "查看";
+            el.appendChild(link);
+        }
+        el.hidden = false;
+        clearTimeout(timer);
+        timer = setTimeout(function () { el.hidden = true; }, opts.duration || 6000);
+    };
 })();
 
 // 邮件正文 iframe 高度自适应（iframe 带 allow-same-origin，父页面可以读取其文档高度；
@@ -105,4 +158,106 @@
     window.addEventListener("resize", function () {
         document.querySelectorAll("iframe.gm-body-frame").forEach(fit);
     });
+})();
+
+// 写邮件悬浮窗（Gmail 式）：电脑端点击「写邮件 / 回复 / 转发」（带 data-compose 的链接）时，
+// 在右下角打开悬浮窗口而不是跳转页面，可最小化、全屏、关闭；发送成功后提示「邮件已发送」。
+// 手机端或窄窗口仍然跳转到整页写邮件。
+(function () {
+    var wide = window.matchMedia("(min-width: 900px)");
+    var win = null;
+    var frame = null;
+    var backdrop = null;
+    var state = "normal";
+
+    function setState(next) {
+        state = next;
+        if (win) win.setAttribute("data-state", next);
+        if (backdrop) backdrop.hidden = next !== "max";
+        if (frame && frame.contentWindow) {
+            frame.contentWindow.postMessage({ type: "gm:compose:state", state: next }, window.location.origin);
+        }
+    }
+
+    function isDirty() {
+        try {
+            var api = frame && frame.contentWindow && frame.contentWindow.GCCompose;
+            return !!(api && api.isDirty());
+        } catch (e) { return false; }
+    }
+
+    function close() {
+        if (win) win.remove();
+        if (backdrop) backdrop.remove();
+        win = frame = backdrop = null;
+    }
+
+    function open(href) {
+        if (win) {
+            // 只保留一个写邮件窗口：已有未发送的内容时恢复并聚焦它，否则直接替换
+            if (isDirty()) {
+                if (state === "min") setState("normal");
+                if (frame) frame.focus();
+                return;
+            }
+            close();
+        }
+        var url = new URL(href, window.location.origin);
+        url.searchParams.set("embed", "1");
+        backdrop = document.createElement("div");
+        backdrop.className = "gm-compose-backdrop";
+        backdrop.hidden = true;
+        backdrop.addEventListener("click", function () { setState("normal"); });
+        win = document.createElement("div");
+        win.className = "gm-compose-win";
+        win.setAttribute("role", "dialog");
+        win.setAttribute("aria-label", "写邮件");
+        frame = document.createElement("iframe");
+        frame.className = "gm-compose-frame";
+        frame.title = "写邮件";
+        frame.src = url.pathname + url.search;
+        frame.addEventListener("load", function () { setState(state); });
+        win.appendChild(frame);
+        document.body.appendChild(backdrop);
+        document.body.appendChild(win);
+        setState("normal");
+    }
+
+    document.addEventListener("click", function (ev) {
+        var link = ev.target.closest && ev.target.closest("a[data-compose]");
+        if (!link || !wide.matches) return;
+        if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.button !== 0) return;  // 新标签页打开时保持默认
+        ev.preventDefault();
+        open(link.getAttribute("href"));
+    });
+
+    window.addEventListener("message", function (ev) {
+        if (ev.origin !== window.location.origin || !ev.data || !frame) return;
+        if (ev.source !== frame.contentWindow) return;
+        switch (ev.data.type) {
+            case "gm:compose:minimize":
+                setState(state === "min" ? "normal" : "min");
+                break;
+            case "gm:compose:maximize":
+                setState(state === "max" ? "normal" : "max");
+                break;
+            case "gm:compose:close":
+                close();
+                break;
+            case "gm:compose:sent":
+                close();
+                if (window.GM && window.GM.toast) {
+                    window.GM.toast("邮件已发送", { href: ev.data.url, linkText: "查看邮件" });
+                }
+                break;
+        }
+    });
+
+    window.addEventListener("beforeunload", function (ev) {
+        if (isDirty()) { ev.preventDefault(); ev.returnValue = ""; }
+    });
+
+    window.GM = window.GM || {};
+    // 写邮件窗口打开时，页面不要自动整页刷新（会丢失正在编写的内容）
+    window.GM.composeOpen = function () { return !!win; };
 })();

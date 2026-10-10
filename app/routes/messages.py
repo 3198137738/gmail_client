@@ -6,15 +6,16 @@ from collections import defaultdict
 from email.utils import parseaddr
 import re
 from typing import Optional
+from urllib.parse import parse_qs, urlparse
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import case, func, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, defer, selectinload
 
 from ..auth import is_safe_redirect
 from ..database import get_db
-from ..models import Account, BlockedSender, Message
+from ..models import Account, Attachment, BlockedSender, Message
 from ..services.background import submit_bg
 from ..services import pagination
 from ..services.pagination import Cursor
@@ -212,6 +213,35 @@ def _schedule_remote_delete(messages: list[Message]) -> None:
         submit_bg(delete_imap_messages, acc_id, pairs)
 
 
+SNIPPET_SOURCE_CHARS = 300
+
+
+def _load_snippets(db: Session, ids: list[int]) -> dict[int, str]:
+    """列表中「主题 - 摘要」的摘要：只取正文开头一段，合并空白。"""
+    if not ids:
+        return {}
+    rows = db.execute(
+        select(Message.id, func.substr(Message.body_text, 1, SNIPPET_SOURCE_CHARS))
+        .where(Message.id.in_(ids))
+    ).all()
+    return {int(mid): " ".join((text or "").split())[:200] for mid, text in rows}
+
+
+def _load_attachment_names(db: Session, ids: list[int]) -> dict[int, list[Attachment]]:
+    """列表行下方显示的附件卡片（不含内嵌图片）。"""
+    if not ids:
+        return {}
+    rows = db.execute(
+        select(Attachment)
+        .where(Attachment.message_id.in_(ids), Attachment.is_inline.is_(False))
+        .order_by(Attachment.id)
+    ).scalars().all()
+    result: dict[int, list[Attachment]] = {}
+    for att in rows:
+        result.setdefault(int(att.message_id), []).append(att)
+    return result
+
+
 @router.get("/", response_class=HTMLResponse, name="messages.list")
 def list_messages(
     request: Request,
@@ -239,7 +269,12 @@ def list_messages(
     search_filter = message_search_filter(q_clean)
 
     # Main result query (kind + account + search).
-    stmt = select(Message).options(selectinload(Message.account))
+    # 列表不需要完整正文（body_html 可能有几 MB），摘要和附件名在下面单独查询。
+    stmt = select(Message).options(
+        selectinload(Message.account),
+        defer(Message.body_html),
+        defer(Message.body_text),
+    )
     # 总数与未读数合并为一次查询
     count_stmt = select(
         func.count(Message.id),
@@ -281,6 +316,10 @@ def list_messages(
         stmt = stmt.order_by(*pagination.forward_order())
         stmt = stmt.offset((page - 1) * page_size).limit(page_size)
         messages = db.execute(stmt).scalars().all()
+
+    page_ids = [int(m.id) for m in messages]
+    snippets = _load_snippets(db, page_ids)
+    attachments_by_message = _load_attachment_names(db, page_ids)
 
     next_cursor = Cursor.of(messages[-1]).encode() if messages else None
     prev_cursor = Cursor.of(messages[0]).encode() if messages else None
@@ -340,6 +379,8 @@ def list_messages(
             "page_size": page_size,
             "page_size_options": PAGE_SIZE_OPTIONS,
             "next_cursor": next_cursor,
+            "snippets": snippets,
+            "attachments_by_message": attachments_by_message,
             "unread_only": unread,
             "prev_cursor": prev_cursor,
         },
@@ -537,7 +578,56 @@ def _list_back_url(request: Request, back: Optional[str], folder_kind: str) -> s
     """
     if back and is_safe_redirect(back) and back.startswith("/messages/?"):
         return back
-    return str(request.url_for("messages.list").include_query_params(kind=folder_kind))
+    return f"/messages/?kind={_normalize_kind(folder_kind)}"
+
+
+def _list_conditions(back_url: str, fallback_kind: str) -> list:
+    """从列表地址中取出筛选条件（文件夹、账号、搜索、仅未读），与列表页一致。"""
+    qs = parse_qs(urlparse(back_url).query)
+
+    def first(name: str) -> Optional[str]:
+        values = qs.get(name)
+        return values[0] if values else None
+
+    kind = _normalize_kind(first("kind") or fallback_kind)
+    conditions = [_kind_condition(kind)]
+    account_id = _coerce_int(first("account_id"))
+    if account_id:
+        conditions.append(Message.account_id == account_id)
+    search = message_search_filter(first("q"))
+    if search is not None:
+        conditions.append(search)
+    if first("unread") in ("1", "true"):
+        conditions.append(Message.is_read.is_(False))
+    return conditions
+
+
+def _position_in_list(db: Session, message: Message, back_url: str) -> dict:
+    """详情页右上角「第 N 封，共 M 封」以及较新 / 较旧邮件（与列表的排序一致）。"""
+    conditions = _list_conditions(back_url, message.folder_kind)
+    cursor = Cursor.of(message)
+    count = lambda *extra: db.execute(  # noqa: E731
+        select(func.count(Message.id)).where(*conditions, *extra)
+    ).scalar_one()
+
+    newer_id = db.execute(
+        select(Message.id).where(*conditions, pagination.before(cursor))
+        .order_by(*pagination.backward_order()).limit(1)
+    ).scalar()
+    older_id = db.execute(
+        select(Message.id).where(*conditions, pagination.after(cursor))
+        .order_by(*pagination.forward_order()).limit(1)
+    ).scalar()
+    total = count()
+    # 当前邮件可能已不满足条件（如「仅看未读」时刚被标为已读），仍算在内
+    if not db.execute(select(Message.id).where(Message.id == message.id, *conditions)).first():
+        total += 1
+    return {
+        "position": count(pagination.before(cursor)) + 1,
+        "total": total,
+        "newer_id": newer_id,
+        "older_id": older_id,
+    }
 
 
 @router.get("/{message_id}/body", response_class=HTMLResponse, name="messages.body")
@@ -582,6 +672,7 @@ def view_message(
 
     file_attachments = [a for a in message.attachments if not a.is_inline]
     inline_attachments = [a for a in message.attachments if a.is_inline]
+    back_url = _list_back_url(request, back, message.folder_kind)
     sender_email = _normalize_sender_email(message.from_addr)
     sender_blocked = False
     if sender_email:
@@ -605,7 +696,8 @@ def view_message(
             "sender_email": sender_email,
             "sender_blocked": sender_blocked,
             "show_images": remote_images_allowed(images),
-            "back_url": _list_back_url(request, back, message.folder_kind),
+            "back_url": back_url,
+            "list_position": _position_in_list(db, message, back_url),
             "has_remote_images": body_has_remote_images(message.body_html),
         },
     )

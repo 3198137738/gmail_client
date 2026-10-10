@@ -1,9 +1,10 @@
 {% extends "base.html" %}
 {% block title %}{{ status_code }}{% endblock %}
-{% block content %}
-<div class="gm-error">
-    <div class="gm-error-code">{{ status_code }}</div>
+{% block bare_body %}
+<main class="gm-error">
+    <img src="{{ url_for('static', path='img/logo.svg') }}" alt="" width="48" height="36">
+    <p class="gm-error-code"><b>{{ status_code }}.</b> <ins>出错了。</ins></p>
     <p class="gm-error-detail">{{ detail }}</p>
-    <a href="/" class="btn btn-primary">返回首页</a>
-</div>
+    <a href="/" class="gm-btn gm-btn-filled">返回收件箱</a>
+</main>
 {% endblock %}

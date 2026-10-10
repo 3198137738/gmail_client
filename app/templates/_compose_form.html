@@ -1,0 +1,187 @@
+{#
+  写邮件表单（Gmail 式）。整页模式与悬浮窗（embed）共用。
+  embed 模式下，标题栏的最小化 / 最大化 / 关闭按钮通过 postMessage 通知父页面（见 compose.js）。
+#}
+{% set pf = prefill or {} %}
+{% set is_reply = pf.get('is_reply') %}
+{% set is_reply_all = pf.get('reply_all') %}
+{% set is_forward = pf.get('is_forward') %}
+{% set fwd_attachments = pf.get('forward_attachments') or [] %}
+{% set page_title = '转发' if is_forward else ('回复全部' if is_reply_all else ('回复' if is_reply else '新邮件')) %}
+{% set is_embed = embed is defined and embed %}
+<div class="gc-compose-page {% if is_embed %}is-embed{% endif %}">
+{% if not accounts %}
+    <div class="gc-compose gc-compose-empty">
+        {{ icon('person_alert') }}
+        <div>还没有可用账号，请先到 <a href="{{ url_for('accounts.list') }}" target="_top">设置</a> 添加并启用。</div>
+    </div>
+{% else %}
+<form id="gc-compose" class="gc-compose" method="post" action="{{ url_for('compose.send') }}"
+      enctype="multipart/form-data" novalidate data-no-loading>
+    {{ csrf_input() }}
+    {% if is_embed %}<input type="hidden" name="embed" value="1">{% endif %}
+    <input type="hidden" name="in_reply_to" value="{{ pf.get('in_reply_to', '') }}">
+    <input type="hidden" name="references" value="{{ pf.get('references', '') }}">
+    {% if is_forward %}
+    <input type="hidden" name="forward_message_id" value="{{ pf.get('forward_message_id', '') }}">
+    {% endif %}
+    <input type="hidden" name="to" id="gc-to-value">
+    <input type="hidden" name="cc" id="gc-cc-value">
+    <input type="hidden" name="bcc" id="gc-bcc-value">
+    <input type="hidden" name="body_text" id="gc-body-text">
+    <input type="hidden" name="body_html" id="gc-body-html">
+
+    <div class="gc-compose-head" {% if is_embed %}data-win="minimize" title="最小化"{% endif %}>
+        <span class="gc-compose-title" id="gc-title" data-default="{{ page_title }}">{{ pf.get('subject') or page_title }}</span>
+        <span class="gc-head-actions">
+            {% if is_embed %}
+            <button type="button" class="gc-head-btn" data-win="minimize" title="最小化" aria-label="最小化">{{ icon('minimize') }}</button>
+            <button type="button" class="gc-head-btn" data-win="maximize" title="全屏（按 Shift 键可在新窗口中打开）" aria-label="全屏">
+                {{ icon('open_in_full', cls='gc-icon-max') }}{{ icon('close_fullscreen', cls='gc-icon-restore') }}
+            </button>
+            <button type="button" class="gc-head-btn" data-discard title="保存并关闭" aria-label="关闭">{{ icon('close') }}</button>
+            {% else %}
+            <a class="gc-head-btn" href="{{ url_for('messages.list') }}" title="关闭" aria-label="关闭" data-discard>{{ icon('close') }}</a>
+            {% endif %}
+        </span>
+    </div>
+
+    <div class="gc-compose-error" id="gc-error" {% if not error %}hidden{% endif %}>
+        {{ icon('error', filled=True) }}
+        <span id="gc-error-text">{% if error %}发送失败：{{ error }}{% endif %}</span>
+    </div>
+
+    <div class="gc-fields">
+        <div class="gc-field">
+            <label class="gc-field-label" for="gc-from">发件人</label>
+            <select id="gc-from" name="account_id" class="gc-select" required>
+                {% for a in accounts %}
+                <option value="{{ a.id }}" {% if pf.get('account_id') == a.id %}selected{% endif %}>
+                    {% if a.display_name %}{{ a.display_name }} &lt;{{ a.email }}&gt;{% else %}{{ a.email }}{% endif %}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="gc-field" data-field="to">
+            <label class="gc-field-label" for="gc-to-input">收件人</label>
+            <div class="gc-chips" data-target="gc-to-value">
+                <input id="gc-to-input" class="gc-chip-input" type="text" autocomplete="off" spellcheck="false"
+                       aria-label="收件人" {% if is_forward or not is_reply %}autofocus{% endif %}>
+            </div>
+            <div class="gc-field-extras">
+                <button type="button" class="gc-link-btn" data-reveal="cc">抄送</button>
+                <button type="button" class="gc-link-btn" data-reveal="bcc">密送</button>
+            </div>
+        </div>
+        <div class="gc-field" data-field="cc" hidden>
+            <label class="gc-field-label" for="gc-cc-input">抄送</label>
+            <div class="gc-chips" data-target="gc-cc-value">
+                <input id="gc-cc-input" class="gc-chip-input" type="text" autocomplete="off" spellcheck="false" aria-label="抄送">
+            </div>
+        </div>
+        <div class="gc-field" data-field="bcc" hidden>
+            <label class="gc-field-label" for="gc-bcc-input">密送</label>
+            <div class="gc-chips" data-target="gc-bcc-value">
+                <input id="gc-bcc-input" class="gc-chip-input" type="text" autocomplete="off" spellcheck="false" aria-label="密送">
+            </div>
+        </div>
+
+        <div class="gc-field">
+            <input type="text" name="subject" id="gc-subject" class="gc-subject" placeholder="主题" aria-label="主题"
+                   value="{{ pf.get('subject', '') }}">
+        </div>
+    </div>
+
+    <div class="gc-body">
+        <div id="gc-editor" class="gc-editor" contenteditable="true" role="textbox" aria-multiline="true"
+             aria-label="正文" data-placeholder=""></div>
+        <textarea id="gc-plain" class="gc-editor gc-plain" placeholder="" aria-label="正文（纯文本）" hidden></textarea>
+
+        <div class="gc-attachments" id="gc-attachments">
+            {% for name in fwd_attachments %}
+            <span class="gc-attachment is-fixed" title="转发的原邮件附件，将随邮件一起发送">
+                {{ icon('attach_file') }}
+                <span class="gc-attachment-name">{{ name }}</span>
+                <span class="gc-attachment-meta">转发附件</span>
+            </span>
+            {% endfor %}
+        </div>
+        <div class="gc-size-warning" id="gc-size-warning" hidden>
+            {{ icon('warning') }} 附件总大小超过 25 MB，Gmail 可能拒收。
+        </div>
+    </div>
+
+    <div class="gc-format-bar" id="gc-format-bar" hidden>
+        <button type="button" class="gc-fmt-btn" data-cmd="bold" title="粗体（Ctrl+B）">{{ icon('format_bold') }}</button>
+        <button type="button" class="gc-fmt-btn" data-cmd="italic" title="斜体（Ctrl+I）">{{ icon('format_italic') }}</button>
+        <button type="button" class="gc-fmt-btn" data-cmd="underline" title="下划线（Ctrl+U）">{{ icon('format_underlined') }}</button>
+        <button type="button" class="gc-fmt-btn" data-cmd="strikeThrough" title="删除线">{{ icon('strikethrough_s') }}</button>
+        <label class="gc-fmt-btn gc-fmt-color" title="文字颜色">
+            {{ icon('format_color_text') }}
+            <input type="color" id="gc-color" value="#d93025" aria-label="文字颜色">
+        </label>
+        <span class="gc-fmt-sep"></span>
+        <button type="button" class="gc-fmt-btn" data-cmd="insertOrderedList" title="编号列表">{{ icon('format_list_numbered') }}</button>
+        <button type="button" class="gc-fmt-btn" data-cmd="insertUnorderedList" title="项目符号列表">{{ icon('format_list_bulleted') }}</button>
+        <button type="button" class="gc-fmt-btn" data-cmd="formatBlock" data-value="blockquote" title="引用">{{ icon('format_quote') }}</button>
+        <span class="gc-fmt-sep"></span>
+        <button type="button" class="gc-fmt-btn" data-cmd="removeFormat" title="清除格式">{{ icon('format_clear') }}</button>
+    </div>
+
+    <div class="gc-compose-foot">
+        <button type="submit" class="gc-send-btn" id="gc-send" title="发送（Ctrl+Enter）">
+            <span class="gc-send-label">发送</span>
+        </button>
+        <button type="button" class="gc-icon-btn" id="gc-toggle-format" title="格式选项" aria-pressed="false">
+            {{ icon('text_format') }}
+        </button>
+        <label class="gc-icon-btn" title="添加附件（也可以直接拖放文件）">
+            {{ icon('attach_file') }}
+            <input type="file" name="attachments" id="gc-files" multiple hidden>
+        </label>
+        <button type="button" class="gc-icon-btn" id="gc-link" title="插入链接">{{ icon('link') }}</button>
+        <div class="dropup">
+            <button type="button" class="gc-icon-btn" data-bs-toggle="dropdown" data-bs-auto-close="outside"
+                    aria-expanded="false" title="更多选项">
+                {{ icon('more_vert') }}
+            </button>
+            <div class="dropdown-menu gm-menu gc-more-menu">
+                <label class="dropdown-item gc-more-item">
+                    <input class="gm-checkbox" type="checkbox" id="gc-plain-mode"> 纯文本模式
+                </label>
+                <div class="dropdown-divider"></div>
+                <div class="gm-menu-label">SMTP 连接方式</div>
+                <label class="dropdown-item gc-more-item">
+                    <input class="form-check-input" type="radio" name="use_ssl" value="on" checked> SSL 465（推荐）
+                </label>
+                <label class="dropdown-item gc-more-item">
+                    <input class="form-check-input" type="radio" name="use_ssl" value="off"> STARTTLS 587
+                </label>
+            </div>
+        </div>
+        <span class="gc-foot-spacer"></span>
+        <button type="button" class="gc-icon-btn" title="舍弃草稿" aria-label="舍弃草稿" data-discard data-discard-confirm>
+            {{ icon('delete') }}
+        </button>
+    </div>
+
+    <div class="gc-drop-overlay" id="gc-drop">
+        {{ icon('upload_file') }}
+        <span>将文件拖放到此处</span>
+    </div>
+    <div class="gc-suggest" id="gc-suggest" role="listbox" hidden></div>
+</form>
+<script type="application/json" id="gc-compose-data">{{ {
+    "to": pf.get('to', ''),
+    "cc": pf.get('cc', ''),
+    "bcc": pf.get('bcc', ''),
+    "body_html": pf.get('body_html', ''),
+    "body_text": pf.get('body_text', ''),
+    "is_reply": is_reply or false,
+    "contacts": contacts or [],
+    "embed": is_embed,
+    "list_url": url_for('messages.list')|string,
+}|tojson }}</script>
+{% endif %}
+</div>

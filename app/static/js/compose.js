@@ -132,7 +132,7 @@
             close.type = "button";
             close.className = "gc-chip-remove";
             close.setAttribute("aria-label", "移除 " + addr.email);
-            close.innerHTML = '<i class="bi bi-x"></i>';
+            close.innerHTML = '<span class="ms" aria-hidden="true">close</span>';
             close.addEventListener("mousedown", function (ev) { ev.preventDefault(); });
             close.addEventListener("click", function () {
                 self.remove(index);
@@ -412,7 +412,7 @@
             var chip = document.createElement("span");
             chip.className = "gc-attachment";
             chip.title = f.name;
-            chip.innerHTML = '<i class="bi bi-paperclip"></i>';
+            chip.innerHTML = '<span class="ms" aria-hidden="true">attach_file</span>';
             var name = document.createElement("span");
             name.className = "gc-attachment-name";
             name.textContent = f.name;
@@ -426,7 +426,7 @@
                 close.type = "button";
                 close.className = "gc-chip-remove";
                 close.setAttribute("aria-label", "移除附件 " + f.name);
-                close.innerHTML = '<i class="bi bi-x"></i>';
+                close.innerHTML = '<span class="ms" aria-hidden="true">close</span>';
                 close.addEventListener("click", function () {
                     files.splice(index, 1);
                     syncFiles();
@@ -527,18 +527,60 @@
         }
     });
 
+    // ---------------- 悬浮窗（embed）----------------
+    // 在父页面的悬浮窗口（iframe）中打开时，标题栏按钮通知父页面最小化 / 全屏 / 关闭。
+    var isEmbed = !!data.embed && window.parent && window.parent !== window;
+    function tellParent(type) {
+        if (isEmbed) window.parent.postMessage({ type: "gm:compose:" + type }, window.location.origin);
+    }
+    form.querySelectorAll("[data-win]").forEach(function (el) {
+        el.addEventListener("click", function (ev) {
+            if (ev.target.closest("[data-discard]") && el.tagName !== "BUTTON") return;
+            ev.preventDefault();
+            ev.stopPropagation();
+            tellParent(el.getAttribute("data-win"));
+        });
+    });
+
+    // 标题栏显示主题（与 Gmail 一致），未填写时显示「新邮件」/「回复」等
+    var titleEl = document.getElementById("gc-title");
+    var subjectInput = document.getElementById("gc-subject");
+    if (titleEl && subjectInput) {
+        subjectInput.addEventListener("input", function () {
+            titleEl.textContent = subjectInput.value.trim() || titleEl.getAttribute("data-default");
+        });
+    }
+
+    // 父页面告知窗口状态（normal / min / max），用于切换标题栏按钮图标
+    window.addEventListener("message", function (ev) {
+        if (ev.origin !== window.location.origin || !ev.data || ev.data.type !== "gm:compose:state") return;
+        document.body.setAttribute("data-win-state", ev.data.state);
+    });
+
+    // 供父页面查询：关闭窗口 / 离开页面前是否需要确认
+    window.GCCompose = {
+        isDirty: function () { return dirty && !submitting; },
+    };
+
     // 舍弃 / 离开页面前确认，避免误丢内容。
     form.querySelectorAll("[data-discard]").forEach(function (el) {
         el.addEventListener("click", function (ev) {
+            ev.stopPropagation();
             if (dirty && !window.confirm("舍弃这封邮件？已填写的内容将不会保存。")) {
                 ev.preventDefault();
                 return;
             }
             dirty = false;
+            if (isEmbed) {
+                ev.preventDefault();
+                tellParent("close");
+            } else if (el.tagName === "BUTTON") {
+                window.location.href = data.list_url || "/messages/";
+            }
         });
     });
     window.addEventListener("beforeunload", function (ev) {
-        if (dirty && !submitting) {
+        if (dirty && !submitting && !isEmbed) {
             ev.preventDefault();
             ev.returnValue = "";
         }
