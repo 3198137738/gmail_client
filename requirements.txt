@@ -6,7 +6,7 @@ jinja2==3.1.4
 markupsafe==3.0.2
 itsdangerous==2.2.0
 
-# ORM / DB
+# ORM / DB（Alembic 负责表结构迁移）
 SQLAlchemy==2.0.36
 
 # Encryption
@@ -20,3 +20,4 @@ APScheduler==3.10.4
 
 # HTML sanitization（Rust ammonia 绑定，替代已停止维护的 bleach）
 nh3==0.3.7
+alembic==1.20.0
