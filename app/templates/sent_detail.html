@@ -11,7 +11,7 @@
                 <span class="badge bg-danger">失败</span>
             {% endif %}
             <form method="post" action="{{ url_for('compose.sent_delete', sent_id=message.id) }}" class="m-0"
-                  onsubmit="return confirm('确定删除这条发件记录吗？');">
+                  data-confirm="确定删除这条发件记录吗？">
                 {{ csrf_input() }}
                 <input type="hidden" name="next" value="{{ url_for('compose.sent_list') }}">
                 <button type="submit" class="btn btn-sm btn-outline-danger">删除记录</button>

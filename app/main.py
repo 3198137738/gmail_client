@@ -89,7 +89,8 @@ _CDN = "https://cdn.jsdelivr.net"
 _PAGE_CSP = "; ".join(
     [
         "default-src 'self'",
-        f"script-src 'self' 'unsafe-inline' {_CDN}",
+        # 不允许内联脚本：页面脚本都在 static/js，即使出现 XSS 注入的脚本也无法执行
+        f"script-src 'self' {_CDN}",
         f"style-src 'self' 'unsafe-inline' {_CDN}",
         f"font-src 'self' data: {_CDN}",
         "img-src 'self' data: blob: https:",

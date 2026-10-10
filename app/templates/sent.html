@@ -46,7 +46,7 @@
                     </td>
                     <td class="text-end">
                         <form method="post" action="{{ s.delete_url }}" class="d-inline"
-                              onsubmit="return confirm({{ s.delete_confirm|tojson|forceescape }});">
+                              data-confirm="{{ s.delete_confirm }}">
                             {{ csrf_input() }}
                             <input type="hidden" name="next" value="{{ url_for('compose.sent_list') }}">
                             <button type="submit" class="btn btn-sm btn-outline-danger">删除</button>
@@ -63,14 +63,5 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script>
-(function () {
-    document.querySelectorAll(".sent-row[data-href]").forEach(function (row) {
-        row.addEventListener("click", function (ev) {
-            if (ev.target.closest("a, button, form, input")) return;
-            window.location = row.dataset.href;
-        });
-    });
-})();
-</script>
+<script src="{{ url_for('static', path='js/sent.js') }}?v={{ static_version }}"></script>
 {% endblock %}

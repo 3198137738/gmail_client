@@ -2,16 +2,10 @@
 {% block title %}账号管理{% endblock %}
 {% block body_class %}page-accounts{% endblock %}
 {% block extra_scripts %}
-{% if busy.values()|select|list %}
-<script>setTimeout(function(){ window.location.reload(); }, 4000);</script>
-{% endif %}
-<script>
-document.querySelectorAll('[data-bs-toggle="popover"]').forEach(function (el) {
-    new bootstrap.Popover(el, { html: false, sanitize: true });
-});
-</script>
+<script src="{{ url_for('static', path='js/accounts.js') }}?v={{ static_version }}"></script>
 {% endblock %}
 {% block content %}
+{% if busy.values()|select|list %}<div data-auto-reload="4000" hidden></div>{% endif %}
 {% if flash %}
 <div class="alert alert-{{ flash_level }} alert-dismissible fade show" role="alert">
     {{ flash }}
@@ -120,7 +114,7 @@ document.querySelectorAll('[data-bs-toggle="popover"]').forEach(function (el) {
                 <strong>已配置账号</strong>
                 <div class="d-flex gap-2">
                     <button type="submit" form="batch-delete-form" class="btn btn-sm btn-outline-danger" id="batch-delete-btn" disabled
-                            onclick="return confirm('确定删除选中的账号及其本地邮件吗？');">
+                            data-confirm="确定删除选中的账号及其本地邮件吗？">
                         删除选中 (<span id="batch-delete-count">0</span>)
                     </button>
                     <form action="{{ url_for('sync.all') }}" method="post" class="m-0">
@@ -215,7 +209,7 @@ document.querySelectorAll('[data-bs-toggle="popover"]').forEach(function (el) {
                                         {% if a.notify_enabled %}静音{% else %}开启通知{% endif %}
                                     </button>
                                 </form>
-                                <form action="{{ url_for('accounts.delete', account_id=a.id) }}" method="post" class="d-inline" onsubmit="return confirm('确定删除该账号及其本地邮件吗？');">
+                                <form action="{{ url_for('accounts.delete', account_id=a.id) }}" method="post" class="d-inline" data-confirm="确定删除该账号及其本地邮件吗？">
                                     {{ csrf_input() }}
                                     <button class="btn btn-sm btn-outline-danger">删除</button>
                                 </form>
@@ -248,31 +242,4 @@ document.querySelectorAll('[data-bs-toggle="popover"]').forEach(function (el) {
         </div>
     </div>
 </div>
-<script>
-(function () {
-    var selectAll = document.getElementById("select-all-accounts");
-    var checkboxes = Array.prototype.slice.call(document.querySelectorAll(".account-checkbox"));
-    var deleteBtn = document.getElementById("batch-delete-btn");
-    var countEl = document.getElementById("batch-delete-count");
-
-    function refresh() {
-        var checked = checkboxes.filter(function (c) { return c.checked; });
-        if (countEl) countEl.textContent = checked.length;
-        if (deleteBtn) deleteBtn.disabled = checked.length === 0;
-        if (selectAll) {
-            selectAll.checked = checkboxes.length > 0 && checked.length === checkboxes.length;
-            selectAll.indeterminate = checked.length > 0 && checked.length < checkboxes.length;
-        }
-    }
-
-    if (selectAll) {
-        selectAll.addEventListener("change", function () {
-            checkboxes.forEach(function (c) { c.checked = selectAll.checked; });
-            refresh();
-        });
-    }
-    checkboxes.forEach(function (c) { c.addEventListener("change", refresh); });
-    refresh();
-})();
-</script>
 {% endblock %}
