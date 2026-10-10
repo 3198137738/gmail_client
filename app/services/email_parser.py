@@ -20,11 +20,12 @@ from datetime import datetime
 from email import message_from_bytes, policy
 from email.header import decode_header, make_header
 from email.message import Message
-from email.utils import getaddresses, parsedate_to_datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Iterable, List, Optional
 
 from ..config import ATTACHMENTS_DIR, ATTACHMENTS_URL_PREFIX
+from ..addresses import format_address, parse_list
 from .html_sanitizer import sanitize_html, text_to_safe_html
 
 logger = logging.getLogger(__name__)
@@ -98,20 +99,15 @@ def _format_addresses(raw_value: Optional[str]) -> Optional[str]:
     if not raw_value:
         return None
     try:
-        pairs = getaddresses([raw_value])
+        pairs = parse_list(raw_value)
     except Exception:
         return _decode_header_value(raw_value)
     formatted = []
     for name, addr in pairs:
-        if not name and not addr:
-            continue
         name_decoded = _decode_header_value(name) or ""
-        if name_decoded and addr:
-            formatted.append(f"{name_decoded} <{addr}>")
-        elif addr:
-            formatted.append(addr)
-        elif name_decoded:
-            formatted.append(name_decoded)
+        item = format_address(name_decoded, addr)
+        if item:
+            formatted.append(item)
     return ", ".join(formatted) if formatted else None
 
 

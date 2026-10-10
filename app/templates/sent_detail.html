@@ -54,9 +54,9 @@
                     <div class="dropdown-menu gm-menu gm-msg-details">
                         <table>
                             <tr><th>发件人：</th><td>{{ message.account.email }}</td></tr>
-                            <tr><th>收件人：</th><td>{{ message.to_addr }}</td></tr>
-                            {% if message.cc_addr %}<tr><th>抄送：</th><td>{{ message.cc_addr }}</td></tr>{% endif %}
-                            {% if message.bcc_addr %}<tr><th>密送：</th><td>{{ message.bcc_addr }}</td></tr>{% endif %}
+                            <tr><th>收件人：</th><td>{{ message.to_addr|addr_list }}</td></tr>
+                            {% if message.cc_addr %}<tr><th>抄送：</th><td>{{ message.cc_addr|addr_list }}</td></tr>{% endif %}
+                            {% if message.bcc_addr %}<tr><th>密送：</th><td>{{ message.bcc_addr|addr_list }}</td></tr>{% endif %}
                             <tr><th>日期：</th><td>{{ sent_local|fmt_dt('%Y年%m月%d日 %H:%M') }}</td></tr>
                             <tr><th>主题：</th><td>{{ message.subject or "(无主题)" }}</td></tr>
                         </table>

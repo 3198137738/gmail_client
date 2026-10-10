@@ -882,10 +882,25 @@ body.gm-nav-collapsed .gm-nav .gm-nav-labels { margin-top: 16px; }
 }
 .gm-msg-to-btn .ms { font-size: 18px; margin-left: -2px; }
 .gm-msg-to-btn:hover { color: var(--gm-text); }
-.gm-msg-details { min-width: 320px; max-width: 520px; padding: 12px 16px; }
-.gm-msg-details table { border-collapse: collapse; font-size: 12px; }
-.gm-msg-details th { padding: 2px 8px 2px 0; color: var(--gm-text-3); font-weight: 400; text-align: right; vertical-align: top; white-space: nowrap; }
-.gm-msg-details td { padding: 2px 0; color: var(--gm-text); word-break: break-all; }
+.gm-msg-to-btn:focus { outline: 0; }
+.gm-msg-to-btn:focus-visible { outline: 2px solid var(--gm-primary); outline-offset: 2px; border-radius: 4px; }
+/* 「发送至」详情弹窗（需压过 .dropdown-menu.gm-menu 的内边距） */
+.dropdown-menu.gm-msg-details {
+    min-width: 360px;
+    max-width: min(600px, calc(100vw - 32px));
+    padding: 16px 24px 16px 20px;
+    border-radius: 8px;
+}
+.gm-msg-details table { border-collapse: collapse; font-size: 13px; line-height: 20px; }
+.gm-msg-details th {
+    padding: 4px 16px 4px 0;
+    color: var(--gm-text-3);
+    font-weight: 400;
+    text-align: right;
+    vertical-align: top;
+    white-space: nowrap;
+}
+.gm-msg-details td { padding: 4px 0; color: var(--gm-text); overflow-wrap: anywhere; }
 .gm-msg-meta {
     display: flex;
     align-items: center;

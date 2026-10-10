@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import hashlib
 import re
-from email.utils import parseaddr
 from datetime import datetime, timezone
 
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup, escape
 
+from .addresses import format_address, parse_list, parse_one
 from .csrf import csrf_input, csrf_token
 from .navigation import sidebar_data
 from .config import REALTIME_ENABLED, STATIC_DIR, SYNC_JUNK_ENABLED, TEMPLATES_DIR, WEB_AUTH_ENABLED
@@ -124,13 +124,13 @@ def _initials(value: str) -> str:
 
 def _addr_name(value: str | None) -> str:
     """地址头中的显示名；没有显示名时返回邮箱地址。"""
-    name, addr = parseaddr(value or "")
+    name, addr = parse_one(value)
     return (name or addr or (value or "")).strip()
 
 
 def _addr_email(value: str | None) -> str:
     """地址头中的邮箱地址部分。"""
-    return parseaddr(value or "")[1].strip()
+    return parse_one(value)[1].strip()
 
 
 def _avatar_tone(value: str | None) -> int:
@@ -206,13 +206,9 @@ def _snippet(value: str | None, length: int = 200) -> str:
 
 def _recipients(value: str | None, me: str | None = None) -> str:
     """「发送至 我、李娜」：收件人显示名，账号本人显示为「我」。"""
-    from email.utils import getaddresses
-
     names = []
     me_lower = (me or "").lower()
-    for name, addr in getaddresses([value or ""]):
-        if not (name or addr):
-            continue
+    for name, addr in parse_list(value):
         if me_lower and addr.lower() == me_lower:
             names.append("我")
         else:
@@ -222,6 +218,15 @@ def _recipients(value: str | None, me: str | None = None) -> str:
 
 templates.env.filters["avatar_tone"] = _avatar_tone
 templates.env.filters["recipients"] = _recipients
+
+
+def _addr_list(value: str | None) -> str:
+    """完整地址列表「名字 <邮箱>」；名字为空或与邮箱相同时只显示邮箱。"""
+    items = [format_address(name, addr) for name, addr in parse_list(value)]
+    return ", ".join(i for i in items if i) or (value or "")
+
+
+templates.env.filters["addr_list"] = _addr_list
 templates.env.filters["gmail_date"] = _gmail_list_date
 templates.env.filters["gmail_full_date"] = _gmail_full_date
 templates.env.filters["snippet"] = _snippet

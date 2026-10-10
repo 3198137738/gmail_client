@@ -147,3 +147,33 @@ def test_no_bootstrap_icons_left(client, path):
     assert "bi bi-" not in page
     assert 'class="ms' in page
     assert "bootstrap-icons" not in page
+
+
+def test_addresses_with_unquoted_at_sign_in_name():
+    """显示名里带 @ 且没加引号（Python 3.13 严格模式会解析失败）时也要正确显示，且不重复。"""
+    from app.addresses import format_address, parse_list
+    from app.templating import _addr_email, _addr_list, _addr_name
+
+    raw = "service@paypal.co.uk <service@paypal.co.uk>"
+    assert _addr_name(raw) == "service@paypal.co.uk"
+    assert _addr_email(raw) == "service@paypal.co.uk"
+    assert _addr_list(raw) == "service@paypal.co.uk"
+    assert _recipients("me@x.com <me@x.com>", "me@x.com") == "我"
+    assert parse_list('"Smith, John" <j@x.com>, b@x.com') == [("Smith, John", "j@x.com"), ("", "b@x.com")]
+    assert format_address("Smith, John", "j@x.com") == '"Smith, John" <j@x.com>'
+    assert format_address("j@x.com", "J@X.com") == "J@X.com"
+
+
+def test_parser_stores_addresses_without_duplicate_names():
+    from email.message import EmailMessage
+
+    from app.services.email_parser import parse_email
+
+    msg = EmailMessage()
+    msg["From"] = '"service@paypal.co.uk" <service@paypal.co.uk>'
+    msg["To"] = '"Smith, John" <j@x.com>'
+    msg["Subject"] = "x"
+    msg.set_content("x")
+    parsed = parse_email(msg.as_bytes(), account_id=950, uid=1)
+    assert parsed.from_addr == "service@paypal.co.uk"
+    assert parsed.to_addr == '"Smith, John" <j@x.com>'
