@@ -1,15 +1,30 @@
 """Shared Jinja2 environment setup."""
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
 
-from .config import REALTIME_ENABLED, SYNC_JUNK_ENABLED, TEMPLATES_DIR, WEB_AUTH_ENABLED
+from .config import REALTIME_ENABLED, STATIC_DIR, SYNC_JUNK_ENABLED, TEMPLATES_DIR, WEB_AUTH_ENABLED
 from .services.html_sanitizer import sanitize_html
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+
+def _static_version() -> str:
+    """根据静态文件内容计算版本号，附加到静态资源 URL 上（?v=...）。
+
+    反向代理（nginx proxy_cache）和浏览器都会长期缓存 CSS/JS；文件内容一变，
+    URL 随之改变，就能立即拿到新文件，而不必手动清缓存。
+    """
+    digest = hashlib.sha1()
+    for path in sorted(STATIC_DIR.rglob("*")):
+        if path.is_file():
+            digest.update(path.relative_to(STATIC_DIR).as_posix().encode())
+            digest.update(path.read_bytes())
+    return digest.hexdigest()[:10]
 
 
 def _safe_html(value: str) -> Markup:
@@ -124,3 +139,4 @@ templates.env.filters["initials"] = _initials
 templates.env.globals["web_auth_enabled"] = WEB_AUTH_ENABLED
 templates.env.globals["realtime_enabled"] = REALTIME_ENABLED
 templates.env.globals["sync_junk_enabled"] = SYNC_JUNK_ENABLED
+templates.env.globals["static_version"] = _static_version()
