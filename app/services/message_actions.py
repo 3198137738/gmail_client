@@ -159,13 +159,17 @@ def delete_by_id(message_id: int) -> tuple[bool, str]:
         return False, str(exc)
 
 
+# Telegram 机器人统计未读时包含的文件夹类型（收件箱 + 垃圾邮件）。
+UNREAD_KINDS = ("inbox", "junk")
+
+
 def list_unread(limit: int = 10) -> list[dict]:
-    """Return lightweight dicts for the most recent unread inbox messages."""
+    """Return lightweight dicts for the most recent unread inbox/junk messages."""
     with session_scope() as db:
         rows = db.execute(
             select(Message)
             .options(selectinload(Message.account))
-            .where(Message.is_read.is_(False), Message.folder_kind == "inbox")
+            .where(Message.is_read.is_(False), Message.folder_kind.in_(UNREAD_KINDS))
             .order_by(Message.date.desc().nulls_last(), Message.id.desc())
             .limit(limit)
         ).scalars().all()
@@ -175,20 +179,22 @@ def list_unread(limit: int = 10) -> list[dict]:
                 "subject": (m.subject or "(无主题)").strip(),
                 "from_addr": (m.from_addr or "").strip(),
                 "account": (m.account.email if m.account else f"#{m.account_id}"),
+                "folder_kind": m.folder_kind,
             }
             for m in rows
         ]
 
 
-def count_unread() -> int:
+def count_unread() -> dict[str, int]:
+    """按文件夹类型统计未读数，返回 ``{"inbox": n, "junk": m}``。"""
     from sqlalchemy import func
 
     with session_scope() as db:
-        return int(
-            db.execute(
-                select(func.count(Message.id)).where(
-                    Message.is_read.is_(False), Message.folder_kind == "inbox"
-                )
-            ).scalar_one()
-            or 0
-        )
+        rows = db.execute(
+            select(Message.folder_kind, func.count(Message.id))
+            .where(Message.is_read.is_(False), Message.folder_kind.in_(UNREAD_KINDS))
+            .group_by(Message.folder_kind)
+        ).all()
+    counts = {kind: 0 for kind in UNREAD_KINDS}
+    counts.update({kind: int(n) for kind, n in rows})
+    return counts

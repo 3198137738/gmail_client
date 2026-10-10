@@ -39,6 +39,15 @@ _HELP_TEXT = (
 )
 
 
+def _format_unread(counts: dict[str, int]) -> str:
+    """例如：<b>5</b> 封（收件箱 3，垃圾邮件 2）。"""
+    total = sum(counts.values())
+    text = f"<b>{total}</b> 封"
+    if counts.get("junk"):
+        text += f"（收件箱 {counts.get('inbox', 0)}，垃圾邮件 {counts['junk']}）"
+    return text
+
+
 def _authorized() -> set[str]:
     return {str(c) for c in TELEGRAM_CHAT_IDS}
 
@@ -89,28 +98,29 @@ class TelegramBot(threading.Thread):
         if command in ("/start", "/help"):
             tg.send_message(_HELP_TEXT, chat_id=chat_id)
         elif command == "/status":
-            tg.send_message(f"\U0001F4EC 当前未读邮件：<b>{count_unread()}</b> 封", chat_id=chat_id)
+            tg.send_message(f"\U0001F4EC 当前未读邮件：{_format_unread(count_unread())}", chat_id=chat_id)
         elif command == "/unread":
             self._send_unread(chat_id)
         else:
             tg.send_message("未知命令，发送 /help 查看可用命令。", chat_id=chat_id)
 
     def _send_unread(self, chat_id: str) -> None:
-        total = count_unread()
-        if total == 0:
+        counts = count_unread()
+        if sum(counts.values()) == 0:
             tg.send_message("\u2728 没有未读邮件。", chat_id=chat_id)
             return
         items = list_unread(limit=10)
         tg.send_message(
-            f"\U0001F4EC 未读邮件共 <b>{total}</b> 封，最近 {len(items)} 封：",
+            f"\U0001F4EC 未读邮件 {_format_unread(counts)}，最近 {len(items)} 封：",
             chat_id=chat_id,
         )
         for item in items:
             subject = escape(item["subject"]) or "<i>(无主题)</i>"
             sender = escape(item["from_addr"]) or "未知发件人"
             account = escape(item["account"])
+            tag = "\u26A0 <b>[垃圾邮件]</b> " if item.get("folder_kind") == "junk" else ""
             body = (
-                f"\u2022 <b>{subject}</b>\n"
+                f"\u2022 {tag}<b>{subject}</b>\n"
                 f"  \u2709 {sender}\n"
                 f"  \U0001F4E5 <code>{account}</code>"
             )
