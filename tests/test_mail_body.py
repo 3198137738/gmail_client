@@ -61,3 +61,22 @@ def test_detail_page_uses_sandboxed_iframe(client):
     assert 'sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"' in resp.text
     assert "显示图片" in resp.text
     assert "content-security-policy" in resp.headers
+
+
+def test_sanitized_body_is_cached(monkeypatch):
+    import app.services.mail_body as mail_body
+
+    calls = []
+    real = mail_body.sanitize_html
+
+    def counting(html):
+        calls.append(html)
+        return real(html)
+
+    monkeypatch.setattr(mail_body, "sanitize_html", counting)
+    mail_body._sanitize_cached.cache_clear()
+    body = "<p>cache me</p>" + "x" * 1000
+    mail_body.body_has_remote_images(body)
+    mail_body.safe_body_html(body, None)
+    mail_body.safe_body_html(body, None)
+    assert len(calls) == 1

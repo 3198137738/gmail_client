@@ -10,11 +10,14 @@
 """
 from __future__ import annotations
 
+from functools import lru_cache
 from html import escape
 
 from fastapi.responses import HTMLResponse
 
 from .html_sanitizer import has_remote_resources, sanitize_html
+
+_SANITIZE_CACHE_SIZE = 64
 
 _DOC_STYLE = """
 html, body { margin: 0; padding: 0; background: #fff; }
@@ -34,17 +37,25 @@ a { color: #0b57d0; }
 """
 
 
+@lru_cache(maxsize=_SANITIZE_CACHE_SIZE)
+def _sanitize_cached(body_html: str) -> str:
+    """入库时已清洗过一次；显示时再过一遍当前清洗规则，以兼容旧版本清洗器
+    存下的数据。打开一封邮件会用到两次（判断外部图片 + iframe 正文），
+    重复打开也很常见，所以按内容缓存最近的结果。"""
+    return sanitize_html(body_html)
+
+
 def safe_body_html(body_html: str | None, body_text: str | None) -> str:
     """返回可直接放进正文文档的安全 HTML 片段。"""
     if body_html:
-        return sanitize_html(body_html)
+        return _sanitize_cached(body_html)
     if body_text:
         return f"<pre>{escape(body_text)}</pre>"
     return '<p class="mail-empty">邮件内容为空</p>'
 
 
 def body_has_remote_images(body_html: str | None) -> bool:
-    return bool(body_html) and has_remote_resources(sanitize_html(body_html))
+    return bool(body_html) and has_remote_resources(_sanitize_cached(body_html))
 
 
 def _csp(allow_remote_images: bool) -> str:
