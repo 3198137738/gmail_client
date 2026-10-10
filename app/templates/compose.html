@@ -6,6 +6,7 @@
 {% set fwd_attachments = pf.get('forward_attachments') or [] %}
 {% set page_title = '转发' if is_forward else ('回复全部' if is_reply_all else ('回复' if is_reply else '新邮件')) %}
 {% block title %}{{ page_title }}{% endblock %}
+{% block body_class %}is-compose{% endblock %}
 {% block content %}
 <div class="gc-compose-page">
 {% if not accounts %}

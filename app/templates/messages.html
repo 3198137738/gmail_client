@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ kind_label }}{% endblock %}
+{% block body_class %}has-drawer{% endblock %}
 
 {% set keep_account = current_account_id if current_account_id else '' %}
 {% macro view_link(target_kind, account_value=keep_account, query=q, page_num=1, per_page=page_size) -%}
@@ -99,6 +100,9 @@
             {% endif %}
         </nav>
     </aside>
+    <a class="rcm-fab" href="{{ url_for('compose.form') }}" aria-label="写邮件">
+        <i class="bi bi-pencil"></i><span>写邮件</span>
+    </a>
 
     <section class="rcm-content">
         <form id="rcm-bulk-form" method="post" class="m-0">
@@ -266,10 +270,15 @@
                 {% for m in messages %}
                     <tr class="rcm-row {% if not m.is_read %}is-unread{% endif %}"
                         data-href="{{ url_for('messages.detail', message_id=m.id) }}">
-                        <td class="rcm-col-center">
-                            <input type="checkbox" class="form-check-input rcm-row-check"
+                        {% set peer = (m.to_addr if kind == 'sent' else m.from_addr)|addr_name %}
+                        <td class="rcm-col-center rcm-col-check">
+                            <input type="checkbox" class="form-check-input rcm-row-check" id="rcm-check-{{ m.id }}"
                                    name="message_ids" value="{{ m.id }}" form="rcm-bulk-form"
                                    aria-label="选择邮件 {{ m.subject or '(无主题)' }}">
+                            <label class="rcm-avatar tone-{{ peer|avatar_tone }}" for="rcm-check-{{ m.id }}" aria-hidden="true">
+                                <span class="rcm-avatar-letter">{{ (peer or '?')[:1]|upper }}</span>
+                                <i class="bi bi-check-lg rcm-avatar-check"></i>
+                            </label>
                         </td>
                         <td class="rcm-col-center">
                             {% if m.is_read %}
@@ -393,7 +402,7 @@
     function initMessageList() {
         document.querySelectorAll(".rcm-row[data-href]").forEach(function (row) {
             row.addEventListener("click", function (ev) {
-                if (ev.target.closest("a, button, form, input")) return;
+                if (ev.target.closest("a, button, form, input, label")) return;
                 if (hasCheckedRows) return;
                 var selectedText = "";
                 try { selectedText = String(window.getSelection() || ""); } catch (e) {}

@@ -1787,3 +1787,311 @@ a:hover { color: var(--rcm-primary-hover); }
     .gc-field { margin: 0 .85rem; }
     .gc-body { padding: .75rem .85rem 0; }
 }
+
+/* ======================================================================
+   手机端（≤576px）：参照 Gmail 手机 App
+   - 左上角菜单按钮打开侧边抽屉（文件夹/账号）
+   - 底部导航栏；列表页右下角悬浮「写邮件」按钮
+   - 邮件列表改为两行卡片，点头像即勾选
+   ====================================================================== */
+
+/* 桌面端不显示的手机端元素 */
+.rcm-drawer-toggle,
+.rcm-bottomnav,
+.rcm-drawer-backdrop,
+.rcm-fab,
+.rcm-avatar { display: none; }
+
+/* 头像配色（按发件人稳定分配） */
+.rcm-avatar.tone-0 { background: #a8c7fa; color: #041e49; }
+.rcm-avatar.tone-1 { background: #c4eed0; color: #0d5023; }
+.rcm-avatar.tone-2 { background: #ffdad6; color: #8c1d18; }
+.rcm-avatar.tone-3 { background: #ffe08a; color: #5c4300; }
+.rcm-avatar.tone-4 { background: #e7dcff; color: #3b1e7a; }
+.rcm-avatar.tone-5 { background: #c2e7ff; color: #001d35; }
+
+@media (max-width: 576px) {
+    /* ---- 顶栏 ---- */
+    .rcm-topbar {
+        flex-basis: 56px;
+        padding: 0 4px 0 4px;
+        padding-top: env(safe-area-inset-top);
+    }
+    .rcm-drawer-toggle { display: inline-flex; font-size: 22px; }
+    .rcm-drawer-toggle[hidden] { display: none; }
+    .rcm-topnav { display: none; }
+    .rcm-brand { height: 40px; padding: 0 8px; }
+    .rcm-brand span { display: inline; font-size: 18px; }
+    .rcm-brand i { font-size: 22px; }
+    .rcm-rt { padding: 0 10px; height: 28px; }
+    .rcm-rt-text { display: none; }
+
+    /* ---- 底部导航 ---- */
+    .rcm-bottomnav {
+        flex: 0 0 auto;
+        display: flex;
+        justify-content: space-around;
+        padding: 6px 0 calc(6px + env(safe-area-inset-bottom));
+        background: #f3f6fc;
+        border-top: 1px solid var(--rcm-border-soft);
+        z-index: 100;
+    }
+    body.is-compose .rcm-bottomnav { display: none; }
+    .rcm-bottomnav-item {
+        flex: 1 1 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
+        color: var(--rcm-icon) !important;
+        font-size: 12px;
+        font-weight: 500;
+        text-decoration: none;
+    }
+    .rcm-bottomnav-icon {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 56px;
+        height: 30px;
+        border-radius: 15px;
+        font-size: 18px;
+        transition: background-color .2s;
+    }
+    .rcm-bottomnav-item.is-active { color: var(--rcm-text) !important; font-weight: 700; }
+    .rcm-bottomnav-item.is-active .rcm-bottomnav-icon { background: #c2e7ff; color: #001d35; }
+
+    /* ---- 侧边抽屉 ---- */
+    .rcm-sidebar {
+        display: block;
+        position: fixed;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        z-index: 1050;
+        width: min(300px, 84vw);
+        padding: calc(16px + env(safe-area-inset-top)) 0 calc(16px + env(safe-area-inset-bottom));
+        background: #fff;
+        border-radius: 0 16px 16px 0;
+        box-shadow: 0 8px 24px rgba(60, 64, 67, .3);
+        transform: translateX(-105%);
+        transition: transform .25s ease;
+        visibility: hidden;
+    }
+    body.rcm-drawer-open .rcm-sidebar {
+        transform: none;
+        visibility: visible;
+    }
+    .rcm-sidebar .rcm-compose-btn { display: none; }
+    .rcm-drawer-backdrop {
+        display: block;
+        position: fixed;
+        inset: 0;
+        z-index: 1040;
+        background: rgba(0, 0, 0, .32);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity .25s;
+    }
+    body.rcm-drawer-open .rcm-drawer-backdrop {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    /* ---- 悬浮写邮件按钮 ---- */
+    .rcm-fab {
+        position: fixed;
+        right: 16px;
+        bottom: calc(120px + env(safe-area-inset-bottom));  /* 位于分页栏上方，不遮挡翻页按钮 */
+        z-index: 1030;
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+        height: 56px;
+        padding: 0 20px 0 16px;
+        border-radius: 16px;
+        background: #c2e7ff;
+        color: #001d35 !important;
+        font-size: 14px;
+        font-weight: 500;
+        text-decoration: none;
+        box-shadow: 0 1px 3px rgba(60, 64, 67, .3), 0 4px 8px 3px rgba(60, 64, 67, .15);
+    }
+    .rcm-fab i { font-size: 20px; }
+
+    /* ---- 工具栏：未勾选邮件时隐藏批量操作 ---- */
+    .rcm-content:not(:has(.rcm-row-check:checked)) .rcm-bulk-action { display: none; }
+    .rcm-tool-btn { height: 40px; padding: 0 10px; }
+
+    /* ---- 邮件列表：两行卡片 ---- */
+    .rcm-table,
+    .rcm-table tbody { display: block; }
+    .rcm-table colgroup,
+    .rcm-table thead { display: none; }
+    .rcm-list { padding-bottom: 88px; }  /* 给悬浮按钮留出空间 */
+
+    .rcm-table tbody tr.rcm-row {
+        display: grid;
+        grid-template-columns: 64px minmax(0, 1fr) auto;
+        grid-template-areas:
+            "check sender  date"
+            "check subject attach"
+            "check account account";
+        column-gap: 6px;
+        padding: 10px 16px 10px 0;
+        background: #fff;
+        border-bottom: 0;
+    }
+    .rcm-table tbody tr.rcm-row:hover { box-shadow: none; }
+    .rcm-table tbody tr.rcm-row:active { background: #f1f3f4; }
+    .rcm-table tbody tr.rcm-row:has(.rcm-row-check:checked) { background: #e8f0fe; }
+
+    .rcm-table tbody tr.rcm-row td {
+        display: block;
+        height: auto;
+        padding: 0;
+        border: 0;
+        line-height: 1.4;
+        text-align: left;
+    }
+    .rcm-table tbody tr.rcm-row td:nth-child(1) {
+        grid-area: check;
+        display: flex;
+        justify-content: center;
+        padding-top: 2px;
+    }
+    .rcm-table tbody tr.rcm-row td:nth-child(2) { display: none; }
+    .rcm-table tbody tr.rcm-row td:nth-child(3) {
+        grid-area: attach;
+        text-align: right;
+        color: var(--rcm-icon);
+    }
+    .rcm-table tbody tr.rcm-row td:nth-child(4) {
+        grid-area: account;
+        font-size: 12px;
+        font-weight: 400 !important;
+        color: var(--rcm-text-muted) !important;
+    }
+    .rcm-table tbody tr.rcm-row td:nth-child(5) {
+        grid-area: sender;
+        font-size: 15px;
+    }
+    .rcm-table tbody tr.rcm-row td:nth-child(6) {
+        grid-area: subject;
+        font-size: 14px;
+    }
+    .rcm-table tbody tr.rcm-row td:nth-child(7) {
+        grid-area: date;
+        padding-right: 0 !important;
+        font-size: 12px;
+        text-align: right;
+    }
+    .rcm-row:not(.is-unread) td:nth-child(5),
+    .rcm-row:not(.is-unread) .rcm-subject-link { color: var(--rcm-text-muted); }
+
+    /* 复选框隐藏为可访问的视觉元素，用头像代替 */
+    .rcm-row .rcm-row-check {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        opacity: 0;
+        pointer-events: none;
+    }
+    .rcm-avatar {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 40px;
+        height: 40px;
+        margin: 0;
+        border-radius: 50%;
+        font-size: 17px;
+        font-weight: 500;
+        cursor: pointer;
+        user-select: none;
+        transition: background-color .15s;
+    }
+    .rcm-avatar-check { display: none; font-size: 20px; }
+    .rcm-row:has(.rcm-row-check:checked) .rcm-avatar {
+        background: var(--rcm-primary);
+        color: #fff;
+    }
+    .rcm-row:has(.rcm-row-check:checked) .rcm-avatar-letter { display: none; }
+    .rcm-row:has(.rcm-row-check:checked) .rcm-avatar-check { display: inline; }
+
+    .rcm-table tbody tr.rcm-row-empty { display: block; }
+    .rcm-table tbody tr.rcm-row-empty td { display: block; }
+
+    /* ---- 列表底栏：只保留分页 ---- */
+    .rcm-footer-left { display: none; }
+    .rcm-footer { flex-wrap: nowrap; min-height: 44px; }
+    .rcm-pager { width: 100%; }
+
+    /* ---- 邮件详情：操作栏吸顶 ---- */
+    .gm-detail { box-shadow: none; padding-top: 0; }
+    .gm-detail-toolbar {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        padding: 4px 4px;
+        background: #fff;
+        border-bottom: 1px solid var(--rcm-border-soft);
+    }
+    .gm-subject { font-size: 20px; margin-top: 16px; }
+    .gm-sender { flex-wrap: wrap; }
+    .gm-date { width: 100%; padding-left: 56px; }
+    .gm-attachment { width: 100%; }
+    .gm-reply-row { padding-bottom: 8px; }
+    .gm-reply-btn { flex: 1 1 0; justify-content: center; padding: 0 12px; }
+
+    /* ---- 普通页面 ---- */
+    .rcm-content-padded { padding: 0 0 16px; }
+    .rcm-content-padded .card { border-radius: 0; box-shadow: none !important; margin-bottom: 8px; }
+    .rcm-content-padded .card-body { padding: 16px; }
+    .rcm-content-padded .card-header { padding: 14px 16px; }
+    .gm-error, .gm-auth-card { margin: 16px; width: auto; }
+
+    /* 账号页：手机上先显示已配置账号，再显示添加表单 */
+    body.page-accounts .row > .col-lg-7 { order: -1; }
+
+    /* 账号表格改为卡片：邮箱一行，名称/状态/同步时间在下，操作按钮单独一行 */
+    body.page-accounts .table-responsive { overflow: visible; }
+    .rcm-accounts-table,
+    .rcm-accounts-table tbody { display: block; }
+    .rcm-accounts-table thead { display: none; }
+    .rcm-accounts-table tbody > tr:not(.collapse) {
+        display: grid;
+        grid-template-columns: 36px minmax(0, 1fr);
+        grid-template-areas:
+            "check email"
+            ".     name"
+            ".     status"
+            ".     sync"
+            "act   act";
+        row-gap: 4px;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--rcm-border-soft);
+    }
+    .rcm-accounts-table tbody > tr > td {
+        display: block;
+        padding: 0 !important;
+        border: 0 !important;
+        background: transparent !important;
+        text-align: left !important;
+    }
+    .rcm-accounts-table tbody > tr > td:nth-child(1) { grid-area: check; padding-top: 2px !important; }
+    .rcm-accounts-table tbody > tr > td:nth-child(2) { grid-area: email; font-weight: 500; overflow-wrap: anywhere; }
+    .rcm-accounts-table tbody > tr > td:nth-child(3) { grid-area: name; color: var(--rcm-text-muted); }
+    .rcm-accounts-table tbody > tr > td:nth-child(3):empty { display: none; }
+    .rcm-accounts-table tbody > tr > td:nth-child(4) { grid-area: status; }
+    .rcm-accounts-table tbody > tr > td:nth-child(5) { grid-area: sync; font-size: 12.5px; }
+    .rcm-accounts-table tbody > tr > td:nth-child(6) {
+        grid-area: act;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 8px;
+    }
+    .rcm-accounts-table tbody > tr.collapse.show { display: block; padding: 0 16px 14px; }
+    .rcm-accounts-table tbody > tr.collapse.show > td { padding: 12px !important; border-radius: 12px; background: #f8fafd !important; }
+}

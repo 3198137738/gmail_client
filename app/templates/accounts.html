@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}账号管理{% endblock %}
+{% block body_class %}page-accounts{% endblock %}
 {% block extra_scripts %}
 {% if busy.values()|select|list %}
 <script>setTimeout(function(){ window.location.reload(); }, 4000);</script>
@@ -126,7 +127,7 @@ document.querySelectorAll('[data-bs-toggle="popover"]').forEach(function (el) {
             </div>
             <form id="batch-delete-form" method="post" action="{{ url_for('accounts.batch_delete') }}"></form>
             <div class="table-responsive">
-                <table class="table table-hover align-middle mb-0">
+                <table class="table table-hover align-middle mb-0 rcm-accounts-table">
                     <thead class="table-light">
                         <tr>
                             <th style="width:2.5rem">

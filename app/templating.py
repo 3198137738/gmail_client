@@ -142,7 +142,13 @@ def _addr_email(value: str | None) -> str:
     return parseaddr(value or "")[1].strip()
 
 
+def _avatar_tone(value: str | None) -> int:
+    """根据名称稳定地选一种头像配色（0-5），同一发件人颜色固定。"""
+    return sum(ord(ch) for ch in (value or "")) % 6
+
+
 templates.env.filters["safe_html"] = _safe_html
+templates.env.filters["avatar_tone"] = _avatar_tone
 templates.env.filters["addr_name"] = _addr_name
 templates.env.filters["addr_email"] = _addr_email
 templates.env.filters["fmt_dt"] = _fmt_dt
