@@ -9,13 +9,15 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..auth import is_safe_redirect
 from ..database import get_db
 from ..models import Account, BlockedSender, Message, TrustedSender
 from ..services.background import submit_bg
+from ..services import pagination
+from ..services.pagination import Cursor
 from ..services.search import message_search_filter
 from ..services.mail_body import body_document_response, body_has_remote_images
 from ..services.imap_service import (
@@ -217,6 +219,8 @@ def list_messages(
     q: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(DEFAULT_PAGE_SIZE),
+    after: Optional[str] = Query(None),
+    before: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
     kind = _normalize_kind(kind)
@@ -234,26 +238,46 @@ def list_messages(
 
     # Main result query (kind + account + search).
     stmt = select(Message).options(selectinload(Message.account))
-    count_stmt = select(func.count(Message.id))
-    unread_stmt = select(func.count(Message.id)).where(Message.is_read.is_(False))
-
+    # 总数与未读数合并为一次查询
+    count_stmt = select(
+        func.count(Message.id),
+        func.coalesce(func.sum(case((Message.is_read.is_(False), 1), else_=0)), 0),
+    )
     stmt = _apply_kind_account_filters(stmt, kind, selected_account_id)
     count_stmt = _apply_kind_account_filters(count_stmt, kind, selected_account_id)
-    unread_stmt = _apply_kind_account_filters(unread_stmt, kind, selected_account_id)
-
     if search_filter is not None:
         stmt = stmt.where(search_filter)
         count_stmt = count_stmt.where(search_filter)
-        unread_stmt = unread_stmt.where(search_filter)
 
-    total = db.execute(count_stmt).scalar_one() or 0
-    unread_total = db.execute(unread_stmt).scalar_one() or 0
+    total, unread_total = db.execute(count_stmt).one()
+    total = int(total or 0)
+    unread_total = int(unread_total or 0)
     pages = max(1, (total + page_size - 1) // page_size)
     page = min(page, pages)
 
-    stmt = stmt.order_by(Message.date.desc().nulls_last(), Message.id.desc())
-    stmt = stmt.offset((page - 1) * page_size).limit(page_size)
-    messages = db.execute(stmt).scalars().all()
+    after_cursor = Cursor.decode(after)
+    before_cursor = Cursor.decode(before)
+    if page > 1 and after_cursor is not None:
+        # 下一页：从上一页最后一封之后取
+        stmt = stmt.where(pagination.after(after_cursor)).order_by(*pagination.forward_order())
+        messages = db.execute(stmt.limit(page_size)).scalars().all()
+    elif page > 1 and before_cursor is not None:
+        # 上一页：逆序取游标之前最近的若干封，再翻转回显示顺序
+        stmt = stmt.where(pagination.before(before_cursor)).order_by(*pagination.backward_order())
+        messages = list(reversed(db.execute(stmt.limit(page_size)).scalars().all()))
+    elif page > 1 and page == pages:
+        # 末页：逆序取最后几封，同样不需要 OFFSET
+        tail = total - (pages - 1) * page_size
+        stmt = stmt.order_by(*pagination.backward_order())
+        messages = list(reversed(db.execute(stmt.limit(tail)).scalars().all()))
+    else:
+        # 第一页，或只带了页码的旧链接/操作后跳转：按 OFFSET 兜底
+        stmt = stmt.order_by(*pagination.forward_order())
+        stmt = stmt.offset((page - 1) * page_size).limit(page_size)
+        messages = db.execute(stmt).scalars().all()
+
+    next_cursor = Cursor.of(messages[-1]).encode() if messages else None
+    prev_cursor = Cursor.of(messages[0]).encode() if messages else None
 
     # Convenience indices for the Roundcube-style "first - last / total" footer.
     first_index = (page - 1) * page_size + 1 if total else 0
@@ -309,6 +333,8 @@ def list_messages(
             "last_index": last_index,
             "page_size": page_size,
             "page_size_options": PAGE_SIZE_OPTIONS,
+            "next_cursor": next_cursor,
+            "prev_cursor": prev_cursor,
         },
     )
     _apply_cookie(response, cookie_to_persist)

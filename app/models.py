@@ -89,6 +89,8 @@ class Message(Base):
         UniqueConstraint("account_id", "folder", "uid", name="uq_messages_account_folder_uid"),
         Index("ix_messages_account_date", "account_id", "date"),
         Index("ix_messages_kind_date", "folder_kind", "date"),
+        # 选中某个账号时的列表/游标分页：账号 + 文件夹 + 日期
+        Index("ix_messages_account_kind_date", "account_id", "folder_kind", "date"),
         Index("ix_messages_kind_unread", "folder_kind", "is_read"),
     )
 
