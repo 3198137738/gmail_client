@@ -52,6 +52,7 @@ from sqlalchemy.orm import Session
 from ..config import (
     DEFAULT_FOLDER,
     IMAP_FETCH_BATCH_SIZE,
+    IMAP_FETCH_MAX_BYTES,
     IMAP_HOST,
     IMAP_PORT,
     IMAP_TIMEOUT_SEC,
@@ -389,6 +390,44 @@ def _update_sync_state(
         state.last_error = None
 
 
+def _plan_fetch_batches(
+    client: IMAPClient,
+    uids: list[int],
+    *,
+    max_count: int = IMAP_FETCH_BATCH_SIZE,
+    max_bytes: int = IMAP_FETCH_MAX_BYTES,
+) -> list[list[int]]:
+    """把待下载的 UID 按「封数 + 总字节数」切成多批。
+
+    RFC822 会把整封邮件（含附件）一次读进内存，原先固定每批 50 封，遇到
+    带大附件的邮件一批就可能占用数百 MB。这里先用 RFC822.SIZE 取得每封
+    大小，单批总大小不超过 ``max_bytes``；单封超限的邮件独占一批。
+    取大小失败时退回只按封数切分。
+    """
+    if not uids:
+        return []
+    sizes: dict[int, int] = {}
+    try:
+        for uid, data in client.fetch(uids, ["RFC822.SIZE"]).items():
+            sizes[int(uid)] = int(data.get(b"RFC822.SIZE") or 0)
+    except IMAPClientError as exc:
+        logger.warning("RFC822.SIZE fetch failed, batching by count only: %s", exc)
+
+    batches: list[list[int]] = []
+    current: list[int] = []
+    current_bytes = 0
+    for uid in uids:
+        size = sizes.get(uid, 0)
+        if current and (len(current) >= max_count or current_bytes + size > max_bytes):
+            batches.append(current)
+            current, current_bytes = [], 0
+        current.append(uid)
+        current_bytes += size
+    if current:
+        batches.append(current)
+    return batches
+
+
 def _sync_one_folder(
     client: IMAPClient,
     account_id: int,
@@ -436,12 +475,13 @@ def _sync_one_folder(
         _update_sync_state(account_id, folder, uidvalidity=uidvalidity, new_last_uid=None)
         return {"saved": 0, "scanned": 0, "folder": folder, "folder_kind": folder_kind}
 
-    batch_size = IMAP_FETCH_BATCH_SIZE
     blocked_senders = _load_blocked_sender_emails(account_id)
     trusted_senders = _load_trusted_sender_emails(account_id) if folder_kind == "junk" else set()
     rescue_uids: list[int] = []
-    for start in range(0, len(uids), batch_size):
-        chunk = uids[start:start + batch_size]
+    # 本地已有的邮件不必再下载正文
+    existing_before = _existing_uids(account_id, folder, uids)
+    to_fetch = [uid for uid in uids if uid not in existing_before]
+    for chunk in _plan_fetch_batches(client, to_fetch):
         try:
             fetched = client.fetch(chunk, ["RFC822", "FLAGS", "INTERNALDATE"])
         except IMAPClientError as exc:
@@ -703,8 +743,9 @@ def _restore_sender_from_folder(
         return {"folder": folder, "folder_kind": folder_kind, "saved": 0, "scanned": 0}
 
     saved = 0
-    for start in range(0, len(uids), IMAP_FETCH_BATCH_SIZE):
-        chunk = uids[start:start + IMAP_FETCH_BATCH_SIZE]
+    existing_before = _existing_uids(account_id, folder, uids)
+    to_fetch = [uid for uid in uids if uid not in existing_before]
+    for chunk in _plan_fetch_batches(client, to_fetch):
         try:
             fetched = client.fetch(chunk, ["RFC822", "FLAGS"])
         except IMAPClientError as exc:

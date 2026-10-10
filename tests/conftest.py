@@ -16,12 +16,18 @@ os.environ["SESSION_COOKIE_SECURE"] = "false"
 import pytest  # noqa: E402
 
 
-@pytest.fixture(scope="session")
-def app():
+@pytest.fixture(scope="session", autouse=True)
+def _database():
+    """整个测试会话共用一个临时数据库，开始前执行全部迁移。"""
     from app.database import init_db
-    from app.main import app as fastapi_app
 
     init_db()
+
+
+@pytest.fixture(scope="session")
+def app(_database):
+    from app.main import app as fastapi_app
+
     return fastapi_app
 
 

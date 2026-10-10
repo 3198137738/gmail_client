@@ -140,6 +140,9 @@ DEFAULT_FOLDER = "INBOX"
 INITIAL_SYNC_LIMIT = _get_positive_int("INITIAL_SYNC_LIMIT", 100)
 SYNC_INTERVAL_MINUTES = _get_positive_int("SYNC_INTERVAL_MINUTES", 5)
 IMAP_FETCH_BATCH_SIZE = _get_positive_int("IMAP_FETCH_BATCH_SIZE", 50)
+# 每批下载的邮件总大小上限（MB），避免大附件邮件导致内存峰值过高
+IMAP_FETCH_MAX_MB = _get_positive_int("IMAP_FETCH_MAX_MB", 20)
+IMAP_FETCH_MAX_BYTES = IMAP_FETCH_MAX_MB * 1024 * 1024
 BACKGROUND_MAX_WORKERS = _get_positive_int("BACKGROUND_MAX_WORKERS", 4)
 SYNC_SENT_ENABLED = _get_bool("SYNC_SENT_ENABLED", True)
 # 同步垃圾邮件文件夹（带 \Junk 标记的文件夹）。默认关闭；垃圾邮件不发送 Telegram 通知。
