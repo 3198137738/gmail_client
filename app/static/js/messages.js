@@ -11,6 +11,7 @@
                 var selectedText = "";
                 try { selectedText = String(window.getSelection() || ""); } catch (e) {}
                 if ((selectedText || "").trim()) return;
+                saveListScroll();
                 window.location.href = row.dataset.href;
             });
         });
@@ -81,6 +82,44 @@
     var ctx = {};
     try { ctx = JSON.parse(ctxEl.textContent); } catch (e) { ctx = {}; }
 
+    // ---- 记住列表滚动位置：打开邮件再返回时回到原来的位置 ----------------
+    // 列表在 .rcm-list 内部滚动（手机端是整个页面滚动），浏览器不会自动恢复，
+    // 所以打开邮件前按「当前列表地址」存下位置，回到同一列表时恢复。
+    function scrollKey() {
+        return "gc:scroll:" + (ctx.selfUrl || (window.location.pathname + window.location.search));
+    }
+
+    function saveListScroll() {
+        var list = document.querySelector(".rcm-list");
+        try {
+            sessionStorage.setItem(scrollKey(), JSON.stringify({
+                list: list ? list.scrollTop : 0,
+                win: window.scrollY || 0,
+            }));
+        } catch (e) { /* ignore storage errors */ }
+    }
+
+    function restoreListScroll() {
+        var raw = null;
+        try {
+            raw = sessionStorage.getItem(scrollKey());
+            sessionStorage.removeItem(scrollKey());
+        } catch (e) { return; }
+        if (!raw) return;
+        try {
+            var pos = JSON.parse(raw) || {};
+            var list = document.querySelector(".rcm-list");
+            if (list && pos.list) list.scrollTop = pos.list;
+            if (pos.win) window.scrollTo(0, pos.win);
+        } catch (e) { /* ignore */ }
+    }
+
+    // 点主题链接（包括中键/新标签页打开）同样记下位置
+    document.addEventListener("click", function (ev) {
+        if (ev.target.closest && ev.target.closest(".rcm-subject-link")) saveListScroll();
+    }, true);
+    restoreListScroll();
+
     // Page 1 with no active search shows new mail at the top, so we can swap
     // the list silently. Otherwise we surface a banner the user can click.
     var canAutoRefresh = (ctx.page === 1) && !ctx.hasQuery;
@@ -120,8 +159,12 @@
                 var current = document.querySelector(selector);
                 if (fresh && current) {
                     var sidebarScroll = getSidebarScroll();
+                    var oldList = document.querySelector(".rcm-list");
+                    var listScroll = oldList ? oldList.scrollTop : 0;
                     current.replaceWith(fresh);
                     setSidebarScroll(sidebarScroll);
+                    var newList = document.querySelector(".rcm-list");
+                    if (newList && listScroll) newList.scrollTop = listScroll;
                     if (afterSwap) afterSwap();
                 }
             }).catch(function () {

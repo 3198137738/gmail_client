@@ -5,7 +5,7 @@
 {% block content %}
 <div class="gm-detail">
     <div class="gm-detail-toolbar">
-        <a class="rcm-icon-btn" href="{{ url_for('messages.list').include_query_params(kind=message.folder_kind) }}"
+        <a class="rcm-icon-btn" href="{{ back_url }}"
            title="返回列表" aria-label="返回列表">
             <i class="bi bi-arrow-left"></i>
         </a>
@@ -13,12 +13,14 @@
         <form method="post" action="{{ url_for('messages.delete_one', message_id=message.id) }}"
               data-confirm="确定删除这封邮件吗？此操作会同步删除服务器上的对应邮件。">
             {{ csrf_input() }}
+            <input type="hidden" name="next" value="{{ back_url }}">
             <button type="submit" class="rcm-icon-btn" title="删除" aria-label="删除">
                 <i class="bi bi-trash3"></i>
             </button>
         </form>
         <form method="post" action="{{ url_for('messages.mark_unread', message_id=message.id) }}">
             {{ csrf_input() }}
+            <input type="hidden" name="next" value="{{ back_url }}">
             <button type="submit" class="rcm-icon-btn" title="标记为未读" aria-label="标记为未读">
                 <i class="bi bi-envelope"></i>
             </button>

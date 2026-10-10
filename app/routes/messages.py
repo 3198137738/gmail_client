@@ -526,6 +526,16 @@ def delete_one(
     )
 
 
+def _list_back_url(request: Request, back: Optional[str], folder_kind: str) -> str:
+    """详情页「返回」的目标：打开邮件前所在的列表（保留账号、页码、筛选、搜索）。
+
+    只接受站内的邮件列表地址；没有或不合法时回到该文件夹列表首页。
+    """
+    if back and is_safe_redirect(back) and back.startswith("/messages/?"):
+        return back
+    return str(request.url_for("messages.list").include_query_params(kind=folder_kind))
+
+
 @router.get("/{message_id}/body", response_class=HTMLResponse, name="messages.body")
 def message_body(
     message_id: int,
@@ -546,6 +556,7 @@ def view_message(
     request: Request,
     message_id: int,
     images: bool = Query(False),
+    back: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
     message = db.execute(
@@ -590,6 +601,7 @@ def view_message(
             "sender_email": sender_email,
             "sender_blocked": sender_blocked,
             "show_images": images,
+            "back_url": _list_back_url(request, back, message.folder_kind),
             "has_remote_images": body_has_remote_images(message.body_html),
         },
     )

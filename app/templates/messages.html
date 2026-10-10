@@ -284,8 +284,9 @@
                 </thead>
                 <tbody>
                 {% for m in messages %}
+                    {% set detail_url = url_for('messages.detail', message_id=m.id).include_query_params(back=self_url|string) %}
                     <tr class="rcm-row {% if not m.is_read %}is-unread{% endif %}"
-                        data-href="{{ url_for('messages.detail', message_id=m.id) }}">
+                        data-href="{{ detail_url }}">
                         {% set peer = (m.to_addr if kind == 'sent' else m.from_addr)|addr_name %}
                         <td class="rcm-col-center rcm-col-check">
                             <input type="checkbox" class="form-check-input rcm-row-check" id="rcm-check-{{ m.id }}"
@@ -317,7 +318,7 @@
                         <td class="rcm-col-truncate" title="{{ m.from_addr }}">{{ m.from_addr|addr_name }}</td>
                         {% endif %}
                         <td class="rcm-col-truncate">
-                            <a class="rcm-subject-link" href="{{ url_for('messages.detail', message_id=m.id) }}">
+                            <a class="rcm-subject-link" href="{{ detail_url }}">
                                 {{ m.subject or "(无主题)" }}
                             </a>
                             {% if kind == 'all' %}
@@ -410,7 +411,8 @@
     "accountId": {{ (current_account_id if current_account_id else None)|tojson }},
     "page": {{ page|tojson }},
     "hasQuery": {{ (q|length > 0)|tojson }},
-    "anyBusy": {{ any_busy|tojson }}
+    "anyBusy": {{ any_busy|tojson }},
+    "selfUrl": {{ self_url|string|tojson }}
 }
 </script>
 <script src="{{ url_for('static', path='js/messages.js') }}?v={{ static_version }}"></script>
