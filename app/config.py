@@ -45,10 +45,11 @@ DATA_DIR = DATA_ROOT / "data"
 ATTACHMENTS_DIR = DATA_ROOT / "attachments"
 SECRETS_DIR = DATA_ROOT / "secrets"
 LOGS_DIR = DATA_ROOT / "logs"
+BACKUPS_DIR = DATA_ROOT / "backups"
 TEMPLATES_DIR = BASE_DIR / "app" / "templates"
 STATIC_DIR = BASE_DIR / "app" / "static"
 
-for _d in (DATA_DIR, ATTACHMENTS_DIR, SECRETS_DIR, LOGS_DIR):
+for _d in (DATA_DIR, ATTACHMENTS_DIR, SECRETS_DIR, LOGS_DIR, BACKUPS_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
 DATABASE_URL = f"sqlite:///{(DATA_DIR / 'gmail_client.db').as_posix()}"
@@ -211,6 +212,21 @@ TRUSTED_PROXY_NETWORKS = _get_proxy_networks(
         "fc00::/7",
     ),
 )
+# --- 自动备份 -----------------------------------------------------------------
+# 每天定时把数据库快照 + secrets/（含解密账号密码所需的 fernet.key）打包到
+# backups/，只保留最近 BACKUP_KEEP 份。备份里有密钥，请妥善保管并定期拷到异地。
+BACKUP_ENABLED = _get_bool("BACKUP_ENABLED", True)
+try:
+    BACKUP_HOUR = int(os.getenv("BACKUP_HOUR", "4"))  # 本地时间几点执行（0-23）
+except ValueError:
+    BACKUP_HOUR = 4
+if not 0 <= BACKUP_HOUR <= 23:
+    BACKUP_HOUR = 4
+BACKUP_KEEP = _get_positive_int("BACKUP_KEEP", 7)
+# 附件目录可能很大且能从 Gmail 重新同步，默认不打包
+BACKUP_INCLUDE_ATTACHMENTS = _get_bool("BACKUP_INCLUDE_ATTACHMENTS", False)
+LOCAL_TIMEZONE = os.getenv("TZ", "").strip() or "Asia/Shanghai"
+
 LOG_MAX_MB = _get_positive_int("LOG_MAX_MB", 10)
 LOG_BACKUP_COUNT = _get_positive_int("LOG_BACKUP_COUNT", 5)
 

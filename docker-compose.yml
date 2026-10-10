@@ -19,6 +19,8 @@ services:
       - ./attachments:/app/attachments
       - ./secrets:/app/secrets
       - ./logs:/app/logs
+      # 每日自动备份（数据库快照 + 密钥），请定期拷到服务器以外的地方
+      - ./backups:/app/backups
 
     environment:
       TZ: Asia/Shanghai

@@ -32,3 +32,4 @@ README.md
 # 测试
 tests/
 pytest.ini
+backups/

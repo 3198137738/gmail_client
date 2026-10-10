@@ -11,10 +11,17 @@ import logging
 from apscheduler.schedulers.background import BackgroundScheduler
 from sqlalchemy import select
 
-from ..config import DEFAULT_FOLDER, SYNC_INTERVAL_MINUTES
+from ..config import (
+    BACKUP_ENABLED,
+    BACKUP_HOUR,
+    DEFAULT_FOLDER,
+    LOCAL_TIMEZONE,
+    SYNC_INTERVAL_MINUTES,
+)
 from ..database import session_scope
 from ..models import Account
 from .background import submit_bg
+from .backup import safe_run_backup
 from .imap_service import safe_sync_account
 
 logger = logging.getLogger(__name__)
@@ -56,9 +63,26 @@ def start_scheduler() -> BackgroundScheduler:
         max_instances=1,
         coalesce=True,
     )
+    if BACKUP_ENABLED:
+        sched.add_job(
+            safe_run_backup,
+            "cron",
+            hour=BACKUP_HOUR,
+            minute=17,
+            timezone=LOCAL_TIMEZONE,
+            id="daily-backup",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=3600,
+        )
     sched.start()
     _scheduler = sched
-    logger.info("Scheduler started; interval=%s minutes", SYNC_INTERVAL_MINUTES)
+    logger.info(
+        "Scheduler started; interval=%s minutes, backup=%s",
+        SYNC_INTERVAL_MINUTES,
+        f"daily {BACKUP_HOUR:02d}:17 {LOCAL_TIMEZONE}" if BACKUP_ENABLED else "disabled",
+    )
     return sched
 
 

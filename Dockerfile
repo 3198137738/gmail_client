@@ -35,7 +35,7 @@ RUN sed -i 's/\r$//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh
 
 RUN groupadd --system --gid 1000 app \
  && useradd  --system --uid 1000 --gid app --home /app --shell /sbin/nologin app \
- && mkdir -p /app/data /app/attachments /app/secrets /app/logs \
+ && mkdir -p /app/data /app/attachments /app/secrets /app/logs /app/backups \
  && chown -R app:app /app
 
 EXPOSE 8000
