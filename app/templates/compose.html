@@ -17,6 +17,7 @@
 {% else %}
 <form id="gc-compose" class="gc-compose" method="post" action="{{ url_for('compose.send') }}"
       enctype="multipart/form-data" novalidate data-no-loading>
+    {{ csrf_input() }}
     <input type="hidden" name="in_reply_to" value="{{ pf.get('in_reply_to', '') }}">
     <input type="hidden" name="references" value="{{ pf.get('references', '') }}">
     {% if is_forward %}

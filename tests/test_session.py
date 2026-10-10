@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 
 import app.auth as auth
-from tests.helpers import login
+from tests.helpers import csrf_token, login
 
 
 def test_login_required(client):
@@ -28,7 +28,10 @@ def test_session_expires_after_absolute_max_age(client, monkeypatch):
 
 
 def test_cookie_flags(client):
-    resp = client.post("/login", data={"password": "test-password"}, follow_redirects=False)
+    token = csrf_token(client, "/login")
+    resp = client.post(
+        "/login", data={"password": "test-password", "csrf_token": token}, follow_redirects=False
+    )
     cookie = resp.headers["set-cookie"].lower()
     assert "httponly" in cookie
     assert "samesite=lax" in cookie

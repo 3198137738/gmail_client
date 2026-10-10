@@ -5,7 +5,7 @@ import logging
 from contextlib import asynccontextmanager
 from html import escape
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -26,6 +26,7 @@ from .config import (
     load_session_secret,
     setup_logging,
 )
+from .csrf import verify_csrf
 from .database import init_db
 from .routes import auth as auth_routes
 from .routes import accounts as accounts_routes
@@ -79,6 +80,7 @@ app = FastAPI(
     description="A simple multi-account Gmail client using IMAP/SMTP with app passwords.",
     version="0.1.0",
     lifespan=lifespan,
+    dependencies=[Depends(verify_csrf)],
 )
 
 # 主页面的 CSP。邮件正文在 sandbox iframe 中渲染，有自己更严格的 CSP

@@ -44,7 +44,23 @@ def create_message(account_id: int, **fields) -> int:
         return int(msg.id)
 
 
-def login(client, password: str = "test-password") -> None:
-    resp = client.post("/login", data={"password": password, "next": "/messages/"},
-                       follow_redirects=False)
+def csrf_token(client, path: str = "/login") -> str:
+    """打开一个页面拿到表单里的 CSRF token。"""
+    import re
+
+    html = client.get(path).text
+    match = re.search(r'name="csrf_token" value="([^"]+)"', html)
+    assert match, f"no csrf token on {path}"
+    return match.group(1)
+
+
+def login(client, password: str = "test-password") -> str:
+    """登录并返回登录后会话的 CSRF token。"""
+    token = csrf_token(client, "/login")
+    resp = client.post(
+        "/login",
+        data={"password": password, "next": "/messages/", "csrf_token": token},
+        follow_redirects=False,
+    )
     assert resp.status_code == 303, resp.text
+    return csrf_token(client, "/messages/")

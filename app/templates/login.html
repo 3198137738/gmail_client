@@ -20,6 +20,7 @@
         </div>
         {% endif %}
         <form method="post" action="{{ url_for('auth.login_submit') }}">
+            {{ csrf_input() }}
             <input type="hidden" name="next" value="{{ next_url }}">
             <div class="mb-4">
                 <label class="form-label" for="password">访问密码</label>

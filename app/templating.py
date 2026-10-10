@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from fastapi.templating import Jinja2Templates
 
+from .csrf import csrf_input, csrf_token
 from .config import REALTIME_ENABLED, STATIC_DIR, SYNC_JUNK_ENABLED, TEMPLATES_DIR, WEB_AUTH_ENABLED
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -146,3 +147,5 @@ templates.env.globals["web_auth_enabled"] = WEB_AUTH_ENABLED
 templates.env.globals["realtime_enabled"] = REALTIME_ENABLED
 templates.env.globals["sync_junk_enabled"] = SYNC_JUNK_ENABLED
 templates.env.globals["static_version"] = _static_version()
+templates.env.globals["csrf_input"] = csrf_input
+templates.env.globals["csrf_token"] = csrf_token

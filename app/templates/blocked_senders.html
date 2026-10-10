@@ -50,6 +50,7 @@
                         <td class="text-end">
                             <form method="post" action="{{ url_for('messages.unblock_sender', blocked_id=row.id) }}" class="d-inline"
                                   onsubmit="return confirm('确定解除对 {{ row.sender_email }} 的屏蔽吗？');">
+                                {{ csrf_input() }}
                                 <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
                                 <button type="submit" class="btn btn-sm btn-outline-success">解除屏蔽</button>
                             </form>
@@ -90,6 +91,7 @@
                     <td class="text-end">
                         <form method="post" action="{{ url_for('messages.untrust_sender', trusted_id=row.id) }}" class="d-inline"
                               onsubmit="return confirm({{ ('确定取消信任 ' ~ row.sender_email ~ ' 吗？')|tojson|forceescape }});">
+                            {{ csrf_input() }}
                             <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
                             <button type="submit" class="btn btn-sm btn-outline-secondary">取消信任</button>
                         </form>

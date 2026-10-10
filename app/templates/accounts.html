@@ -34,6 +34,7 @@ document.querySelectorAll('[data-bs-toggle="popover"]').forEach(function (el) {
             <div class="card-body tab-content">
                 <div class="tab-pane fade show active" id="tab-single" role="tabpanel">
                 <form method="post" action="{{ url_for('accounts.create') }}">
+                    {{ csrf_input() }}
                     <div class="mb-3">
                         <label class="form-label">Gmail 地址</label>
                         <input type="email" name="email" class="form-control" required placeholder="you@gmail.com">
@@ -58,6 +59,7 @@ document.querySelectorAll('[data-bs-toggle="popover"]').forEach(function (el) {
                 </div>
                 <div class="tab-pane fade" id="tab-batch" role="tabpanel">
                 <form method="post" action="{{ url_for('accounts.batch_create') }}">
+                    {{ csrf_input() }}
                     <div class="mb-2">
                         <label class="form-label">批量账号</label>
                         <textarea name="accounts_text" class="form-control font-monospace" rows="8" required
@@ -99,6 +101,7 @@ document.querySelectorAll('[data-bs-toggle="popover"]').forEach(function (el) {
                         点击下方按钮发送一条测试消息以确认配置正确。
                     </p>
                     <form method="post" action="{{ url_for('accounts.telegram_test') }}">
+                        {{ csrf_input() }}
                         <button type="submit" class="btn btn-outline-primary btn-sm">发送测试消息</button>
                     </form>
                 {% else %}
@@ -121,11 +124,14 @@ document.querySelectorAll('[data-bs-toggle="popover"]').forEach(function (el) {
                         删除选中 (<span id="batch-delete-count">0</span>)
                     </button>
                     <form action="{{ url_for('sync.all') }}" method="post" class="m-0">
+                        {{ csrf_input() }}
                         <button type="submit" class="btn btn-sm btn-outline-primary">立即同步全部</button>
                     </form>
                 </div>
             </div>
-            <form id="batch-delete-form" method="post" action="{{ url_for('accounts.batch_delete') }}"></form>
+            <form id="batch-delete-form" method="post" action="{{ url_for('accounts.batch_delete') }}">
+                {{ csrf_input() }}
+            </form>
             <div class="table-responsive">
                 <table class="table table-hover align-middle mb-0 rcm-accounts-table">
                     <thead class="table-light">
@@ -191,22 +197,26 @@ document.querySelectorAll('[data-bs-toggle="popover"]').forEach(function (el) {
                             </td>
                             <td class="text-end">
                                 <form action="{{ url_for('sync.one', account_id=a.id) }}" method="post" class="d-inline">
+                                    {{ csrf_input() }}
                                     <button class="btn btn-sm btn-outline-primary">同步</button>
                                 </form>
                                 <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="collapse" data-bs-target="#edit-{{ a.id }}">
                                     编辑
                                 </button>
                                 <form action="{{ url_for('accounts.toggle', account_id=a.id) }}" method="post" class="d-inline">
+                                    {{ csrf_input() }}
                                     <button class="btn btn-sm btn-outline-warning">
                                         {% if a.enabled %}停用{% else %}启用{% endif %}
                                     </button>
                                 </form>
                                 <form action="{{ url_for('accounts.toggle_notify', account_id=a.id) }}" method="post" class="d-inline">
+                                    {{ csrf_input() }}
                                     <button class="btn btn-sm btn-outline-info" title="切换该账号的 Telegram 通知">
                                         {% if a.notify_enabled %}静音{% else %}开启通知{% endif %}
                                     </button>
                                 </form>
                                 <form action="{{ url_for('accounts.delete', account_id=a.id) }}" method="post" class="d-inline" onsubmit="return confirm('确定删除该账号及其本地邮件吗？');">
+                                    {{ csrf_input() }}
                                     <button class="btn btn-sm btn-outline-danger">删除</button>
                                 </form>
                             </td>
@@ -214,6 +224,7 @@ document.querySelectorAll('[data-bs-toggle="popover"]').forEach(function (el) {
                         <tr class="collapse" id="edit-{{ a.id }}">
                             <td colspan="6" class="bg-light">
                                 <form method="post" action="{{ url_for('accounts.update', account_id=a.id) }}" class="row g-2 align-items-end">
+                                    {{ csrf_input() }}
                                     <div class="col-md-4">
                                         <label class="form-label">显示名</label>
                                         <input type="text" name="display_name" value="{{ a.display_name or '' }}" class="form-control form-control-sm">

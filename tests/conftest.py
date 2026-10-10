@@ -41,9 +41,11 @@ def _no_background_network(monkeypatch):
     def fake_submit(fn, *args, **kwargs):
         calls.append((getattr(fn, "__name__", fn), args, kwargs))
 
-    import app.routes.messages as messages_routes
-    import app.routes.sync as sync_routes
+    import sys
 
-    monkeypatch.setattr(messages_routes, "submit_bg", fake_submit)
-    monkeypatch.setattr(sync_routes, "submit_bg", fake_submit)
+    import app.main  # noqa: F401  确保所有模块都已导入
+
+    for name, module in list(sys.modules.items()):
+        if name.startswith("app.") and hasattr(module, "submit_bg"):
+            monkeypatch.setattr(module, "submit_bg", fake_submit)
     return calls

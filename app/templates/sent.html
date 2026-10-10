@@ -47,6 +47,7 @@
                     <td class="text-end">
                         <form method="post" action="{{ s.delete_url }}" class="d-inline"
                               onsubmit="return confirm({{ s.delete_confirm|tojson|forceescape }});">
+                            {{ csrf_input() }}
                             <input type="hidden" name="next" value="{{ url_for('compose.sent_list') }}">
                             <button type="submit" class="btn btn-sm btn-outline-danger">删除</button>
                         </form>
