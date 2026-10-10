@@ -4,96 +4,723 @@
 {% set is_reply_all = pf.get('reply_all') %}
 {% set is_forward = pf.get('is_forward') %}
 {% set fwd_attachments = pf.get('forward_attachments') or [] %}
-{% set page_title = '转发' if is_forward else ('回复全部' if is_reply_all else ('回复' if is_reply else '写新邮件')) %}
+{% set page_title = '转发' if is_forward else ('回复全部' if is_reply_all else ('回复' if is_reply else '新邮件')) %}
 {% block title %}{{ page_title }}{% endblock %}
 {% block content %}
-<div class="card shadow-sm">
-    <div class="card-header bg-white"><strong>{{ page_title }}</strong></div>
-    <div class="card-body">
-        {% if error %}
-            <div class="alert alert-danger">{{ error }}</div>
-        {% endif %}
-        {% if not accounts %}
-            <div class="alert alert-warning">
-                还没有可用账号，请先到 <a href="{{ url_for('accounts.list') }}">账号管理</a> 添加并启用。
-            </div>
-        {% else %}
-        <form method="post" action="{{ url_for('compose.send') }}" enctype="multipart/form-data">
-            <input type="hidden" name="in_reply_to" value="{{ pf.get('in_reply_to', '') }}">
-            <input type="hidden" name="references" value="{{ pf.get('references', '') }}">
-            {% if is_forward %}
-            <input type="hidden" name="forward_message_id" value="{{ pf.get('forward_message_id', '') }}">
-            {% endif %}
-            <div class="row mb-3">
-                <div class="col-md-6">
-                    <label class="form-label">发件账号</label>
-                    <select name="account_id" class="form-select" required>
-                        {% for a in accounts %}
-                            <option value="{{ a.id }}" {% if pf.get('account_id') == a.id %}selected{% endif %}>{{ a.email }}{% if a.display_name %} ({{ a.display_name }}){% endif %}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="col-md-6">
-                    <label class="form-label">连接方式</label>
-                    <div class="form-check form-check-inline">
-                        <input class="form-check-input" type="radio" name="use_ssl" id="ssl-on" value="on" checked>
-                        <label class="form-check-label" for="ssl-on">SSL 465 (推荐)</label>
-                    </div>
-                    <div class="form-check form-check-inline">
-                        <input class="form-check-input" type="radio" name="use_ssl" id="ssl-off" value="off">
-                        <label class="form-check-label" for="ssl-off">STARTTLS 587</label>
-                    </div>
-                </div>
-            </div>
-            <div class="mb-3">
-                <label class="form-label">收件人 (To)</label>
-                <input type="text" name="to" class="form-control" required placeholder="多个收件人用逗号分隔"
-                       value="{{ pf.get('to', '') }}" {% if is_forward %}autofocus{% endif %}>
-            </div>
-            <div class="row">
-                <div class="col-md-6 mb-3">
-                    <label class="form-label">抄送 (Cc)</label>
-                    <input type="text" name="cc" class="form-control" placeholder="可选"
-                           value="{{ pf.get('cc', '') }}">
-                </div>
-                <div class="col-md-6 mb-3">
-                    <label class="form-label">密送 (Bcc)</label>
-                    <input type="text" name="bcc" class="form-control" placeholder="可选"
-                           value="{{ pf.get('bcc', '') }}">
-                </div>
-            </div>
-            <div class="mb-3">
-                <label class="form-label">主题</label>
-                <input type="text" name="subject" class="form-control" value="{{ pf.get('subject', '') }}">
-            </div>
-            <div class="mb-3">
-                <label class="form-label">纯文本正文</label>
-                <textarea name="body_text" class="form-control" rows="6" {% if is_reply %}autofocus{% endif %}>{{ pf.get('body_text', '') }}</textarea>
-            </div>
-            <div class="mb-3">
-                <label class="form-label">HTML 正文 (可选)</label>
-                <textarea name="body_html" class="form-control" rows="6" placeholder="&lt;p&gt;Hello &lt;b&gt;world&lt;/b&gt;&lt;/p&gt;"></textarea>
-            </div>
-            {% if fwd_attachments %}
-            <div class="mb-3">
-                <label class="form-label">转发的附件（将随邮件一起发送）</label>
-                <ul class="list-group">
-                    {% for name in fwd_attachments %}
-                    <li class="list-group-item py-1">
-                        <i class="bi bi-paperclip"></i> {{ name }}
-                    </li>
-                    {% endfor %}
-                </ul>
-            </div>
-            {% endif %}
-            <div class="mb-3">
-                <label class="form-label">附件 (可多选)</label>
-                <input type="file" name="attachments" class="form-control" multiple>
-            </div>
-            <button type="submit" class="btn btn-primary">发送</button>
-            <a href="{{ url_for('messages.list') }}" class="btn btn-link">取消</a>
-        </form>
-        {% endif %}
+<div class="gc-compose-page">
+{% if not accounts %}
+    <div class="gc-compose gc-compose-empty">
+        <i class="bi bi-person-exclamation"></i>
+        <div>还没有可用账号，请先到 <a href="{{ url_for('accounts.list') }}">账号管理</a> 添加并启用。</div>
     </div>
+{% else %}
+<form id="gc-compose" class="gc-compose" method="post" action="{{ url_for('compose.send') }}"
+      enctype="multipart/form-data" novalidate data-no-loading>
+    <input type="hidden" name="in_reply_to" value="{{ pf.get('in_reply_to', '') }}">
+    <input type="hidden" name="references" value="{{ pf.get('references', '') }}">
+    {% if is_forward %}
+    <input type="hidden" name="forward_message_id" value="{{ pf.get('forward_message_id', '') }}">
+    {% endif %}
+    <input type="hidden" name="to" id="gc-to-value">
+    <input type="hidden" name="cc" id="gc-cc-value">
+    <input type="hidden" name="bcc" id="gc-bcc-value">
+    <input type="hidden" name="body_text" id="gc-body-text">
+    <input type="hidden" name="body_html" id="gc-body-html">
+
+    <div class="gc-compose-head">
+        <span class="gc-compose-title">{{ page_title }}</span>
+        <a class="gc-icon-btn gc-icon-btn-sm" href="{{ url_for('messages.list') }}" title="关闭" data-discard>
+            <i class="bi bi-x-lg"></i>
+        </a>
+    </div>
+
+    <div class="gc-compose-error" id="gc-error" {% if not error %}hidden{% endif %}>
+        <i class="bi bi-exclamation-circle-fill"></i>
+        <span id="gc-error-text">{% if error %}发送失败：{{ error }}{% endif %}</span>
+    </div>
+
+    <div class="gc-field">
+        <label class="gc-field-label" for="gc-from">发件人</label>
+        <select id="gc-from" name="account_id" class="gc-select" required>
+            {% for a in accounts %}
+            <option value="{{ a.id }}" {% if pf.get('account_id') == a.id %}selected{% endif %}>
+                {% if a.display_name %}{{ a.display_name }} &lt;{{ a.email }}&gt;{% else %}{{ a.email }}{% endif %}
+            </option>
+            {% endfor %}
+        </select>
+    </div>
+
+    <div class="gc-field" data-field="to">
+        <label class="gc-field-label" for="gc-to-input">收件人</label>
+        <div class="gc-chips" data-target="gc-to-value">
+            <input id="gc-to-input" class="gc-chip-input" type="text" autocomplete="off" spellcheck="false"
+                   aria-label="收件人" {% if is_forward or not is_reply %}autofocus{% endif %}>
+        </div>
+        <div class="gc-field-extras">
+            <button type="button" class="gc-link-btn" data-reveal="cc">抄送</button>
+            <button type="button" class="gc-link-btn" data-reveal="bcc">密送</button>
+        </div>
+    </div>
+    <div class="gc-field" data-field="cc" hidden>
+        <label class="gc-field-label" for="gc-cc-input">抄送</label>
+        <div class="gc-chips" data-target="gc-cc-value">
+            <input id="gc-cc-input" class="gc-chip-input" type="text" autocomplete="off" spellcheck="false" aria-label="抄送">
+        </div>
+    </div>
+    <div class="gc-field" data-field="bcc" hidden>
+        <label class="gc-field-label" for="gc-bcc-input">密送</label>
+        <div class="gc-chips" data-target="gc-bcc-value">
+            <input id="gc-bcc-input" class="gc-chip-input" type="text" autocomplete="off" spellcheck="false" aria-label="密送">
+        </div>
+    </div>
+
+    <div class="gc-field">
+        <input type="text" name="subject" class="gc-subject" placeholder="主题" aria-label="主题"
+               value="{{ pf.get('subject', '') }}">
+    </div>
+
+    <div class="gc-body">
+        <div id="gc-editor" class="gc-editor" contenteditable="true" role="textbox" aria-multiline="true"
+             aria-label="正文" data-placeholder="正文"></div>
+        <textarea id="gc-plain" class="gc-editor gc-plain" placeholder="正文" aria-label="正文（纯文本）" hidden></textarea>
+
+        <div class="gc-attachments" id="gc-attachments">
+            {% for name in fwd_attachments %}
+            <span class="gc-attachment is-fixed" title="转发的原邮件附件，将随邮件一起发送">
+                <i class="bi bi-paperclip"></i>
+                <span class="gc-attachment-name">{{ name }}</span>
+                <span class="gc-attachment-meta">转发附件</span>
+            </span>
+            {% endfor %}
+        </div>
+        <div class="gc-size-warning" id="gc-size-warning" hidden>
+            <i class="bi bi-exclamation-triangle"></i> 附件总大小超过 25 MB，Gmail 可能拒收。
+        </div>
+    </div>
+
+    <div class="gc-format-bar" id="gc-format-bar" hidden>
+        <button type="button" class="gc-fmt-btn" data-cmd="bold" title="粗体（Ctrl+B）"><i class="bi bi-type-bold"></i></button>
+        <button type="button" class="gc-fmt-btn" data-cmd="italic" title="斜体（Ctrl+I）"><i class="bi bi-type-italic"></i></button>
+        <button type="button" class="gc-fmt-btn" data-cmd="underline" title="下划线（Ctrl+U）"><i class="bi bi-type-underline"></i></button>
+        <button type="button" class="gc-fmt-btn" data-cmd="strikeThrough" title="删除线"><i class="bi bi-type-strikethrough"></i></button>
+        <label class="gc-fmt-btn gc-fmt-color" title="文字颜色">
+            <i class="bi bi-palette"></i>
+            <input type="color" id="gc-color" value="#d93025" aria-label="文字颜色">
+        </label>
+        <span class="gc-fmt-sep"></span>
+        <button type="button" class="gc-fmt-btn" data-cmd="insertUnorderedList" title="项目符号列表"><i class="bi bi-list-ul"></i></button>
+        <button type="button" class="gc-fmt-btn" data-cmd="insertOrderedList" title="编号列表"><i class="bi bi-list-ol"></i></button>
+        <button type="button" class="gc-fmt-btn" data-cmd="formatBlock" data-value="blockquote" title="引用"><i class="bi bi-quote"></i></button>
+        <span class="gc-fmt-sep"></span>
+        <button type="button" class="gc-fmt-btn" data-cmd="removeFormat" title="清除格式"><i class="bi bi-eraser"></i></button>
+    </div>
+
+    <div class="gc-compose-foot">
+        <button type="submit" class="gc-send-btn" id="gc-send" title="发送（Ctrl+Enter）">
+            <span class="gc-send-label">发送</span>
+        </button>
+        <button type="button" class="gc-icon-btn" id="gc-toggle-format" title="格式选项" aria-pressed="false">
+            <i class="bi bi-fonts"></i>
+        </button>
+        <label class="gc-icon-btn" title="添加附件（也可以直接拖放文件）">
+            <i class="bi bi-paperclip"></i>
+            <input type="file" name="attachments" id="gc-files" multiple hidden>
+        </label>
+        <button type="button" class="gc-icon-btn" id="gc-link" title="插入链接"><i class="bi bi-link-45deg"></i></button>
+        <div class="dropup">
+            <button type="button" class="gc-icon-btn" data-bs-toggle="dropdown" data-bs-auto-close="outside"
+                    aria-expanded="false" title="更多选项">
+                <i class="bi bi-three-dots-vertical"></i>
+            </button>
+            <div class="dropdown-menu gc-more-menu">
+                <label class="dropdown-item gc-more-item">
+                    <input class="form-check-input me-2" type="checkbox" id="gc-plain-mode"> 纯文本模式
+                </label>
+                <div class="dropdown-divider"></div>
+                <div class="dropdown-header">SMTP 连接方式</div>
+                <label class="dropdown-item gc-more-item">
+                    <input class="form-check-input me-2" type="radio" name="use_ssl" value="on" checked> SSL 465（推荐）
+                </label>
+                <label class="dropdown-item gc-more-item">
+                    <input class="form-check-input me-2" type="radio" name="use_ssl" value="off"> STARTTLS 587
+                </label>
+            </div>
+        </div>
+        <span class="gc-foot-spacer"></span>
+        <span class="gc-hint d-none d-md-inline">Ctrl + Enter 发送</span>
+        <a class="gc-icon-btn" href="{{ url_for('messages.list') }}" title="舍弃草稿" data-discard>
+            <i class="bi bi-trash3"></i>
+        </a>
+    </div>
+
+    <div class="gc-drop-overlay" id="gc-drop">
+        <i class="bi bi-cloud-arrow-up"></i>
+        <span>松开鼠标以添加附件</span>
+    </div>
+    <div class="gc-suggest" id="gc-suggest" role="listbox" hidden></div>
+</form>
+<script type="application/json" id="gc-compose-data">{{ {
+    "to": pf.get('to', ''),
+    "cc": pf.get('cc', ''),
+    "bcc": pf.get('bcc', ''),
+    "body_html": pf.get('body_html', ''),
+    "body_text": pf.get('body_text', ''),
+    "is_reply": is_reply or false,
+    "contacts": contacts or [],
+}|tojson }}</script>
+{% endif %}
 </div>
+{% endblock %}
+
+{% block extra_scripts %}
+{% if accounts %}
+<script>
+(function () {
+    "use strict";
+    var form = document.getElementById("gc-compose");
+    var data = JSON.parse(document.getElementById("gc-compose-data").textContent);
+    var contacts = data.contacts || [];
+    var editor = document.getElementById("gc-editor");
+    var plain = document.getElementById("gc-plain");
+    var plainToggle = document.getElementById("gc-plain-mode");
+    var formatBar = document.getElementById("gc-format-bar");
+    var formatToggle = document.getElementById("gc-toggle-format");
+    var errorBox = document.getElementById("gc-error");
+    var errorText = document.getElementById("gc-error-text");
+    var sendBtn = document.getElementById("gc-send");
+    var suggestBox = document.getElementById("gc-suggest");
+    var submitting = false;
+    var dirty = false;
+
+    function markDirty() { dirty = true; }
+
+    function showError(msg) {
+        errorText.textContent = msg;
+        errorBox.hidden = false;
+    }
+
+    // ---------------- 地址解析 ----------------
+    var EMAIL_RE = /^[^\s@<>",;]+@[^\s@<>",;]+\.[^\s@<>",;]+$/;
+
+    // 按逗号/分号拆分地址，忽略引号和尖括号内的分隔符。
+    function splitAddresses(str) {
+        var parts = [], buf = "", quote = false, angle = false;
+        for (var i = 0; i < str.length; i++) {
+            var ch = str[i];
+            if (ch === '"') quote = !quote;
+            else if (ch === "<") angle = true;
+            else if (ch === ">") angle = false;
+            if ((ch === "," || ch === ";") && !quote && !angle) {
+                if (buf.trim()) parts.push(buf.trim());
+                buf = "";
+            } else {
+                buf += ch;
+            }
+        }
+        if (buf.trim()) parts.push(buf.trim());
+        return parts;
+    }
+
+    function parseAddress(token) {
+        var m = token.match(/^(.*)<([^>]+)>\s*$/);
+        if (m) {
+            return { name: m[1].trim().replace(/^"|"$/g, "").trim(), email: m[2].trim() };
+        }
+        return { name: "", email: token.replace(/^mailto:/i, "").trim() };
+    }
+
+    function formatAddress(a) {
+        return a.name ? '"' + a.name.replace(/"/g, "") + '" <' + a.email + ">" : a.email;
+    }
+
+    // ---------------- 收件人输入框（地址块） ----------------
+    var fields = [];
+
+    function ChipField(container) {
+        this.container = container;
+        this.input = container.querySelector(".gc-chip-input");
+        this.hidden = document.getElementById(container.dataset.target);
+        this.addresses = [];
+        var self = this;
+
+        container.addEventListener("mousedown", function (ev) {
+            if (ev.target === container) {
+                ev.preventDefault();
+                self.input.focus();
+            }
+        });
+        this.input.addEventListener("keydown", function (ev) { self.onKeyDown(ev); });
+        this.input.addEventListener("input", function () {
+            markDirty();
+            if (/[,;]/.test(self.input.value)) {
+                self.commit();
+            } else {
+                suggest.update(self);
+            }
+        });
+        this.input.addEventListener("focus", function () { suggest.update(self); });
+        this.input.addEventListener("blur", function () {
+            self.commit();
+            suggest.close();
+        });
+    }
+
+    ChipField.prototype.add = function (addr) {
+        if (!addr.email) return;
+        var key = addr.email.toLowerCase();
+        for (var i = 0; i < this.addresses.length; i++) {
+            if (this.addresses[i].email.toLowerCase() === key) return;
+        }
+        this.addresses.push(addr);
+    };
+
+    ChipField.prototype.commit = function () {
+        var raw = this.input.value;
+        if (!raw.trim()) {
+            this.input.value = "";
+            return;
+        }
+        var self = this;
+        splitAddresses(raw).forEach(function (token) { self.add(parseAddress(token)); });
+        this.input.value = "";
+        this.render();
+    };
+
+    ChipField.prototype.remove = function (index) {
+        this.addresses.splice(index, 1);
+        markDirty();
+        this.render();
+    };
+
+    ChipField.prototype.render = function () {
+        var self = this;
+        this.container.querySelectorAll(".gc-chip").forEach(function (el) { el.remove(); });
+        this.addresses.forEach(function (addr, index) {
+            var chip = document.createElement("span");
+            chip.className = "gc-chip" + (EMAIL_RE.test(addr.email) ? "" : " is-invalid");
+            chip.title = EMAIL_RE.test(addr.email) ? addr.email : "无效的邮箱地址：" + addr.email;
+            var avatar = document.createElement("span");
+            avatar.className = "gc-chip-avatar";
+            avatar.textContent = (addr.name || addr.email).charAt(0).toUpperCase();
+            var label = document.createElement("span");
+            label.className = "gc-chip-label";
+            label.textContent = addr.name || addr.email;
+            var close = document.createElement("button");
+            close.type = "button";
+            close.className = "gc-chip-remove";
+            close.setAttribute("aria-label", "移除 " + addr.email);
+            close.innerHTML = '<i class="bi bi-x"></i>';
+            close.addEventListener("mousedown", function (ev) { ev.preventDefault(); });
+            close.addEventListener("click", function () {
+                self.remove(index);
+                self.input.focus();
+            });
+            chip.appendChild(avatar);
+            chip.appendChild(label);
+            chip.appendChild(close);
+            self.container.insertBefore(chip, self.input);
+        });
+        this.hidden.value = this.addresses.map(formatAddress).join(", ");
+    };
+
+    ChipField.prototype.onKeyDown = function (ev) {
+        if (suggest.isOpenFor(this)) {
+            if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+                ev.preventDefault();
+                suggest.move(ev.key === "ArrowDown" ? 1 : -1);
+                return;
+            }
+            if ((ev.key === "Enter" || ev.key === "Tab") && suggest.pick()) {
+                ev.preventDefault();
+                return;
+            }
+            if (ev.key === "Escape") {
+                suggest.close();
+                return;
+            }
+        }
+        if (ev.key === "Enter" || (ev.key === "Tab" && this.input.value.trim())) {
+            if (this.input.value.trim()) {
+                ev.preventDefault();
+                this.commit();
+            } else if (ev.key === "Enter") {
+                ev.preventDefault();
+            }
+        } else if (ev.key === "Backspace" && !this.input.value && this.addresses.length) {
+            this.remove(this.addresses.length - 1);
+        }
+    };
+
+    ChipField.prototype.hasInvalid = function () {
+        return this.addresses.some(function (a) { return !EMAIL_RE.test(a.email); });
+    };
+
+    // ---------------- 联系人自动补全 ----------------
+    var suggest = {
+        field: null,
+        items: [],
+        active: 0,
+        isOpenFor: function (field) { return !suggestBox.hidden && this.field === field; },
+        update: function (field) {
+            var q = field.input.value.trim().toLowerCase();
+            if (!q || !contacts.length) {
+                this.close();
+                return;
+            }
+            var taken = {};
+            field.addresses.forEach(function (a) { taken[a.email.toLowerCase()] = true; });
+            this.items = contacts.filter(function (c) {
+                return !taken[c.email] &&
+                    (c.email.indexOf(q) !== -1 || (c.name && c.name.toLowerCase().indexOf(q) !== -1));
+            }).slice(0, 8);
+            if (!this.items.length) {
+                this.close();
+                return;
+            }
+            this.field = field;
+            this.active = 0;
+            this.render();
+            var fieldRect = field.container.getBoundingClientRect();
+            var formRect = form.getBoundingClientRect();
+            suggestBox.style.left = (fieldRect.left - formRect.left) + "px";
+            suggestBox.style.top = (fieldRect.bottom - formRect.top + 2) + "px";
+            suggestBox.style.width = Math.min(fieldRect.width, 440) + "px";
+            suggestBox.hidden = false;
+        },
+        render: function () {
+            var self = this;
+            suggestBox.innerHTML = "";
+            this.items.forEach(function (c, i) {
+                var row = document.createElement("div");
+                row.className = "gc-suggest-item" + (i === self.active ? " is-active" : "");
+                row.setAttribute("role", "option");
+                var avatar = document.createElement("span");
+                avatar.className = "gc-chip-avatar gc-suggest-avatar";
+                avatar.textContent = (c.name || c.email).charAt(0).toUpperCase();
+                var text = document.createElement("span");
+                text.className = "gc-suggest-text";
+                var name = document.createElement("span");
+                name.className = "gc-suggest-name";
+                name.textContent = c.name || c.email;
+                text.appendChild(name);
+                if (c.name) {
+                    var email = document.createElement("span");
+                    email.className = "gc-suggest-email";
+                    email.textContent = c.email;
+                    text.appendChild(email);
+                }
+                row.appendChild(avatar);
+                row.appendChild(text);
+                // mousedown 时就选中：避免输入框先失焦把半截文字提交成地址块。
+                row.addEventListener("mousedown", function (ev) {
+                    ev.preventDefault();
+                    self.active = i;
+                    self.pick();
+                });
+                suggestBox.appendChild(row);
+            });
+        },
+        move: function (delta) {
+            this.active = (this.active + delta + this.items.length) % this.items.length;
+            this.render();
+        },
+        pick: function () {
+            var c = this.items[this.active];
+            if (!c || !this.field) return false;
+            var field = this.field;
+            field.input.value = "";
+            field.add({ name: c.name, email: c.email });
+            field.render();
+            markDirty();
+            this.close();
+            field.input.focus();
+            return true;
+        },
+        close: function () {
+            suggestBox.hidden = true;
+            this.field = null;
+        },
+    };
+
+    document.querySelectorAll(".gc-chips").forEach(function (el) {
+        fields.push(new ChipField(el));
+    });
+    [data.to, data.cc, data.bcc].forEach(function (value, i) {
+        if (!value) return;
+        splitAddresses(value).forEach(function (token) { fields[i].add(parseAddress(token)); });
+        fields[i].render();
+    });
+
+    // 抄送 / 密送：有预填内容时直接展开，否则点击后展开。
+    function revealField(name, focus) {
+        var row = form.querySelector('[data-field="' + name + '"]');
+        row.hidden = false;
+        var btn = form.querySelector('[data-reveal="' + name + '"]');
+        if (btn) btn.hidden = true;
+        if (focus) row.querySelector(".gc-chip-input").focus();
+    }
+    if (data.cc) revealField("cc", false);
+    if (data.bcc) revealField("bcc", false);
+    form.querySelectorAll("[data-reveal]").forEach(function (btn) {
+        btn.addEventListener("click", function () { revealField(btn.dataset.reveal, true); });
+    });
+
+    // ---------------- 正文编辑器 ----------------
+    if (data.body_html) {
+        editor.innerHTML = data.body_html;  // 服务端生成，内容已转义
+    } else if (data.body_text) {
+        editor.innerText = data.body_text;
+    }
+    if (data.is_reply) {
+        // 回复时光标放在引用内容上方。
+        editor.focus();
+        var range = document.createRange();
+        range.setStart(editor, 0);
+        range.collapse(true);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+    }
+    editor.addEventListener("input", markDirty);
+    plain.addEventListener("input", markDirty);
+    form.querySelector(".gc-subject").addEventListener("input", markDirty);
+
+    function isEditorEmpty() {
+        return !editor.textContent.trim() && !editor.querySelector("img");
+    }
+    function syncPlaceholder() {
+        editor.classList.toggle("is-empty", isEditorEmpty());
+    }
+    editor.addEventListener("input", syncPlaceholder);
+    syncPlaceholder();
+
+    function exec(cmd, value) {
+        editor.focus();
+        document.execCommand(cmd, false, value || null);
+        markDirty();
+        syncPlaceholder();
+        updateFormatState();
+    }
+
+    function updateFormatState() {
+        formatBar.querySelectorAll("[data-cmd]").forEach(function (btn) {
+            var cmd = btn.dataset.cmd;
+            if (cmd === "removeFormat" || cmd === "formatBlock") return;
+            var on = false;
+            try { on = document.queryCommandState(cmd); } catch (e) { on = false; }
+            btn.classList.toggle("is-active", on);
+        });
+    }
+    document.addEventListener("selectionchange", function () {
+        if (document.activeElement === editor) updateFormatState();
+    });
+
+    formatBar.querySelectorAll("[data-cmd]").forEach(function (btn) {
+        btn.addEventListener("mousedown", function (ev) { ev.preventDefault(); });  // 保留编辑器中的选区
+        btn.addEventListener("click", function () { exec(btn.dataset.cmd, btn.dataset.value); });
+    });
+    document.getElementById("gc-color").addEventListener("input", function (ev) {
+        exec("foreColor", ev.target.value);
+    });
+    formatToggle.addEventListener("click", function () {
+        formatBar.hidden = !formatBar.hidden;
+        formatToggle.classList.toggle("is-active", !formatBar.hidden);
+        formatToggle.setAttribute("aria-pressed", String(!formatBar.hidden));
+    });
+
+    document.getElementById("gc-link").addEventListener("mousedown", function (ev) { ev.preventDefault(); });
+    document.getElementById("gc-link").addEventListener("click", function () {
+        if (plainToggle.checked) return;
+        var url = window.prompt("链接地址", "https://");
+        if (!url || url === "https://") return;
+        if (!/^(https?:|mailto:)/i.test(url)) url = "https://" + url;
+        var selection = window.getSelection();
+        if (selection && selection.toString()) {
+            exec("createLink", url);
+        } else {
+            exec("insertHTML", '<a href="' + url.replace(/"/g, "&quot;") + '">' +
+                url.replace(/&/g, "&amp;").replace(/</g, "&lt;") + "</a>");
+        }
+    });
+
+    // 纯文本模式：正文切换为普通文本框，只发送纯文本。
+    plainToggle.addEventListener("change", function () {
+        if (plainToggle.checked) {
+            plain.value = editor.innerText.replace(/\n{3,}/g, "\n\n");
+            editor.hidden = true;
+            plain.hidden = false;
+            formatBar.hidden = true;
+            formatToggle.disabled = true;
+            plain.focus();
+        } else {
+            editor.innerText = plain.value;
+            plain.hidden = true;
+            editor.hidden = false;
+            formatToggle.disabled = false;
+            syncPlaceholder();
+            editor.focus();
+        }
+    });
+
+    // ---------------- 附件 ----------------
+    var fileInput = document.getElementById("gc-files");
+    var attachBox = document.getElementById("gc-attachments");
+    var sizeWarning = document.getElementById("gc-size-warning");
+    var MAX_TOTAL = 25 * 1024 * 1024;
+    var files = [];
+    var canEditFiles = typeof DataTransfer !== "undefined";
+
+    function formatSize(bytes) {
+        if (bytes < 1024) return bytes + " B";
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + " KB";
+        return (bytes / 1024 / 1024).toFixed(1) + " MB";
+    }
+
+    function syncFiles() {
+        if (canEditFiles) {
+            var dt = new DataTransfer();
+            files.forEach(function (f) { dt.items.add(f); });
+            fileInput.files = dt.files;
+        }
+        attachBox.querySelectorAll(".gc-attachment:not(.is-fixed)").forEach(function (el) { el.remove(); });
+        var total = 0;
+        files.forEach(function (f, index) {
+            total += f.size;
+            var chip = document.createElement("span");
+            chip.className = "gc-attachment";
+            chip.title = f.name;
+            chip.innerHTML = '<i class="bi bi-paperclip"></i>';
+            var name = document.createElement("span");
+            name.className = "gc-attachment-name";
+            name.textContent = f.name;
+            var meta = document.createElement("span");
+            meta.className = "gc-attachment-meta";
+            meta.textContent = formatSize(f.size);
+            chip.appendChild(name);
+            chip.appendChild(meta);
+            if (canEditFiles) {
+                var close = document.createElement("button");
+                close.type = "button";
+                close.className = "gc-chip-remove";
+                close.setAttribute("aria-label", "移除附件 " + f.name);
+                close.innerHTML = '<i class="bi bi-x"></i>';
+                close.addEventListener("click", function () {
+                    files.splice(index, 1);
+                    syncFiles();
+                });
+                chip.appendChild(close);
+            }
+            attachBox.appendChild(chip);
+        });
+        sizeWarning.hidden = total <= MAX_TOTAL;
+    }
+
+    function addFiles(list) {
+        if (!list || !list.length) return;
+        if (!canEditFiles) {
+            files = Array.prototype.slice.call(fileInput.files);
+        } else {
+            Array.prototype.forEach.call(list, function (f) { files.push(f); });
+        }
+        markDirty();
+        syncFiles();
+    }
+
+    fileInput.addEventListener("change", function () {
+        // 先复制出来：syncFiles 会重设 fileInput.files。
+        var picked = Array.prototype.slice.call(fileInput.files);
+        if (canEditFiles) {
+            files = files.concat(picked);
+            markDirty();
+            syncFiles();
+        } else {
+            addFiles(picked);
+        }
+    });
+
+    var dropOverlay = document.getElementById("gc-drop");
+    var dragDepth = 0;
+    function hasFiles(ev) {
+        return ev.dataTransfer && Array.prototype.indexOf.call(ev.dataTransfer.types || [], "Files") !== -1;
+    }
+    form.addEventListener("dragenter", function (ev) {
+        if (!hasFiles(ev) || !canEditFiles) return;
+        ev.preventDefault();
+        dragDepth++;
+        dropOverlay.classList.add("is-visible");
+    });
+    form.addEventListener("dragover", function (ev) {
+        if (hasFiles(ev) && canEditFiles) ev.preventDefault();
+    });
+    form.addEventListener("dragleave", function () {
+        dragDepth = Math.max(0, dragDepth - 1);
+        if (!dragDepth) dropOverlay.classList.remove("is-visible");
+    });
+    form.addEventListener("drop", function (ev) {
+        if (!hasFiles(ev) || !canEditFiles) return;
+        ev.preventDefault();
+        dragDepth = 0;
+        dropOverlay.classList.remove("is-visible");
+        addFiles(ev.dataTransfer.files);
+    });
+
+    // ---------------- 发送 ----------------
+    form.addEventListener("submit", function (ev) {
+        if (submitting) {
+            ev.preventDefault();
+            return;
+        }
+        fields.forEach(function (f) { f.commit(); });
+        var total = fields.reduce(function (n, f) { return n + f.addresses.length; }, 0);
+        if (!total) {
+            ev.preventDefault();
+            showError("请至少填写一个收件人。");
+            fields[0].input.focus();
+            return;
+        }
+        if (fields.some(function (f) { return f.hasInvalid(); })) {
+            ev.preventDefault();
+            showError("有无效的邮箱地址（红色标记），请修改后再发送。");
+            return;
+        }
+        if (plainToggle.checked) {
+            document.getElementById("gc-body-text").value = plain.value;
+            document.getElementById("gc-body-html").value = "";
+        } else {
+            document.getElementById("gc-body-text").value = editor.innerText;
+            document.getElementById("gc-body-html").value =
+                isEditorEmpty() ? "" : '<div dir="ltr">' + editor.innerHTML + "</div>";
+        }
+        submitting = true;
+        sendBtn.disabled = true;
+        sendBtn.querySelector(".gc-send-label").textContent = "正在发送…";
+    });
+
+    // Ctrl/Cmd + Enter 发送
+    form.addEventListener("keydown", function (ev) {
+        if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) {
+            ev.preventDefault();
+            if (form.requestSubmit) form.requestSubmit(sendBtn); else sendBtn.click();
+        }
+    });
+
+    // 舍弃 / 离开页面前确认，避免误丢内容。
+    form.querySelectorAll("[data-discard]").forEach(function (el) {
+        el.addEventListener("click", function (ev) {
+            if (dirty && !window.confirm("舍弃这封邮件？已填写的内容将不会保存。")) {
+                ev.preventDefault();
+                return;
+            }
+            dirty = false;
+        });
+    });
+    window.addEventListener("beforeunload", function (ev) {
+        if (dirty && !submitting) {
+            ev.preventDefault();
+            ev.returnValue = "";
+        }
+    });
+})();
+</script>
+{% endif %}
 {% endblock %}

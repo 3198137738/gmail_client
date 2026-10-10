@@ -4,7 +4,9 @@ from __future__ import annotations
 import logging
 import shutil
 import uuid
+from collections import Counter
 from datetime import datetime
+from html import escape
 from email.utils import getaddresses
 from pathlib import Path
 from typing import List, Optional
@@ -55,25 +57,51 @@ def _reply_subject(subject: Optional[str]) -> str:
     return f"Re: {base}" if base else "Re:"
 
 
-def _quote_body(message: Message) -> str:
-    """Build a quoted version of the original message for the reply body."""
+def _plain_source(message: Message) -> str:
+    """原邮件的纯文本内容；只有 HTML 时粗略去掉标签。"""
     source = message.body_text or ""
     if not source and message.body_html:
-        # Crude fallback when only HTML exists: strip tags so the quote is
-        # at least readable plain text.
         import re
 
         source = re.sub(r"<[^>]+>", "", message.body_html)
-    quoted = "\n".join(f"> {line}" for line in source.splitlines())
-    when = ""
+    return source
+
+
+def _message_when(message: Message) -> str:
     if message.date:
         try:
-            when = message.date.strftime("%Y-%m-%d %H:%M")
+            return message.date.strftime("%Y-%m-%d %H:%M")
         except Exception:
-            when = ""
+            return ""
+    return ""
+
+
+def _quote_header(message: Message) -> str:
+    when = _message_when(message)
     sender = message.from_addr or ""
-    header = f"在 {when}，{sender} 写道：" if when else f"{sender} 写道："
-    return f"\n\n{header}\n{quoted}\n"
+    return f"在 {when}，{sender} 写道：" if when else f"{sender} 写道："
+
+
+def _text_to_html(text: str) -> str:
+    return escape(text).replace("\n", "<br>")
+
+
+def _quote_body(message: Message) -> str:
+    """Build a quoted version of the original message for the reply body."""
+    quoted = "\n".join(f"> {line}" for line in _plain_source(message).splitlines())
+    return f"\n\n{_quote_header(message)}\n{quoted}\n"
+
+
+def _quote_html(message: Message) -> str:
+    """Gmail 风格的 HTML 回复引用：上方留空供输入，原文放在带左边线的引用块中。"""
+    return (
+        "<div><br></div><div><br></div>"
+        '<div class="gmail_quote">'
+        f"<div>{escape(_quote_header(message))}</div>"
+        '<blockquote style="margin:0 0 0 .8ex;border-left:1px solid #ccc;padding-left:1ex">'
+        f"{_text_to_html(_plain_source(message))}"
+        "</blockquote></div>"
+    )
 
 
 def _build_reply_prefill(message: Message, *, reply_all: bool) -> dict:
@@ -103,6 +131,7 @@ def _build_reply_prefill(message: Message, *, reply_all: bool) -> dict:
         "bcc": "",
         "subject": _reply_subject(message.subject),
         "body_text": _quote_body(message),
+        "body_html": _quote_html(message),
         "in_reply_to": message.message_id or "",
         "references": message.message_id or "",
         "is_reply": True,
@@ -120,17 +149,8 @@ def _forward_subject(subject: Optional[str]) -> str:
 
 def _forward_body(message: Message) -> str:
     """Build a forwarded body block with the original headers and content."""
-    source = message.body_text or ""
-    if not source and message.body_html:
-        import re
-
-        source = re.sub(r"<[^>]+>", "", message.body_html)
-    when = ""
-    if message.date:
-        try:
-            when = message.date.strftime("%Y-%m-%d %H:%M")
-        except Exception:
-            when = ""
+    source = _plain_source(message)
+    when = _message_when(message)
     lines = [
         "",
         "",
@@ -147,6 +167,27 @@ def _forward_body(message: Message) -> str:
     return "\n".join(lines)
 
 
+def _forward_html(message: Message) -> str:
+    """Gmail 风格的 HTML 转发块。"""
+    rows = [
+        ("发件人", message.from_addr or ""),
+        ("日期", _message_when(message)),
+        ("主题", message.subject or ""),
+        ("收件人", message.to_addr or ""),
+    ]
+    if message.cc_addr:
+        rows.append(("抄送", message.cc_addr))
+    header = "".join(f"<div>{label}：{escape(value)}</div>" for label, value in rows)
+    return (
+        "<div><br></div><div><br></div>"
+        '<div class="gmail_quote">'
+        "<div>---------- 转发邮件 ----------</div>"
+        f"{header}<br>"
+        f"<div>{_text_to_html(_plain_source(message))}</div>"
+        "</div>"
+    )
+
+
 def _build_forward_prefill(message: Message) -> dict:
     """Compute prefilled compose fields for a forward action."""
     fwd_attachments = [a for a in message.attachments if not a.is_inline]
@@ -157,12 +198,58 @@ def _build_forward_prefill(message: Message) -> dict:
         "bcc": "",
         "subject": _forward_subject(message.subject),
         "body_text": _forward_body(message),
+        "body_html": _forward_html(message),
         "in_reply_to": "",
         "references": "",
         "is_forward": True,
         "forward_message_id": int(message.id),
         "forward_attachments": [(a.display_name or a.filename) for a in fwd_attachments],
     }
+
+
+# 收件人自动补全：扫描最近多少封邮件、最多返回多少个联系人。
+_CONTACT_SCAN_LIMIT = 3000
+_CONTACT_MAX = 300
+_NOREPLY_HINTS = ("noreply", "no-reply", "donotreply", "do-not-reply", "mailer-daemon")
+
+
+def _recent_contacts(db: Session) -> list[dict]:
+    """从最近的往来邮件中收集联系人，按往来频率排序，用于收件人自动补全。
+
+    发出邮件的收件人权重更高（更可能再次联系）；忽略自己的账号、垃圾邮件和 noreply 地址。
+    """
+    own = {email.lower() for email in db.execute(select(Account.email)).scalars().all()}
+    scores: Counter[str] = Counter()
+    names: dict[str, str] = {}
+
+    def collect(header_values: list[Optional[str]], weight: int) -> None:
+        for name, addr in getaddresses([v for v in header_values if v]):
+            addr = (addr or "").strip().lower()
+            if "@" not in addr or addr in own or any(h in addr for h in _NOREPLY_HINTS):
+                continue
+            scores[addr] += weight
+            name = (name or "").strip().strip('"')
+            if name and addr not in names:
+                names[addr] = name
+
+    rows = db.execute(
+        select(Message.folder_kind, Message.from_addr, Message.to_addr, Message.cc_addr)
+        .order_by(Message.id.desc())
+        .limit(_CONTACT_SCAN_LIMIT)
+    ).all()
+    for kind, from_addr, to_addr, cc_addr in rows:
+        if kind == "sent":
+            collect([to_addr, cc_addr], 5)
+        elif kind == "inbox":
+            collect([from_addr], 1)
+    for to_addr, cc_addr in db.execute(
+        select(SentMessage.to_addr, SentMessage.cc_addr)
+        .order_by(SentMessage.id.desc())
+        .limit(_CONTACT_SCAN_LIMIT)
+    ).all():
+        collect([to_addr, cc_addr], 5)
+
+    return [{"email": addr, "name": names.get(addr, "")} for addr, _ in scores.most_common(_CONTACT_MAX)]
 
 
 @router.get("/", response_class=HTMLResponse, name="compose.form")
@@ -199,7 +286,12 @@ def compose_form(
     return templates.TemplateResponse(
         request,
         "compose.html",
-        {"accounts": accounts, "error": error, "prefill": prefill},
+        {
+            "accounts": accounts,
+            "error": error,
+            "prefill": prefill,
+            "contacts": _recent_contacts(db),
+        },
     )
 
 
