@@ -20,12 +20,9 @@ from ..services import pagination
 from ..services.pagination import Cursor
 from ..services.search import message_search_filter
 from ..services.mail_body import body_document_response, body_has_remote_images
-from ..services.imap_service import (
-    delete_imap_messages,
-    is_account_busy,
-    restore_sender_messages_since,
-    update_imap_flags,
-)
+from ..services.imap_client import is_account_busy
+from ..services.imap_ops import delete_imap_messages, update_imap_flags
+from ..services.imap_restore import restore_sender_messages_since
 from ..services.message_actions import (
     delete_local_messages as _delete_local_messages,
     mark_not_spam,

@@ -49,13 +49,8 @@ from ..models import Account
 from sqlalchemy import select
 
 from .background import submit_bg
-from .imap_service import (
-    _discover_junk_folder,
-    _discover_sent_folder,
-    _imap_client,
-    safe_sync_account,
-    sync_folder_with_client,
-)
+from .imap_client import _discover_junk_folder, _discover_sent_folder, _imap_client
+from .imap_service import safe_sync_account, sync_folder_with_client
 
 logger = logging.getLogger(__name__)
 

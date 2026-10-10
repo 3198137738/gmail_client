@@ -18,12 +18,8 @@ from ..config import ATTACHMENTS_DIR
 from ..database import session_scope
 from ..models import Message, TrustedSender
 from .background import submit_bg
-from .imap_service import (
-    _normalize_sender_email,
-    delete_imap_messages,
-    move_imap_messages,
-    update_imap_flags,
-)
+from .imap_ops import delete_imap_messages, move_imap_messages, update_imap_flags
+from .imap_service import _normalize_sender_email
 
 logger = logging.getLogger(__name__)
 

@@ -17,7 +17,7 @@ from ..database import get_db
 from ..models import Account, SyncState
 from ..services import telegram_service
 from ..services.idle_service import reconcile_idle
-from ..services.imap_service import IMAPSyncError, is_account_busy, verify_credentials
+from ..services.imap_client import IMAPSyncError, is_account_busy, verify_credentials
 from ..templating import templates
 
 logger = logging.getLogger(__name__)
