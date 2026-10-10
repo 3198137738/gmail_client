@@ -34,6 +34,7 @@ from ..config import (
     IDLE_RECONNECT_BACKOFF_SEC,
     IDLE_REFRESH_SEC,
     REALTIME_ENABLED,
+    SYNC_JUNK_ENABLED,
     SYNC_SENT_ENABLED,
 )
 from ..crypto import decrypt_password
@@ -43,6 +44,7 @@ from sqlalchemy import select
 
 from .background import submit_bg
 from .imap_service import (
+    _discover_junk_folder,
     _discover_sent_folder,
     _imap_client,
     safe_sync_account,
@@ -99,7 +101,10 @@ class IdleWorker(threading.Thread):
     def _resolve_folder(self, client) -> Optional[str]:
         if self.folder_kind == "inbox":
             return DEFAULT_FOLDER
-        folder = _discover_sent_folder(client)
+        if self.folder_kind == "junk":
+            folder = _discover_junk_folder(client)
+        else:
+            folder = _discover_sent_folder(client)
         if not folder or folder == DEFAULT_FOLDER:
             return None
         return folder
@@ -179,7 +184,12 @@ class IdleManager:
         self._lock = threading.Lock()
 
     def _desired_kinds(self) -> tuple[str, ...]:
-        return ("inbox", "sent") if SYNC_SENT_ENABLED else ("inbox",)
+        kinds = ["inbox"]
+        if SYNC_SENT_ENABLED:
+            kinds.append("sent")
+        if SYNC_JUNK_ENABLED:
+            kinds.append("junk")
+        return tuple(kinds)
 
     def reconcile(self) -> None:
         if not REALTIME_ENABLED:

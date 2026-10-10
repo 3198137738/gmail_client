@@ -6,7 +6,7 @@ from datetime import datetime
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
 
-from .config import REALTIME_ENABLED, TEMPLATES_DIR, WEB_AUTH_ENABLED
+from .config import REALTIME_ENABLED, SYNC_JUNK_ENABLED, TEMPLATES_DIR, WEB_AUTH_ENABLED
 from .services.html_sanitizer import sanitize_html
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -109,3 +109,4 @@ templates.env.filters["shorten"] = _truncate
 templates.env.filters["initials"] = _initials
 templates.env.globals["web_auth_enabled"] = WEB_AUTH_ENABLED
 templates.env.globals["realtime_enabled"] = REALTIME_ENABLED
+templates.env.globals["sync_junk_enabled"] = SYNC_JUNK_ENABLED

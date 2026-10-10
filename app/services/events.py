@@ -90,7 +90,7 @@ class EventBus:
 event_bus = EventBus()
 
 
-def publish_new_mail(account_id: int, *, inbox: int = 0, sent: int = 0) -> None:
+def publish_new_mail(account_id: int, *, inbox: int = 0, sent: int = 0, junk: int = 0) -> None:
     """Convenience helper announcing newly stored messages for an account."""
     event_bus.publish(
         {
@@ -98,5 +98,6 @@ def publish_new_mail(account_id: int, *, inbox: int = 0, sent: int = 0) -> None:
             "account_id": int(account_id),
             "inbox": int(inbox),
             "sent": int(sent),
+            "junk": int(junk),
         }
     )

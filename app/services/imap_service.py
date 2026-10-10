@@ -55,6 +55,7 @@ from ..config import (
     IMAP_PORT,
     IMAP_TIMEOUT_SEC,
     INITIAL_SYNC_LIMIT,
+    SYNC_JUNK_ENABLED,
     SYNC_SENT_ENABLED,
 )
 from ..crypto import decrypt_password
@@ -159,19 +160,29 @@ def _flag_to_str(flag) -> str:
     return str(flag)
 
 
-def _discover_sent_folder(client: IMAPClient) -> Optional[str]:
-    """Return the IMAP folder name carrying the ``\\Sent`` special-use flag."""
+def _discover_special_folder(client: IMAPClient, flag: str) -> Optional[str]:
+    """Return the IMAP folder name carrying the given special-use flag (e.g. ``\\Sent``)."""
     try:
         folders = client.list_folders()
     except IMAPClientError:
-        logger.warning("IMAP LIST failed during Sent folder discovery", exc_info=True)
+        logger.warning("IMAP LIST failed during %s folder discovery", flag, exc_info=True)
         return None
+    wanted = flag.lower()
     for entry in folders:
         flags, _delim, name = entry[0], entry[1], entry[2]
-        flag_set = {_flag_to_str(f) for f in (flags or ())}
-        if "\\Sent" in flag_set or "\\sent" in flag_set:
+        if any(_flag_to_str(f).lower() == wanted for f in (flags or ())):
             return name if isinstance(name, str) else name.decode("utf-8", errors="replace")
     return None
+
+
+def _discover_sent_folder(client: IMAPClient) -> Optional[str]:
+    """Return the IMAP folder name carrying the ``\\Sent`` special-use flag."""
+    return _discover_special_folder(client, "\\Sent")
+
+
+def _discover_junk_folder(client: IMAPClient) -> Optional[str]:
+    """Return the IMAP folder name carrying the ``\\Junk`` special-use flag（Gmail 的垃圾邮件）."""
+    return _discover_special_folder(client, "\\Junk")
 
 
 def _get_or_create_sync_state(db: Session, account_id: int, folder: str) -> SyncState:
@@ -506,6 +517,12 @@ def safe_sync_account(account_id: int, folder: Optional[str] = None) -> dict:
                         targets.append((sent_folder, "sent"))
                     else:
                         logger.info("No Sent folder discovered for account=%s", account_id)
+                if SYNC_JUNK_ENABLED:
+                    junk_folder = _discover_junk_folder(client)
+                    if junk_folder and junk_folder != DEFAULT_FOLDER:
+                        targets.append((junk_folder, "junk"))
+                    else:
+                        logger.info("No Junk folder discovered for account=%s", account_id)
 
                 for folder_name, kind in targets:
                     try:
@@ -535,11 +552,14 @@ def safe_sync_account(account_id: int, folder: Optional[str] = None) -> dict:
 
         inbox_new = int(results.get("inbox", {}).get("saved", 0) or 0)
         sent_new = int(results.get("sent", {}).get("saved", 0) or 0)
-        if inbox_new or sent_new:
+        junk_new = int(results.get("junk", {}).get("saved", 0) or 0)
+        if inbox_new or sent_new or junk_new:
             try:
-                publish_new_mail(account_id, inbox=inbox_new, sent=sent_new)
+                publish_new_mail(account_id, inbox=inbox_new, sent=sent_new, junk=junk_new)
             except Exception:
                 logger.debug("Failed to publish new_mail event", exc_info=True)
+        # 垃圾邮件只推送到网页，不发 Telegram 通知，避免刷屏。
+        if inbox_new or sent_new:
             try:
                 submit_bg(notify_new_mail, account_id, inbox=inbox_new, sent=sent_new)
             except Exception:

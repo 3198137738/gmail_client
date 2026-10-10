@@ -34,7 +34,7 @@ router = APIRouter(prefix="/messages", tags=["messages"])
 
 DEFAULT_PAGE_SIZE = 25
 PAGE_SIZE_OPTIONS = (25, 50, 100)
-KIND_LABELS = {"inbox": "收件箱", "sent": "已发送", "all": "全部邮件"}
+KIND_LABELS = {"inbox": "收件箱", "sent": "已发送", "junk": "垃圾邮件", "all": "全部邮件"}
 SEEN_FLAG = b"\\Seen"
 
 # Cookie name + lifetime for persisting the user's account filter choice.
@@ -45,7 +45,7 @@ COOKIE_MAX_AGE = 60 * 60 * 24 * 365
 
 
 def _normalize_kind(kind: Optional[str]) -> str:
-    if kind in ("inbox", "sent", "all"):
+    if kind in KIND_LABELS:
         return kind
     return "inbox"
 
@@ -79,9 +79,15 @@ def _normalize_sender_email(value: Optional[str]) -> str:
     return (m.group(0).strip().lower() if m else "")
 
 
+def _kind_condition(kind: str):
+    """按文件夹类型过滤；与 Gmail 一致，「全部邮件」不包含垃圾邮件。"""
+    if kind == "all":
+        return Message.folder_kind != "junk"
+    return Message.folder_kind == kind
+
+
 def _apply_kind_account_filters(stmt, kind: str, account_id: Optional[int]):
-    if kind != "all":
-        stmt = stmt.where(Message.folder_kind == kind)
+    stmt = stmt.where(_kind_condition(kind))
     if account_id:
         stmt = stmt.where(Message.account_id == account_id)
     return stmt
@@ -269,9 +275,8 @@ def list_messages(
         select(Message.account_id, func.count(Message.id))
         .group_by(Message.account_id)
     )
-    if kind != "all":
-        side_unread_stmt = side_unread_stmt.where(Message.folder_kind == kind)
-        side_total_stmt = side_total_stmt.where(Message.folder_kind == kind)
+    side_unread_stmt = side_unread_stmt.where(_kind_condition(kind))
+    side_total_stmt = side_total_stmt.where(_kind_condition(kind))
 
     unread_by_account = {row[0]: row[1] for row in db.execute(side_unread_stmt).all()}
     total_by_account = {row[0]: row[1] for row in db.execute(side_total_stmt).all()}
@@ -294,7 +299,9 @@ def list_messages(
         .where(Message.is_read.is_(False), Message.folder_kind == "inbox")
     )
     nav_all_stmt = (
-        select(func.count(Message.id)).where(Message.is_read.is_(False))
+        select(func.count(Message.id)).where(
+            Message.is_read.is_(False), _kind_condition("all")
+        )
     )
     if selected_account_id:
         nav_inbox_stmt = nav_inbox_stmt.where(Message.account_id == selected_account_id)

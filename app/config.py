@@ -133,6 +133,8 @@ SYNC_INTERVAL_MINUTES = _get_positive_int("SYNC_INTERVAL_MINUTES", 5)
 IMAP_FETCH_BATCH_SIZE = _get_positive_int("IMAP_FETCH_BATCH_SIZE", 50)
 BACKGROUND_MAX_WORKERS = _get_positive_int("BACKGROUND_MAX_WORKERS", 4)
 SYNC_SENT_ENABLED = _get_bool("SYNC_SENT_ENABLED", True)
+# 同步垃圾邮件文件夹（带 \Junk 标记的文件夹）。默认关闭；垃圾邮件不发送 Telegram 通知。
+SYNC_JUNK_ENABLED = _get_bool("SYNC_JUNK_ENABLED", False)
 
 # Real-time delivery via IMAP IDLE + SSE.
 # When enabled, a long-lived IMAP connection is kept per account/folder so new

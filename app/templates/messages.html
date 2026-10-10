@@ -32,6 +32,13 @@
                     <i class="bi bi-send"></i>
                     <span class="rcm-folder-name">已发送</span>
                 </a>
+                {% if sync_junk_enabled %}
+                <a href="{{ view_link('junk', '') }}"
+                   class="rcm-folder {% if not current_account_id and kind == 'junk' %}is-active{% endif %}">
+                    <i class="bi bi-exclamation-octagon"></i>
+                    <span class="rcm-folder-name">垃圾邮件</span>
+                </a>
+                {% endif %}
                 <a href="{{ view_link('all', '') }}"
                    class="rcm-folder {% if not current_account_id and kind == 'all' %}is-active{% endif %}">
                     <i class="bi bi-folder2"></i>
@@ -67,6 +74,13 @@
                         <i class="bi bi-send"></i>
                         <span class="rcm-folder-name">已发送</span>
                     </a>
+                    {% if sync_junk_enabled %}
+                    <a href="{{ view_link('junk', a.id) }}"
+                       class="rcm-folder {% if is_account_selected and kind == 'junk' %}is-active{% endif %}">
+                        <i class="bi bi-exclamation-octagon"></i>
+                        <span class="rcm-folder-name">垃圾邮件</span>
+                    </a>
+                    {% endif %}
                     <a href="{{ view_link('all', a.id) }}"
                        class="rcm-folder {% if is_account_selected and kind == 'all' %}is-active{% endif %}">
                         <i class="bi bi-folder2"></i>
@@ -459,7 +473,8 @@
         if (ctx.accountId && ev.account_id !== ctx.accountId) return false;
         if (ctx.kind === "inbox") return ev.inbox > 0;
         if (ctx.kind === "sent") return ev.sent > 0;
-        return (ev.inbox > 0) || (ev.sent > 0); // "all"
+        if (ctx.kind === "junk") return ev.junk > 0;
+        return (ev.inbox > 0) || (ev.sent > 0); // "all"（不含垃圾邮件）
     }
 
     var refreshing = false;
@@ -519,7 +534,7 @@
     var debounceTimer = null;
     function onNewMail(ev) {
         if (!eventMatchesView(ev)) return;
-        var n = (ev.inbox || 0) + (ev.sent || 0);
+        var n = ctx.kind === "junk" ? (ev.junk || 0) : (ev.inbox || 0) + (ev.sent || 0);
         pendingCount += n;
         // 勾选状态存在 sessionStorage 中，刷新后 initMessageList 会恢复勾选，
         // 因此有勾选时也可以安全地自动刷新。
