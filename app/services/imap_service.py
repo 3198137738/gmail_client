@@ -85,6 +85,37 @@ def _account_lock(account_id: int) -> threading.Lock:
         return lock
 
 
+# 因账号锁被占用而跳过的同步请求；锁释放时补跑一次，避免 IDLE 通知丢失。
+_pending_resync: set[int] = set()
+
+
+def _try_acquire_for_sync(account_id: int, lock: threading.Lock) -> bool:
+    """非阻塞获取账号锁；失败时登记待补同步。
+
+    与 :func:`_release_account_lock` 在同一个互斥锁下进行，
+    保证「获取失败并登记」和「释放并检查登记」不会互相错过。
+    """
+    with _locks_mutex:
+        if lock.acquire(blocking=False):
+            return True
+        _pending_resync.add(account_id)
+        return False
+
+
+def _release_account_lock(account_id: int, lock: threading.Lock) -> None:
+    """释放账号锁；若期间有同步请求被跳过，则立即补跑一次。"""
+    with _locks_mutex:
+        try:
+            lock.release()
+        except RuntimeError:
+            return
+        rerun = account_id in _pending_resync
+        _pending_resync.discard(account_id)
+    if rerun:
+        logger.info("Running deferred sync for account=%s", account_id)
+        submit_bg(safe_sync_account, account_id)
+
+
 def is_account_busy(account_id: int) -> bool:
     """Return True when an IMAP operation is currently running on the account."""
     with _locks_mutex:
@@ -443,8 +474,8 @@ def safe_sync_account(account_id: int, folder: Optional[str] = None) -> dict:
         ``{ "skipped": true, "reason": "..." }`` / ``{ "error": "..." }``.
     """
     lock = _account_lock(account_id)
-    if not lock.acquire(blocking=False):
-        logger.info("Sync already in progress for account=%s; skipping", account_id)
+    if not _try_acquire_for_sync(account_id, lock):
+        logger.info("Account busy, sync deferred until lock release account=%s", account_id)
         return {"skipped": True, "reason": "in_progress"}
 
     started = perf_counter()
@@ -520,10 +551,7 @@ def safe_sync_account(account_id: int, folder: Optional[str] = None) -> dict:
         _record_error(account_id, DEFAULT_FOLDER, exc.__class__.__name__)
         return {"error": exc.__class__.__name__}
     finally:
-        try:
-            lock.release()
-        except RuntimeError:
-            pass
+        _release_account_lock(account_id, lock)
 
 
 def _restore_sender_from_folder(
@@ -663,10 +691,7 @@ def restore_sender_messages_since(account_id: int, sender_email: str, since_at: 
         logger.exception("Unexpected restore_sender_messages_since failure account=%s", account_id)
         return {"error": "unexpected"}
     finally:
-        try:
-            lock.release()
-        except RuntimeError:
-            pass
+        _release_account_lock(account_id, lock)
 
 
 def verify_credentials(email: str, password: str) -> None:
@@ -758,10 +783,7 @@ def update_imap_flags(
         logger.exception("Unexpected update_imap_flags failure account=%s", account_id)
         return {"ok": False, "error": "unexpected", "folders": {}}
     finally:
-        try:
-            lock.release()
-        except RuntimeError:
-            pass
+        _release_account_lock(account_id, lock)
 
     return result
 
@@ -842,9 +864,6 @@ def delete_imap_messages(
         logger.exception("Unexpected delete_imap_messages failure account=%s", account_id)
         return {"ok": False, "error": "unexpected", "folders": {}}
     finally:
-        try:
-            lock.release()
-        except RuntimeError:
-            pass
+        _release_account_lock(account_id, lock)
 
     return result
