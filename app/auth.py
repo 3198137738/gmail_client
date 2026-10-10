@@ -280,16 +280,25 @@ def clear_failed_logins(ip_address: str) -> None:
             _reset_state(state)
 
 
+def is_safe_redirect(url: str | None) -> bool:
+    """只允许同源的相对路径（以单个 "/" 开头）。
+
+    浏览器会把 "\\" 当成 "/"，并忽略 URL 中的制表符/换行，所以
+    "/\evil.com"、"/	/evil.com" 都等同于 "//evil.com"，必须一并拒绝。
+    """
+    if not url or not url.startswith("/"):
+        return False
+    if "\\" in url or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in url):
+        return False
+    if url.startswith("//"):
+        return False
+    parsed = urlparse(url)
+    return not (parsed.scheme or parsed.netloc)
+
+
 def safe_next_url(next_url: str | None, fallback: str = "/messages/") -> str:
     """Allow only same-origin relative redirects."""
-    if not next_url:
-        return fallback
-    parsed = urlparse(next_url)
-    if parsed.scheme or parsed.netloc:
-        return fallback
-    if not next_url.startswith("/"):
-        return fallback
-    return next_url
+    return next_url if is_safe_redirect(next_url) else fallback
 
 
 async def require_app_password(request: Request, call_next):

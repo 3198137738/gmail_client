@@ -17,6 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..config import ATTACHMENTS_DIR, SYNC_SENT_ENABLED
+from ..auth import is_safe_redirect
 from ..database import get_db
 from ..models import Account, Attachment, Message, SentMessage
 from ..services.smtp_service import SMTPSendError, send_email
@@ -528,6 +529,6 @@ def sent_delete(
     db.delete(record)
     db.commit()
     logger.info("Deleted sent record id=%s account_id=%s", sent_id, record.account_id)
-    if next:
+    if is_safe_redirect(next):
         return RedirectResponse(url=next, status_code=303)
     return RedirectResponse(url=request.url_for("compose.sent_list"), status_code=303)

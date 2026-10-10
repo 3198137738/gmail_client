@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from ..auth import is_safe_redirect
 from ..database import get_db
 from ..models import Account, BlockedSender, Message, TrustedSender
 from ..services.background import submit_bg
@@ -465,7 +466,7 @@ def mark_unread(
     if message is None:
         raise HTTPException(status_code=404, detail="Message not found")
     _toggle_messages_read_state(db, [message], is_read=False)
-    if next:
+    if is_safe_redirect(next):
         return RedirectResponse(url=next, status_code=303)
     return RedirectResponse(url=request.url_for("messages.detail", message_id=message_id), status_code=303)
 
@@ -489,7 +490,7 @@ def delete_one(
     _delete_local_messages(db, [message])
     logger.info("delete-one message_id=%s account_id=%s mode=async_remote", message_id, message.account_id)
 
-    if next:
+    if is_safe_redirect(next):
         return RedirectResponse(url=next, status_code=303)
     return _redirect_to_list(
         request,
@@ -518,7 +519,7 @@ def not_spam(
     ok, info = mark_not_spam(message_id)
     if not ok:
         raise HTTPException(status_code=502, detail=info)
-    if next:
+    if is_safe_redirect(next):
         return RedirectResponse(url=next, status_code=303)
     return _redirect_to_list(
         request,
@@ -579,7 +580,7 @@ def block_sender(
         deleted,
     )
 
-    if next:
+    if is_safe_redirect(next):
         return RedirectResponse(url=next, status_code=303)
     return _redirect_to_list(
         request,
@@ -658,7 +659,7 @@ def unblock_sender(
         1,
         blocked_at.isoformat(),
     )
-    if next:
+    if is_safe_redirect(next):
         return RedirectResponse(url=next, status_code=303)
     return RedirectResponse(
         url=request.url_for("messages.blocked_senders").include_query_params(account_id=account_id),
@@ -681,7 +682,7 @@ def untrust_sender(
     logger.info("untrust-sender account_id=%s sender=%s", account_id, row.sender_email)
     db.delete(row)
     db.commit()
-    if next:
+    if is_safe_redirect(next):
         return RedirectResponse(url=next, status_code=303)
     return RedirectResponse(
         url=request.url_for("messages.blocked_senders").include_query_params(account_id=account_id),

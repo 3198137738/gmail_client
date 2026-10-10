@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import logging
 from typing import Optional
-from urllib.parse import urlparse
 
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 
+from ..auth import safe_next_url
 from ..database import session_scope
 from ..models import Account
 from ..services.background import submit_bg
@@ -25,20 +25,8 @@ router = APIRouter(prefix="/sync", tags=["sync"])
 
 
 def _safe_next(request: Request, next_url: Optional[str]) -> str:
-    """Validate caller-supplied redirect target to avoid open-redirects.
-
-    Only same-origin relative paths are accepted; anything else falls back to
-    the account-management page (legacy behaviour).
-    """
-    fallback = str(request.url_for("accounts.list"))
-    if not next_url:
-        return fallback
-    parsed = urlparse(next_url)
-    if parsed.scheme or parsed.netloc:
-        return fallback
-    if not next_url.startswith("/"):
-        return fallback
-    return next_url
+    """校验调用方传入的跳转地址，非法时回到账号管理页。"""
+    return safe_next_url(next_url, fallback=str(request.url_for("accounts.list")))
 
 
 @router.post("/{account_id}", name="sync.one")
