@@ -66,6 +66,7 @@ from .background import submit_bg
 from .email_parser import _message_base_dir, parse_email
 from .events import publish_new_mail
 from .telegram_service import notify_new_mail
+from ..timeutil import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -230,7 +231,7 @@ def _record_error(account_id: int, folder: str, error: str) -> None:
         with session_scope() as db:
             state = _get_or_create_sync_state(db, account_id, folder)
             state.last_error = error[:1000]
-            state.last_synced_at = datetime.utcnow()
+            state.last_synced_at = utcnow()
     except Exception:
         logger.exception("Failed to persist sync error for account=%s", account_id)
 
@@ -384,7 +385,7 @@ def _update_sync_state(
             state.uidvalidity = uidvalidity
         if new_last_uid is not None:
             state.last_uid = max(state.last_uid or 0, new_last_uid)
-        state.last_synced_at = datetime.utcnow()
+        state.last_synced_at = utcnow()
         state.last_error = None
 
 

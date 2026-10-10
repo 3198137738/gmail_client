@@ -10,7 +10,6 @@ import logging
 import shutil
 from collections import defaultdict
 from pathlib import Path
-from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload

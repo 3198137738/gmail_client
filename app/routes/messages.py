@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from datetime import datetime
 from email.utils import parseaddr
 import re
 from typing import Optional
@@ -30,6 +29,7 @@ from ..services.message_actions import (
     toggle_messages_read_state as _toggle_messages_read_state,
 )
 from ..templating import templates
+from ..timeutil import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -648,7 +648,7 @@ def unblock_sender(
         raise HTTPException(status_code=404, detail="Blocked sender not found")
     account_id = int(row.account_id)
     sender_email = row.sender_email
-    blocked_at = row.created_at or datetime.utcnow()
+    blocked_at = row.created_at or utcnow()
     db.delete(row)
     db.commit()
     submit_bg(restore_sender_messages_since, account_id, sender_email, blocked_at)

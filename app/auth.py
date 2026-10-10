@@ -25,6 +25,7 @@ from .config import (
 )
 from .database import session_scope
 from .models import LoginThrottle
+from .timeutil import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ class LoginThrottleStatus:
     @property
     def is_blocked(self) -> bool:
         return self.is_permanent_blocked or (
-            self.blocked_until is not None and self.blocked_until > datetime.utcnow()
+            self.blocked_until is not None and self.blocked_until > utcnow()
         )
 
     @property
@@ -58,7 +59,7 @@ class LoginThrottleStatus:
     def remaining_lockout_minutes(self) -> int:
         if self.is_permanent_blocked or not self.is_blocked or self.blocked_until is None:
             return 0
-        seconds = max((self.blocked_until - datetime.utcnow()).total_seconds(), 0)
+        seconds = max((self.blocked_until - utcnow()).total_seconds(), 0)
         return max(1, int((seconds + 59) // 60))
 
 
@@ -213,7 +214,7 @@ def get_login_throttle_status(ip_address: str) -> LoginThrottleStatus:
             is_permanent_blocked=True,
         )
 
-    now = datetime.utcnow()
+    now = utcnow()
     with session_scope() as db:
         state = db.execute(
             select(LoginThrottle).where(LoginThrottle.ip_address == ip_address)
@@ -241,7 +242,7 @@ def register_failed_login(ip_address: str) -> LoginThrottleStatus:
             is_permanent_blocked=True,
         )
 
-    now = datetime.utcnow()
+    now = utcnow()
     with session_scope() as db:
         state = _get_or_create_throttle(db, ip_address)
         if state.is_permanent_blocked:
@@ -296,10 +297,10 @@ def clear_failed_logins(ip_address: str) -> None:
 
 
 def is_safe_redirect(url: str | None) -> bool:
-    """只允许同源的相对路径（以单个 "/" 开头）。
+    r"""只允许同源的相对路径（以单个 "/" 开头）。
 
-    浏览器会把 "\\" 当成 "/"，并忽略 URL 中的制表符/换行，所以
-    "/\evil.com"、"/	/evil.com" 都等同于 "//evil.com"，必须一并拒绝。
+    浏览器会把反斜杠当成 "/"，并忽略 URL 中的制表符/换行，所以
+    "/\evil.com"、"/<Tab>/evil.com" 都等同于 "//evil.com"，必须一并拒绝。
     """
     if not url or not url.startswith("/"):
         return False
