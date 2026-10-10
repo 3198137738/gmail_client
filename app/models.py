@@ -1,0 +1,188 @@
+"""ORM models for the Gmail client."""
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Optional
+
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    Index,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from .database import Base
+
+
+def _now() -> datetime:
+    return datetime.utcnow()
+
+
+class Account(Base):
+    __tablename__ = "accounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(String(320), unique=True, nullable=False)
+    display_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    encrypted_password: Mapped[str] = mapped_column(Text, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    notify_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="1", nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=_now, onupdate=_now, nullable=False
+    )
+
+    messages = relationship("Message", back_populates="account", cascade="all, delete-orphan")
+    sync_states = relationship("SyncState", back_populates="account", cascade="all, delete-orphan")
+    sent = relationship("SentMessage", back_populates="account", cascade="all, delete-orphan")
+    blocked_senders = relationship(
+        "BlockedSender", back_populates="account", cascade="all, delete-orphan"
+    )
+
+
+class Message(Base):
+    __tablename__ = "messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    folder: Mapped[str] = mapped_column(String(255), nullable=False, default="INBOX")
+    folder_kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="inbox", server_default="inbox", index=True
+    )
+    uid: Mapped[int] = mapped_column(Integer, nullable=False)
+    message_id: Mapped[Optional[str]] = mapped_column(String(998), nullable=True, index=True)
+
+    subject: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    from_addr: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    to_addr: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    cc_addr: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    bcc_addr: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
+
+    body_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    body_html: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    has_attachments: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
+
+    account = relationship("Account", back_populates="messages")
+    attachments = relationship(
+        "Attachment", back_populates="message", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "folder", "uid", name="uq_messages_account_folder_uid"),
+        Index("ix_messages_account_date", "account_id", "date"),
+        Index("ix_messages_subject", "subject"),
+        Index("ix_messages_kind_date", "folder_kind", "date"),
+        Index("ix_messages_kind_unread", "folder_kind", "is_read"),
+    )
+
+
+class Attachment(Base):
+    __tablename__ = "attachments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    message_id: Mapped[int] = mapped_column(
+        ForeignKey("messages.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    # The original, human-readable filename as it appeared in the email
+    # (may contain non-ASCII characters). ``filename`` above is the sanitized
+    # name used on disk and in URLs; ``display_name`` is shown in the UI and
+    # used for the download's Content-Disposition header.
+    display_name: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    mime_type: Mapped[str] = mapped_column(String(255), nullable=False, default="application/octet-stream")
+    size: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_inline: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    content_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    file_path: Mapped[str] = mapped_column(Text, nullable=False)
+    public_url: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
+
+    message = relationship("Message", back_populates="attachments")
+
+
+class SyncState(Base):
+    __tablename__ = "sync_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    folder: Mapped[str] = mapped_column(String(255), nullable=False, default="INBOX")
+    last_uid: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    uidvalidity: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    last_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    account = relationship("Account", back_populates="sync_states")
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "folder", name="uq_sync_state_account_folder"),
+    )
+
+
+class SentMessage(Base):
+    __tablename__ = "sent_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    to_addr: Mapped[str] = mapped_column(Text, nullable=False)
+    cc_addr: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    bcc_addr: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    subject: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    body_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    body_html: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    message_id: Mapped[Optional[str]] = mapped_column(String(998), nullable=True)
+    sent_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), default="sent", nullable=False)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    account = relationship("Account", back_populates="sent")
+
+
+class LoginThrottle(Base):
+    __tablename__ = "login_throttle"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ip_address: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    failed_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_failed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    is_permanent_blocked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    blocked_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=_now, onupdate=_now, nullable=False
+    )
+
+
+class BlockedSender(Base):
+    __tablename__ = "blocked_senders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sender_email: Mapped[str] = mapped_column(String(320), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
+
+    account = relationship("Account", back_populates="blocked_senders")
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "sender_email", name="uq_blocked_sender_account_email"),
+        Index("ix_blocked_senders_account_sender", "account_id", "sender_email"),
+    )

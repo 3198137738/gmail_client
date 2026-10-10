@@ -1,0 +1,552 @@
+{% extends "base.html" %}
+{% block title %}{{ kind_label }}{% endblock %}
+
+{% set keep_account = current_account_id if current_account_id else '' %}
+{% macro view_link(target_kind, account_value=keep_account, query=q, page_num=1, per_page=page_size) -%}
+/messages/?kind={{ target_kind }}&account_id={{ account_value }}&q={{ query|urlencode }}&page={{ page_num }}&page_size={{ per_page }}
+{%- endmacro %}
+{% set self_url = view_link(kind, keep_account, q, page, page_size) %}
+
+{% block body %}
+<div class="rcm-body">
+
+    <aside class="rcm-sidebar">
+        <a class="rcm-compose-btn" href="{{ url_for('compose.form') }}">
+            <i class="bi bi-pencil-square"></i> 写邮件
+        </a>
+
+        <nav class="rcm-tree" aria-label="文件夹">
+            <div class="rcm-tree-group">
+                <div class="rcm-tree-account {% if not current_account_id %}is-current{% endif %}">
+                    <i class="bi bi-collection"></i>
+                    <span class="rcm-tree-account-name">全部账号</span>
+                </div>
+                <a href="{{ view_link('inbox', '') }}"
+                   class="rcm-folder {% if not current_account_id and kind == 'inbox' %}is-active{% endif %}">
+                    <i class="bi bi-inbox-fill"></i>
+                    <span class="rcm-folder-name">收件箱</span>
+                    {% if nav_unread_all %}<span class="rcm-folder-count">{{ nav_unread_all }}</span>{% endif %}
+                </a>
+                <a href="{{ view_link('sent', '') }}"
+                   class="rcm-folder {% if not current_account_id and kind == 'sent' %}is-active{% endif %}">
+                    <i class="bi bi-send"></i>
+                    <span class="rcm-folder-name">已发送</span>
+                </a>
+                <a href="{{ view_link('all', '') }}"
+                   class="rcm-folder {% if not current_account_id and kind == 'all' %}is-active{% endif %}">
+                    <i class="bi bi-folder2"></i>
+                    <span class="rcm-folder-name">全部邮件</span>
+                </a>
+            </div>
+
+            {% for a in accounts %}
+                {% set acc_unread = unread_by_account.get(a.id, 0) %}
+                {% set is_account_selected = (current_account_id == a.id) %}
+                {% set is_busy = busy_by_account.get(a.id) %}
+                <div class="rcm-tree-group">
+                    <div class="rcm-tree-account {% if is_account_selected %}is-current{% endif %}" title="{{ a.email }}">
+                        <i class="bi bi-person-circle"></i>
+                        <span class="rcm-tree-account-name">{{ a.display_name or a.email }}</span>
+                        <form action="{{ url_for('sync.one', account_id=a.id) }}" method="post"
+                              class="rcm-tree-action {% if is_busy %}is-busy{% endif %}" data-no-loading>
+                            <input type="hidden" name="next" value="{{ self_url }}">
+                            <button type="submit" class="rcm-icon-btn-sm" title="同步 {{ a.email }}"
+                                    aria-label="同步 {{ a.email }}">
+                                <i class="bi bi-arrow-clockwise"></i>
+                            </button>
+                        </form>
+                    </div>
+                    <a href="{{ view_link('inbox', a.id) }}"
+                       class="rcm-folder {% if is_account_selected and kind == 'inbox' %}is-active{% endif %}">
+                        <i class="bi bi-inbox"></i>
+                        <span class="rcm-folder-name">收件箱</span>
+                        {% if acc_unread %}<span class="rcm-folder-count">{{ acc_unread }}</span>{% endif %}
+                    </a>
+                    <a href="{{ view_link('sent', a.id) }}"
+                       class="rcm-folder {% if is_account_selected and kind == 'sent' %}is-active{% endif %}">
+                        <i class="bi bi-send"></i>
+                        <span class="rcm-folder-name">已发送</span>
+                    </a>
+                    <a href="{{ view_link('all', a.id) }}"
+                       class="rcm-folder {% if is_account_selected and kind == 'all' %}is-active{% endif %}">
+                        <i class="bi bi-folder2"></i>
+                        <span class="rcm-folder-name">全部</span>
+                    </a>
+                </div>
+            {% endfor %}
+
+            {% if not accounts %}
+                <div class="rcm-sidebar-empty">
+                    暂无账号，请到 <a href="{{ url_for('accounts.list') }}">账号管理</a> 添加。
+                </div>
+            {% endif %}
+        </nav>
+    </aside>
+
+    <section class="rcm-content">
+        <form id="rcm-bulk-form" method="post" class="m-0">
+            <input type="hidden" name="kind" value="{{ kind }}">
+            <input type="hidden" name="account_id" value="{{ keep_account }}">
+            <input type="hidden" name="q" value="{{ q }}">
+            <input type="hidden" name="page" value="{{ page }}">
+            <input type="hidden" name="page_size" value="{{ page_size }}">
+        </form>
+
+        <div class="rcm-toolbar">
+            <div class="rcm-toolbar-group">
+                {% if selected_account %}
+                    <form action="{{ url_for('sync.one', account_id=selected_account.id) }}"
+                          method="post" class="m-0" data-no-loading>
+                        <input type="hidden" name="next" value="{{ self_url }}">
+                        <button type="submit" class="rcm-tool-btn" title="同步当前账号">
+                            <i class="bi bi-arrow-clockwise"></i><span>刷新</span>
+                        </button>
+                    </form>
+                {% else %}
+                    <form action="{{ url_for('sync.all') }}" method="post" class="m-0" data-no-loading>
+                        <input type="hidden" name="next" value="{{ self_url }}">
+                        <button type="submit" class="rcm-tool-btn" title="同步所有账号">
+                            <i class="bi bi-arrow-clockwise"></i><span>刷新</span>
+                        </button>
+                    </form>
+                {% endif %}
+
+                <form method="post" action="{{ url_for('messages.mark_all_read') }}" class="m-0"
+                      onsubmit="return confirm('确定将当前视图下的全部 {{ unread_total }} 封未读邮件标记为已读吗？&#10;（同时会同步更新 Gmail 服务器的已读状态）');"
+                      data-no-loading>
+                    <input type="hidden" name="kind" value="{{ kind }}">
+                    <input type="hidden" name="account_id" value="{{ keep_account }}">
+                    <input type="hidden" name="q" value="{{ q }}">
+                    <input type="hidden" name="page" value="{{ page }}">
+                    <input type="hidden" name="page_size" value="{{ page_size }}">
+                    <button type="submit" class="rcm-tool-btn" {% if not unread_total %}disabled{% endif %}
+                            title="全部标记为已读">
+                        <i class="bi bi-check2-all"></i><span>已读</span>
+                    </button>
+                </form>
+
+                <button type="submit" class="rcm-tool-btn rcm-bulk-action" form="rcm-bulk-form"
+                        formaction="{{ url_for('messages.batch_mark_read') }}" disabled title="将选中邮件标记为已读">
+                    <i class="bi bi-envelope-open"></i><span>选中已读</span>
+                </button>
+                <button type="submit" class="rcm-tool-btn rcm-bulk-action" form="rcm-bulk-form"
+                        formaction="{{ url_for('messages.batch_mark_unread') }}" disabled title="将选中邮件标记为未读">
+                    <i class="bi bi-envelope"></i><span>选中未读</span>
+                </button>
+                <button type="submit" class="rcm-tool-btn rcm-tool-btn-danger rcm-bulk-action" form="rcm-bulk-form"
+                        formaction="{{ url_for('messages.batch_delete') }}" disabled
+                        onclick="return confirm('确定删除选中的邮件吗？此操作会同步删除服务器上的对应邮件。');"
+                        title="删除选中邮件">
+                    <i class="bi bi-trash"></i><span>选中删除</span>
+                </button>
+
+                <div class="dropdown m-0">
+                    <button type="button" class="rcm-tool-btn" data-bs-toggle="dropdown"
+                            aria-expanded="false" title="更多">
+                        <i class="bi bi-three-dots-vertical"></i>
+                    </button>
+                    <ul class="dropdown-menu shadow-sm">
+                        {% if selected_account %}
+                        <li>
+                            <form action="{{ url_for('sync.all') }}" method="post" data-no-loading class="m-0">
+                                <input type="hidden" name="next" value="{{ self_url }}">
+                                <button class="dropdown-item" type="submit">
+                                    <i class="bi bi-arrow-repeat me-2"></i>同步所有账号
+                                </button>
+                            </form>
+                        </li>
+                        {% endif %}
+                        {% if q or current_account_id %}
+                        <li>
+                            <a class="dropdown-item" href="{{ view_link(kind, '', '') }}">
+                                <i class="bi bi-x-circle me-2"></i>清除搜索与筛选
+                            </a>
+                        </li>
+                        {% endif %}
+                        <li>
+                            <a class="dropdown-item" href="{{ url_for('messages.blocked_senders') }}">
+                                <i class="bi bi-shield-slash me-2"></i>屏蔽发件人
+                            </a>
+                        </li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li>
+                            <a class="dropdown-item" href="{{ url_for('accounts.list') }}">
+                                <i class="bi bi-person-gear me-2"></i>账号管理
+                            </a>
+                        </li>
+                        <li>
+                            <a class="dropdown-item" href="{{ url_for('compose.sent_list') }}">
+                                <i class="bi bi-send-check me-2"></i>发件记录
+                            </a>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="rcm-toolbar-title">
+                <span class="rcm-toolbar-title-main">{{ kind_label }}</span>
+                {% if selected_account %}
+                    <span class="rcm-toolbar-title-sep">·</span>
+                    <span class="rcm-toolbar-title-sub" title="{{ selected_account.email }}">
+                        {{ selected_account.display_name or selected_account.email }}
+                    </span>
+                {% endif %}
+                {% if total %}
+                <span class="rcm-toolbar-title-info">
+                    {% if unread_total %}<strong>{{ unread_total }}</strong> 未读 / {% endif %}{{ total }} 封
+                </span>
+                {% endif %}
+            </div>
+
+            <div class="rcm-toolbar-search">
+                <form method="get" action="{{ url_for('messages.list') }}" class="rcm-search m-0" data-no-loading>
+                    <input type="hidden" name="kind" value="{{ kind }}">
+                    <input type="hidden" name="account_id" value="{{ keep_account }}">
+                    <input type="hidden" name="page_size" value="{{ page_size }}">
+                    <i class="bi bi-search rcm-search-icon"></i>
+                    <input type="search" name="q" value="{{ q }}" class="rcm-search-input"
+                           placeholder="搜索邮件…" autocomplete="off">
+                    {% if q %}
+                        <a class="rcm-search-clear" href="{{ view_link(kind, keep_account, '') }}" title="清除"><i class="bi bi-x"></i></a>
+                    {% endif %}
+                </form>
+            </div>
+        </div>
+
+        <div class="rcm-list">
+            <table class="rcm-table">
+                <colgroup>
+                    <col style="width: 34px;">
+                    <col style="width: 28px;">
+                    <col style="width: 28px;">
+                    <col style="width: 200px;">
+                    <col style="width: 200px;">
+                    <col>
+                    <col style="width: 110px;">
+                </colgroup>
+                <thead>
+                    <tr>
+                        <th class="rcm-col-center">
+                            <input type="checkbox" class="form-check-input rcm-check-all" aria-label="全选当前页邮件">
+                        </th>
+                        <th class="rcm-col-center" title="状态">
+                            <i class="bi bi-envelope" aria-hidden="true"></i>
+                        </th>
+                        <th class="rcm-col-center" title="附件">
+                            <i class="bi bi-paperclip" aria-hidden="true"></i>
+                        </th>
+                        <th>账号</th>
+                        {% if kind == 'sent' %}
+                        <th>收件人</th>
+                        {% else %}
+                        <th>发件人</th>
+                        {% endif %}
+                        <th>主题</th>
+                        <th class="rcm-col-right">日期</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for m in messages %}
+                    <tr class="rcm-row {% if not m.is_read %}is-unread{% endif %}"
+                        data-href="{{ url_for('messages.detail', message_id=m.id) }}">
+                        <td class="rcm-col-center">
+                            <input type="checkbox" class="form-check-input rcm-row-check"
+                                   name="message_ids" value="{{ m.id }}" form="rcm-bulk-form"
+                                   aria-label="选择邮件 {{ m.subject or '(无主题)' }}">
+                        </td>
+                        <td class="rcm-col-center">
+                            {% if m.is_read %}
+                                <i class="bi bi-envelope-open rcm-icon-read" title="已读" aria-label="已读"></i>
+                            {% else %}
+                                <i class="bi bi-envelope-fill rcm-icon-unread" title="未读" aria-label="未读"></i>
+                            {% endif %}
+                        </td>
+                        <td class="rcm-col-center">
+                            {% if m.has_attachments %}
+                                <i class="bi bi-paperclip" title="包含附件" aria-label="包含附件"></i>
+                            {% endif %}
+                        </td>
+                        <td class="rcm-col-truncate" title="{{ m.account.email }}">
+                            {{ m.account.display_name or m.account.email }}
+                        </td>
+                        {% if kind == 'sent' %}
+                        <td class="rcm-col-truncate" title="{{ m.to_addr }}">{{ m.to_addr }}</td>
+                        {% else %}
+                        <td class="rcm-col-truncate" title="{{ m.from_addr }}">{{ m.from_addr }}</td>
+                        {% endif %}
+                        <td class="rcm-col-truncate">
+                            <a class="rcm-subject-link" href="{{ url_for('messages.detail', message_id=m.id) }}">
+                                {{ m.subject or "(无主题)" }}
+                            </a>
+                            {% if kind == 'all' %}
+                                <span class="rcm-folder-tag">{{ m.folder_kind }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="rcm-col-right rcm-col-date" title="{{ m.date|fmt_dt('%Y-%m-%d %H:%M:%S') }}">
+                            {{ m.date|fmt_rel_dt }}
+                        </td>
+                    </tr>
+                {% else %}
+                    <tr class="rcm-row-empty">
+                        <td colspan="7">
+                            <div class="rcm-empty">
+                                <i class="bi bi-inbox"></i>
+                                <div class="rcm-empty-title">这里还没有邮件</div>
+                                <div class="rcm-empty-hint">
+                                    {% if selected_account %}
+                                        点工具栏 <strong>刷新</strong> 拉取 {{ selected_account.email }} 的最新邮件
+                                    {% elif accounts %}
+                                        点工具栏 <strong>刷新</strong> 拉取最新邮件
+                                    {% else %}
+                                        先到 <a href="{{ url_for('accounts.list') }}">账号管理</a> 添加邮箱
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="rcm-footer">
+            <div class="rcm-footer-left">
+                {% if any_busy %}
+                    <span class="rcm-footer-busy">
+                        <span class="spinner-border spinner-border-sm" style="width:.75rem;height:.75rem"></span>
+                        正在同步…
+                    </span>
+                {% else %}
+                    <div class="rcm-page-size-form" aria-label="每页邮件数">
+                        <span class="rcm-page-size-label">每页</span>
+                        {% for option in page_size_options %}
+                            {% if not loop.first %}<span class="rcm-page-size-sep">/</span>{% endif %}
+                            {% if option == page_size %}
+                                <strong class="rcm-page-size-current">{{ option }}</strong>
+                            {% else %}
+                                <a class="rcm-page-size-inline-link" href="{{ view_link(kind, keep_account, q, 1, option) }}">{{ option }}</a>
+                            {% endif %}
+                        {% endfor %}
+                        <span class="rcm-page-size-label">封</span>
+                    </div>
+                {% endif %}
+            </div>
+            <div class="rcm-pager">
+                <span class="rcm-pager-info">
+                    {% if total %}
+                        {{ first_index }} – {{ last_index }} / {{ total }}
+                    {% else %}
+                        0 封
+                    {% endif %}
+                </span>
+                <a class="rcm-pager-btn {% if page <= 1 %}is-disabled{% endif %}"
+                   href="{{ view_link(kind, keep_account, q, 1) }}"
+                   title="首页" aria-label="首页"><i class="bi bi-chevron-double-left"></i></a>
+                <a class="rcm-pager-btn {% if page <= 1 %}is-disabled{% endif %}"
+                   href="{{ view_link(kind, keep_account, q, page - 1) }}"
+                   title="上一页" aria-label="上一页"><i class="bi bi-chevron-left"></i></a>
+                <a class="rcm-pager-btn {% if page >= pages %}is-disabled{% endif %}"
+                   href="{{ view_link(kind, keep_account, q, page + 1) }}"
+                   title="下一页" aria-label="下一页"><i class="bi bi-chevron-right"></i></a>
+                <a class="rcm-pager-btn {% if page >= pages %}is-disabled{% endif %}"
+                   href="{{ view_link(kind, keep_account, q, pages) }}"
+                   title="末页" aria-label="末页"><i class="bi bi-chevron-double-right"></i></a>
+            </div>
+        </div>
+    </section>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script id="rcm-view-context" type="application/json">
+{
+    "kind": {{ kind|tojson }},
+    "accountId": {{ (current_account_id if current_account_id else None)|tojson }},
+    "page": {{ page|tojson }},
+    "hasQuery": {{ (q|length > 0)|tojson }},
+    "anyBusy": {{ any_busy|tojson }}
+}
+</script>
+<script>
+(function () {
+    // ---- List interactions (re-bound after every live refresh) ----------
+    var hasCheckedRows = false;
+    var selectionStorageKey = "gc:selected:" + window.location.pathname + window.location.search;
+
+    function initMessageList() {
+        document.querySelectorAll(".rcm-row[data-href]").forEach(function (row) {
+            row.addEventListener("click", function (ev) {
+                if (ev.target.closest("a, button, form, input")) return;
+                if (hasCheckedRows) return;
+                var selectedText = "";
+                try { selectedText = String(window.getSelection() || ""); } catch (e) {}
+                if ((selectedText || "").trim()) return;
+                window.location.href = row.dataset.href;
+            });
+        });
+
+        var selectAll = document.querySelector(".rcm-check-all");
+        var rowChecks = Array.prototype.slice.call(document.querySelectorAll(".rcm-row-check"));
+        var bulkButtons = Array.prototype.slice.call(document.querySelectorAll(".rcm-bulk-action"));
+
+        function saveSelection() {
+            try {
+                var ids = rowChecks.filter(function (cb) { return cb.checked; }).map(function (cb) { return cb.value; });
+                if (!ids.length) {
+                    sessionStorage.removeItem(selectionStorageKey);
+                    return;
+                }
+                sessionStorage.setItem(selectionStorageKey, JSON.stringify(ids));
+            } catch (e) {
+                /* ignore storage errors */
+            }
+        }
+
+        function restoreSelection() {
+            var raw = null;
+            try {
+                raw = sessionStorage.getItem(selectionStorageKey);
+            } catch (e) {
+                return;
+            }
+            if (!raw) return;
+            var wanted = [];
+            try {
+                wanted = JSON.parse(raw) || [];
+            } catch (e) {
+                return;
+            }
+            if (!Array.isArray(wanted) || !wanted.length) return;
+            var wantedSet = new Set(wanted.map(function (v) { return String(v); }));
+            rowChecks.forEach(function (cb) {
+                cb.checked = wantedSet.has(String(cb.value));
+            });
+        }
+
+        function updateBulkState() {
+            var checkedCount = rowChecks.filter(function (cb) { return cb.checked; }).length;
+            hasCheckedRows = checkedCount > 0;
+            bulkButtons.forEach(function (button) { button.disabled = checkedCount === 0; });
+            if (!selectAll) return;
+            selectAll.checked = checkedCount > 0 && checkedCount === rowChecks.length;
+            selectAll.indeterminate = checkedCount > 0 && checkedCount < rowChecks.length;
+            saveSelection();
+        }
+
+        if (selectAll) {
+            selectAll.addEventListener("change", function () {
+                rowChecks.forEach(function (cb) { cb.checked = selectAll.checked; });
+                updateBulkState();
+            });
+        }
+        restoreSelection();
+        rowChecks.forEach(function (cb) { cb.addEventListener("change", updateBulkState); });
+        updateBulkState();
+    }
+
+    initMessageList();
+
+    // ---- Live updates via Server-Sent Events -----------------------------
+    var ctxEl = document.getElementById("rcm-view-context");
+    var ctx = {};
+    try { ctx = JSON.parse(ctxEl.textContent); } catch (e) { ctx = {}; }
+
+    // Page 1 with no active search shows new mail at the top, so we can swap
+    // the list silently. Otherwise we surface a banner the user can click.
+    var canAutoRefresh = (ctx.page === 1) && !ctx.hasQuery;
+
+    function eventMatchesView(ev) {
+        if (ctx.accountId && ev.account_id !== ctx.accountId) return false;
+        if (ctx.kind === "inbox") return ev.inbox > 0;
+        if (ctx.kind === "sent") return ev.sent > 0;
+        return (ev.inbox > 0) || (ev.sent > 0); // "all"
+    }
+
+    var refreshing = false;
+    function refreshList() {
+        if (refreshing) return;
+        refreshing = true;
+        fetch(window.location.href, {
+            credentials: "same-origin",
+            headers: { "X-Requested-With": "fetch" },
+        }).then(function (resp) {
+            if (!resp.ok) throw new Error("bad status");
+            return resp.text();
+        }).then(function (text) {
+            var doc = new DOMParser().parseFromString(text, "text/html");
+            var fresh = doc.querySelector(".rcm-body");
+            var current = document.querySelector(".rcm-body");
+            if (fresh && current) {
+                current.replaceWith(fresh);
+                initMessageList();
+                hideBanner();
+            }
+        }).catch(function () {
+            /* leave the page as-is on transient errors */
+        }).finally(function () {
+            refreshing = false;
+        });
+    }
+
+    // ---- "New mail" banner (used when an auto-swap would be disruptive) ---
+    var banner = null;
+    var pendingCount = 0;
+
+    function hideBanner() {
+        pendingCount = 0;
+        if (banner) { banner.remove(); banner = null; }
+    }
+
+    function showBanner() {
+        if (!banner) {
+            banner = document.createElement("button");
+            banner.type = "button";
+            banner.className = "rcm-newmail-banner";
+            banner.addEventListener("click", function () {
+                if (canAutoRefresh) {
+                    refreshList();
+                } else {
+                    window.location.href = "/messages/?kind=" + encodeURIComponent(ctx.kind || "inbox") +
+                        (ctx.accountId ? "&account_id=" + ctx.accountId : "");
+                }
+            });
+            document.body.appendChild(banner);
+        }
+        banner.innerHTML = '<i class="bi bi-envelope-arrow-down"></i> ' +
+            pendingCount + ' 封新邮件 · 点击查看';
+    }
+
+    var debounceTimer = null;
+    function onNewMail(ev) {
+        if (!eventMatchesView(ev)) return;
+        var n = (ev.inbox || 0) + (ev.sent || 0);
+        pendingCount += n;
+        if (canAutoRefresh && !hasCheckedRows) {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(refreshList, 800);
+        } else {
+            showBanner();
+        }
+    }
+
+    // The shared SSE connection lives in base.html and re-broadcasts events.
+    window.addEventListener("rcm:newmail", function (e) {
+        if (e.detail) onNewMail(e.detail);
+    });
+    window.addEventListener("rcm:sseopen", function (e) {
+        // On reconnect we may have missed events while offline; quietly catch
+        // up (skip the very first connection, the page is already fresh).
+        var detail = e.detail || {};
+        if (!detail.first && canAutoRefresh && !hasCheckedRows) {
+            refreshList();
+        }
+    });
+
+    // ---- Fallback: keep the legacy auto-reload while a sync is running ----
+    var anyBusy = !!ctx.anyBusy;
+    if (anyBusy) {
+        setTimeout(function () { window.location.reload(); }, 5000);
+    }
+})();
+</script>
+{% endblock %}

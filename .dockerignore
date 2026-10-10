@@ -1,0 +1,30 @@
+.git
+.gitignore
+.idea
+.vscode
+.DS_Store
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.venv
+venv
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Runtime / 持久化数据 —— 用挂载卷提供，不打进镜像
+data/
+attachments/
+logs/
+secrets/
+
+# 文档/部署脚本本身不需要进镜像
+DEPLOY.md
+docker-compose.yml
+Dockerfile
+.dockerignore
+README.md

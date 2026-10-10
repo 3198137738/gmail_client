@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}登录{% endblock %}
+{% block content %}
+<div class="container py-5">
+    <div class="card shadow-sm mx-auto" style="max-width: 420px;">
+        <div class="card-header bg-white">
+            <strong>访问验证</strong>
+        </div>
+        <div class="card-body">
+            <p class="text-muted mb-3">请输入访问密码后再进入邮箱界面。</p>
+            <div class="small text-muted mb-3">
+                当前访问 IP：<code>{{ client_ip }}</code>
+            </div>
+            {% if error %}
+            <div class="alert alert-danger py-2">{{ error }}</div>
+            {% endif %}
+            {% if is_blocked %}
+            <div class="alert alert-warning py-2">
+                {% if is_permanent_blocked %}
+                当前 IP 已被永久封禁。
+                {% else %}
+                当前 IP 已被临时封禁。
+                {% if remaining_lockout_minutes %}请约 {{ remaining_lockout_minutes }} 分钟后再试。{% endif %}
+                {% endif %}
+            </div>
+            {% endif %}
+            <form method="post" action="{{ url_for('auth.login_submit') }}">
+                <input type="hidden" name="next" value="{{ next_url }}">
+                <div class="mb-3">
+                    <label class="form-label" for="password">访问密码</label>
+                    <input
+                        id="password"
+                        type="password"
+                        name="password"
+                        class="form-control"
+                        autocomplete="current-password"
+                        required
+                        autofocus
+                        {% if is_blocked %}disabled{% endif %}
+                    >
+                </div>
+                <button type="submit" class="btn btn-primary w-100" {% if is_blocked %}disabled{% endif %}>进入系统</button>
+            </form>
+            <div class="text-muted small mt-3">
+                {% if permanent_block_after_failures %}
+                连续输错 {{ max_failures }} 次会永久封禁该 IP。
+                {% else %}
+                连续输错 {{ max_failures }} 次会临时封禁 IP {{ lockout_minutes }} 分钟。
+                {% endif %}
+            </div>
+            {% if blocked_ips_count %}
+            <div class="text-muted small mt-1">
+                当前还启用了手动永久封禁 IP 列表。
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

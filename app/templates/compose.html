@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% set pf = prefill or {} %}
+{% set is_reply = pf.get('is_reply') %}
+{% set is_reply_all = pf.get('reply_all') %}
+{% set is_forward = pf.get('is_forward') %}
+{% set fwd_attachments = pf.get('forward_attachments') or [] %}
+{% set page_title = '转发' if is_forward else ('回复全部' if is_reply_all else ('回复' if is_reply else '写新邮件')) %}
+{% block title %}{{ page_title }}{% endblock %}
+{% block content %}
+<div class="card shadow-sm">
+    <div class="card-header bg-white"><strong>{{ page_title }}</strong></div>
+    <div class="card-body">
+        {% if error %}
+            <div class="alert alert-danger">{{ error }}</div>
+        {% endif %}
+        {% if not accounts %}
+            <div class="alert alert-warning">
+                还没有可用账号，请先到 <a href="{{ url_for('accounts.list') }}">账号管理</a> 添加并启用。
+            </div>
+        {% else %}
+        <form method="post" action="{{ url_for('compose.send') }}" enctype="multipart/form-data">
+            <input type="hidden" name="in_reply_to" value="{{ pf.get('in_reply_to', '') }}">
+            <input type="hidden" name="references" value="{{ pf.get('references', '') }}">
+            {% if is_forward %}
+            <input type="hidden" name="forward_message_id" value="{{ pf.get('forward_message_id', '') }}">
+            {% endif %}
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    <label class="form-label">发件账号</label>
+                    <select name="account_id" class="form-select" required>
+                        {% for a in accounts %}
+                            <option value="{{ a.id }}" {% if pf.get('account_id') == a.id %}selected{% endif %}>{{ a.email }}{% if a.display_name %} ({{ a.display_name }}){% endif %}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label">连接方式</label>
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="radio" name="use_ssl" id="ssl-on" value="on" checked>
+                        <label class="form-check-label" for="ssl-on">SSL 465 (推荐)</label>
+                    </div>
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="radio" name="use_ssl" id="ssl-off" value="off">
+                        <label class="form-check-label" for="ssl-off">STARTTLS 587</label>
+                    </div>
+                </div>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">收件人 (To)</label>
+                <input type="text" name="to" class="form-control" required placeholder="多个收件人用逗号分隔"
+                       value="{{ pf.get('to', '') }}" {% if is_forward %}autofocus{% endif %}>
+            </div>
+            <div class="row">
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">抄送 (Cc)</label>
+                    <input type="text" name="cc" class="form-control" placeholder="可选"
+                           value="{{ pf.get('cc', '') }}">
+                </div>
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">密送 (Bcc)</label>
+                    <input type="text" name="bcc" class="form-control" placeholder="可选"
+                           value="{{ pf.get('bcc', '') }}">
+                </div>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">主题</label>
+                <input type="text" name="subject" class="form-control" value="{{ pf.get('subject', '') }}">
+            </div>
+            <div class="mb-3">
+                <label class="form-label">纯文本正文</label>
+                <textarea name="body_text" class="form-control" rows="6" {% if is_reply %}autofocus{% endif %}>{{ pf.get('body_text', '') }}</textarea>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">HTML 正文 (可选)</label>
+                <textarea name="body_html" class="form-control" rows="6" placeholder="&lt;p&gt;Hello &lt;b&gt;world&lt;/b&gt;&lt;/p&gt;"></textarea>
+            </div>
+            {% if fwd_attachments %}
+            <div class="mb-3">
+                <label class="form-label">转发的附件（将随邮件一起发送）</label>
+                <ul class="list-group">
+                    {% for name in fwd_attachments %}
+                    <li class="list-group-item py-1">
+                        <i class="bi bi-paperclip"></i> {{ name }}
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+            <div class="mb-3">
+                <label class="form-label">附件 (可多选)</label>
+                <input type="file" name="attachments" class="form-control" multiple>
+            </div>
+            <button type="submit" class="btn btn-primary">发送</button>
+            <a href="{{ url_for('messages.list') }}" class="btn btn-link">取消</a>
+        </form>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

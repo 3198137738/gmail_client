@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}屏蔽发件人{% endblock %}
+{% block content %}
+<div class="card shadow-sm">
+    <div class="card-header bg-white d-flex justify-content-between align-items-center">
+        <strong><i class="bi bi-shield-slash me-1"></i> 屏蔽发件人列表</strong>
+        <a href="{{ url_for('messages.list') }}" class="btn btn-sm btn-outline-secondary">返回邮件</a>
+    </div>
+    <div class="card-body">
+        <form method="get" action="{{ url_for('messages.blocked_senders') }}" class="row g-2 mb-3">
+            <div class="col-md-4">
+                <label class="form-label mb-1">账号</label>
+                <select class="form-select" name="account_id">
+                    <option value="">全部账号</option>
+                    {% for a in accounts %}
+                    <option value="{{ a.id }}" {% if current_account_id == a.id %}selected{% endif %}>
+                        {{ a.display_name or a.email }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-5">
+                <label class="form-label mb-1">发件人搜索</label>
+                <input type="search" class="form-control" name="q" value="{{ q or '' }}" placeholder="输入邮箱关键字">
+            </div>
+            <div class="col-md-3 d-flex align-items-end gap-2">
+                <button type="submit" class="btn btn-primary w-100">查询</button>
+            </div>
+        </form>
+        <div class="alert alert-info py-2 small" role="alert">
+            解除屏蔽后，系统会自动回补该发件人在“屏蔽期间”被忽略的邮件（按账号后台同步，稍后出现在邮件列表）。
+        </div>
+
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>发件人邮箱</th>
+                        <th>账号</th>
+                        <th>屏蔽时间</th>
+                        <th class="text-end">操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in blocked_rows %}
+                    <tr>
+                        <td><code>{{ row.sender_email }}</code></td>
+                        <td>{{ row.account.display_name or row.account.email }}</td>
+                        <td>{{ row.created_at|fmt_dt('%Y-%m-%d %H:%M:%S') }}</td>
+                        <td class="text-end">
+                            <form method="post" action="{{ url_for('messages.unblock_sender', blocked_id=row.id) }}" class="d-inline"
+                                  onsubmit="return confirm('确定解除对 {{ row.sender_email }} 的屏蔽吗？');">
+                                <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+                                <button type="submit" class="btn btn-sm btn-outline-success">解除屏蔽</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="4" class="text-center text-muted py-4">当前没有屏蔽记录</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

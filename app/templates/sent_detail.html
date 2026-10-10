@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}{{ message.subject or "(无主题)" }}{% endblock %}
+{% block content %}
+<div class="card shadow-sm">
+    <div class="card-header bg-white d-flex justify-content-between align-items-center">
+        <a href="{{ url_for('compose.sent_list') }}" class="text-decoration-none">&larr; 返回发件记录</a>
+        <div class="d-flex align-items-center gap-2">
+            {% if message.status == 'sent' %}
+                <span class="badge bg-success">已发送</span>
+            {% else %}
+                <span class="badge bg-danger">失败</span>
+            {% endif %}
+            <form method="post" action="{{ url_for('compose.sent_delete', sent_id=message.id) }}" class="m-0"
+                  onsubmit="return confirm('确定删除这条发件记录吗？');">
+                <input type="hidden" name="next" value="{{ url_for('compose.sent_list') }}">
+                <button type="submit" class="btn btn-sm btn-outline-danger">删除记录</button>
+            </form>
+        </div>
+    </div>
+    <div class="card-body">
+        <h4 class="mb-3">{{ message.subject or "(无主题)" }}</h4>
+        <div class="row text-muted small mb-3">
+            <div class="col-md-9">
+                <div><strong>发件账号：</strong> {{ message.account.email }}</div>
+                <div><strong>To：</strong> {{ message.to_addr }}</div>
+                {% if message.cc_addr %}<div><strong>Cc：</strong> {{ message.cc_addr }}</div>{% endif %}
+                {% if message.bcc_addr %}<div><strong>Bcc：</strong> {{ message.bcc_addr }}</div>{% endif %}
+            </div>
+            <div class="col-md-3 text-md-end">
+                <div><strong>{{ message.sent_at|fmt_dt('%Y-%m-%d %H:%M:%S') }}</strong></div>
+            </div>
+        </div>
+
+        {% if message.status != 'sent' and message.error %}
+        <div class="alert alert-danger py-2">
+            <strong>发送失败：</strong> {{ message.error }}
+        </div>
+        {% endif %}
+
+        <hr>
+
+        <div class="email-body border rounded p-3 bg-white">
+            {% if message.body_html %}
+                {{ message.body_html|safe_html }}
+            {% elif message.body_text %}
+                <pre style="white-space: pre-wrap;">{{ message.body_text }}</pre>
+            {% else %}
+                <em>邮件内容为空</em>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

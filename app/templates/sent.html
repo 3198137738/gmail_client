@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}已发送{% endblock %}
+{% block content %}
+<div class="card shadow-sm">
+    <div class="card-header bg-white"><strong>已发送邮件</strong></div>
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>账号</th>
+                    <th>收件人</th>
+                    <th>主题</th>
+                    <th>时间</th>
+                    <th>状态</th>
+                    <th class="text-end">操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for s in sent %}
+                <tr class="sent-row" style="cursor: pointer;"
+                    data-href="{{ url_for('compose.sent_detail', sent_id=s.id) }}">
+                    <td>{{ s.account.email }}</td>
+                    <td>{{ s.to_addr|shorten(40) }}</td>
+                    <td>
+                        <a class="text-decoration-none" href="{{ url_for('compose.sent_detail', sent_id=s.id) }}">
+                            {{ s.subject|shorten(80) or "(无主题)" }}
+                        </a>
+                    </td>
+                    <td>{{ s.sent_at|fmt_dt }}</td>
+                    <td>
+                        {% if s.status == 'sent' %}
+                            <span class="badge bg-success">已发送</span>
+                        {% else %}
+                            <span class="badge bg-danger" title="{{ s.error or '' }}">失败</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-end">
+                        <form method="post" action="{{ url_for('compose.sent_delete', sent_id=s.id) }}" class="d-inline"
+                              onsubmit="return confirm('确定删除这条发件记录吗？');">
+                            <input type="hidden" name="next" value="{{ url_for('compose.sent_list') }}">
+                            <button type="submit" class="btn btn-sm btn-outline-danger">删除</button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="6" class="text-center text-muted py-4">暂无发送记录。</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+(function () {
+    document.querySelectorAll(".sent-row[data-href]").forEach(function (row) {
+        row.addEventListener("click", function (ev) {
+            if (ev.target.closest("a, button, form, input")) return;
+            window.location = row.dataset.href;
+        });
+    });
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}{{ message.subject or "(无主题)" }}{% endblock %}
+{% block content %}
+<div class="card shadow-sm">
+    <div class="card-header bg-white d-flex justify-content-between align-items-center">
+        <a href="{{ url_for('messages.list').include_query_params(kind=message.folder_kind) }}" class="text-decoration-none">&larr; 返回列表</a>
+        <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end">
+            <a href="{{ url_for('compose.form').include_query_params(reply_to=message.id) }}"
+               class="btn btn-sm btn-outline-primary">
+                <i class="bi bi-reply"></i> 回复
+            </a>
+            <a href="{{ url_for('compose.form').include_query_params(reply_to=message.id, mode='all') }}"
+               class="btn btn-sm btn-outline-primary">
+                <i class="bi bi-reply-all"></i> 回复全部
+            </a>
+            <a href="{{ url_for('compose.form').include_query_params(forward=message.id) }}"
+               class="btn btn-sm btn-outline-primary">
+                <i class="bi bi-forward"></i> 转发
+            </a>
+            <form method="post" action="{{ url_for('messages.mark_unread', message_id=message.id) }}" class="m-0">
+                <button type="submit" class="btn btn-sm btn-outline-secondary">标记为未读</button>
+            </form>
+            <form method="post" action="{{ url_for('messages.delete_one', message_id=message.id) }}" class="m-0"
+                  onsubmit="return confirm('确定删除这封邮件吗？此操作会同步删除服务器上的对应邮件。');">
+                <button type="submit" class="btn btn-sm btn-outline-danger">删除</button>
+            </form>
+            {% if sender_email and message.folder_kind != 'sent' %}
+            {% if sender_blocked %}
+            <a class="btn btn-sm btn-outline-success"
+               href="{{ url_for('messages.blocked_senders').include_query_params(account_id=message.account_id, q=sender_email) }}">
+                查看屏蔽列表
+            </a>
+            {% else %}
+            <form method="post" action="{{ url_for('messages.block_sender', message_id=message.id) }}" class="m-0"
+                  onsubmit="return confirm('永久屏蔽 {{ sender_email }}？\\n后续同步将自动忽略该发件人，并隐藏当前账号已有同发件人邮件。');">
+                <button type="submit" class="btn btn-sm btn-outline-warning">
+                    屏蔽发件人
+                </button>
+            </form>
+            {% endif %}
+            {% endif %}
+        </div>
+    </div>
+    <div class="card-body">
+        <h4 class="mb-3">{{ message.subject or "(无主题)" }}</h4>
+        <div class="row text-muted small mb-3">
+            <div class="col-md-9">
+                <div><strong>账号：</strong> {{ message.account.email }}</div>
+                <div><strong>From：</strong> {{ message.from_addr }}</div>
+                <div><strong>To：</strong> {{ message.to_addr }}</div>
+                {% if message.cc_addr %}<div><strong>Cc：</strong> {{ message.cc_addr }}</div>{% endif %}
+            </div>
+            <div class="col-md-3 text-md-end">
+                <div><strong>{{ message.date|fmt_dt('%Y-%m-%d %H:%M:%S') }}</strong></div>
+                <div>UID: {{ message.uid }}</div>
+            </div>
+        </div>
+
+        <hr>
+
+        <div class="email-body border rounded p-3 bg-white">
+            {% if message.body_html %}
+                {{ message.body_html|safe_html }}
+            {% elif message.body_text %}
+                <pre style="white-space: pre-wrap;">{{ message.body_text }}</pre>
+            {% else %}
+                <em>邮件内容为空</em>
+            {% endif %}
+        </div>
+
+        {% if file_attachments %}
+        <h5 class="mt-4"><i class="bi bi-paperclip"></i> 附件 ({{ file_attachments|length }})</h5>
+        <ul class="list-group">
+            {% for a in file_attachments %}
+            <li class="list-group-item d-flex justify-content-between align-items-center">
+                <div class="text-truncate me-3">
+                    <strong>{{ a.display_name or a.filename }}</strong>
+                    <span class="text-muted small ms-2">{{ a.mime_type }} · {{ a.size|filesizeformat }}</span>
+                </div>
+                <a class="btn btn-sm btn-outline-primary flex-shrink-0" href="{{ a.public_url }}" download>
+                    <i class="bi bi-download"></i> 下载
+                </a>
+            </li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+
+        {% if inline_attachments %}
+        <h5 class="mt-4"><i class="bi bi-image"></i> 内嵌图片 ({{ inline_attachments|length }})</h5>
+        <ul class="list-group">
+            {% for a in inline_attachments %}
+            <li class="list-group-item d-flex justify-content-between align-items-center">
+                <div class="text-truncate me-3">
+                    <strong>{{ a.display_name or a.filename }}</strong>
+                    <span class="text-muted small ms-2">{{ a.mime_type }} · {{ a.size|filesizeformat }}</span>
+                </div>
+                <a class="btn btn-sm btn-outline-primary flex-shrink-0" href="{{ a.public_url }}?download=true" download>
+                    <i class="bi bi-download"></i> 下载
+                </a>
+            </li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
