@@ -480,33 +480,55 @@
         return (ev.inbox > 0) || (ev.sent > 0); // "all"（不含垃圾邮件）
     }
 
-    var refreshing = false;
-    function refreshList() {
-        if (refreshing) return;
-        refreshing = true;
-        fetch(window.location.href, {
-            credentials: "same-origin",
-            headers: { "X-Requested-With": "fetch" },
-        }).then(function (resp) {
-            if (!resp.ok) throw new Error("bad status");
-            return resp.text();
-        }).then(function (text) {
-            var doc = new DOMParser().parseFromString(text, "text/html");
-            var fresh = doc.querySelector(".rcm-body");
-            var current = document.querySelector(".rcm-body");
-            if (fresh && current) {
-                var sidebarScroll = getSidebarScroll();
-                current.replaceWith(fresh);
-                setSidebarScroll(sidebarScroll);
-                initMessageList();
-                hideBanner();
+    // 重新拉取当前页面，替换 selector 指定的区域。
+    // - 收到事件后立即发起请求，不用 setTimeout：浏览器会把后台标签页的定时器
+    //   限速到最多每分钟执行一次，而网络请求的回调不受此限制。
+    // - 刷新进行中又收到新事件时只做标记，结束后立刻再刷新一次，既不丢失更新，
+    //   也能把短时间内的多个事件合并成一次请求。
+    function makeRefresher(selector, afterSwap) {
+        var running = false;
+        var pending = false;
+        function run() {
+            if (running) {
+                pending = true;
+                return;
             }
-        }).catch(function () {
-            /* leave the page as-is on transient errors */
-        }).finally(function () {
-            refreshing = false;
-        });
+            running = true;
+            pending = false;
+            fetch(window.location.href, {
+                credentials: "same-origin",
+                headers: { "X-Requested-With": "fetch" },
+            }).then(function (resp) {
+                if (!resp.ok) throw new Error("bad status");
+                return resp.text();
+            }).then(function (text) {
+                var doc = new DOMParser().parseFromString(text, "text/html");
+                var fresh = doc.querySelector(selector);
+                var current = document.querySelector(selector);
+                if (fresh && current) {
+                    var sidebarScroll = getSidebarScroll();
+                    current.replaceWith(fresh);
+                    setSidebarScroll(sidebarScroll);
+                    if (afterSwap) afterSwap();
+                }
+            }).catch(function () {
+                /* leave the page as-is on transient errors */
+            }).finally(function () {
+                running = false;
+                if (pending) run();
+            });
+        }
+        return run;
     }
+
+    var refreshList = makeRefresher(".rcm-body", function () {
+        initMessageList();
+        hideBanner();
+    });
+
+    // 只刷新侧边栏（未读数），用于不属于当前列表的新邮件，
+    // 例如正在看收件箱时收到垃圾邮件，或其他账号收到新邮件。
+    var refreshSidebar = makeRefresher(".rcm-sidebar");
 
     function getSidebarScroll() {
         var el = document.querySelector(".rcm-sidebar");
@@ -516,33 +538,6 @@
     function setSidebarScroll(top) {
         var el = document.querySelector(".rcm-sidebar");
         if (el) el.scrollTop = top;
-    }
-
-    // 只刷新侧边栏（未读数），用于不属于当前列表的新邮件，
-    // 例如正在看收件箱时收到垃圾邮件，或其他账号收到新邮件。
-    var sidebarTimer = null;
-    function refreshSidebar() {
-        clearTimeout(sidebarTimer);
-        sidebarTimer = setTimeout(function () {
-            fetch(window.location.href, {
-                credentials: "same-origin",
-                headers: { "X-Requested-With": "fetch" },
-            }).then(function (resp) {
-                if (!resp.ok) throw new Error("bad status");
-                return resp.text();
-            }).then(function (text) {
-                var doc = new DOMParser().parseFromString(text, "text/html");
-                var fresh = doc.querySelector(".rcm-sidebar");
-                var current = document.querySelector(".rcm-sidebar");
-                if (fresh && current) {
-                    var sidebarScroll = getSidebarScroll();
-                    current.replaceWith(fresh);
-                    setSidebarScroll(sidebarScroll);
-                }
-            }).catch(function () {
-                /* leave the sidebar as-is on transient errors */
-            });
-        }, 100);
     }
 
     // ---- "New mail" banner (used when an auto-swap would be disruptive) ---
@@ -573,7 +568,6 @@
             pendingCount + ' 封新邮件 · 点击查看';
     }
 
-    var debounceTimer = null;
     function onNewMail(ev) {
         if (!eventMatchesView(ev)) {
             refreshSidebar();
@@ -584,8 +578,7 @@
         // 勾选状态存在 sessionStorage 中，刷新后 initMessageList 会恢复勾选，
         // 因此有勾选时也可以安全地自动刷新。
         if (canAutoRefresh) {
-            clearTimeout(debounceTimer);
-            debounceTimer = setTimeout(refreshList, 100);
+            refreshList();
         } else {
             showBanner();
             refreshSidebar();
@@ -603,6 +596,20 @@
         if (!detail.first && canAutoRefresh) {
             refreshList();
         }
+    });
+
+    // 标签页在后台超过 10 秒后切回前台时补刷新一次：浏览器可能冻结了长时间
+    // 处于后台的标签页，期间的事件会丢失。
+    var hiddenAt = document.hidden ? Date.now() : null;
+    document.addEventListener("visibilitychange", function () {
+        if (document.hidden) {
+            hiddenAt = Date.now();
+            return;
+        }
+        if (hiddenAt !== null && Date.now() - hiddenAt > 10000) {
+            if (canAutoRefresh) refreshList(); else refreshSidebar();
+        }
+        hiddenAt = null;
     });
 
     // ---- Fallback: keep the legacy auto-reload while a sync is running ----
