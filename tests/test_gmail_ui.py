@@ -112,6 +112,13 @@ def test_send_success_in_embed_goes_to_done_page(client, monkeypatch):
 
 # ---- 日期与收件人显示 ------------------------------------------------------
 
+def test_send_route_runs_in_threadpool():
+    """发信是阻塞的 smtplib 调用，路由必须是同步函数，否则会卡住整个事件循环。"""
+    import inspect
+
+    assert not inspect.iscoroutinefunction(send_routes.send)
+
+
 def test_gmail_date_formats():
     now = datetime.now()
     today = now.replace(hour=20, minute=31, second=0, microsecond=0)

@@ -313,7 +313,9 @@ def _render_compose(request: Request, db: Session, accounts, *, prefill, error, 
 
 
 @router.post("/", name="compose.send")
-async def send(
+# 必须是普通 def：smtplib 发信和保存附件都是阻塞调用（最长 30 秒），FastAPI 会把
+# 同步路由放进线程池；写成 async def 会卡住事件循环，期间所有请求和 SSE 都无响应。
+def send(
     request: Request,
     account_id: int = Form(...),
     to: str = Form(...),
