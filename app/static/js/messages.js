@@ -379,12 +379,13 @@
         return (ev.inbox > 0) || (ev.sent > 0); // "all"（不含垃圾邮件）
     }
 
-    // 重新拉取当前页面，替换 selector 指定的区域。
+    // 拉取 url，替换 selector 指定的区域。带 X-Requested-With: fetch 时服务端只返回
+    // 侧栏和内容区（不含顶栏、脚本等页面框架）。
     // - 收到事件后立即发起请求，不用 setTimeout：浏览器会把后台标签页的定时器
     //   限速到最多每分钟执行一次，而网络请求的回调不受此限制。
     // - 刷新进行中又收到新事件时只做标记，结束后立刻再刷新一次，既不丢失更新，
     //   也能把短时间内的多个事件合并成一次请求。
-    function makeRefresher(selectors, afterSwap) {
+    function makeRefresher(urlFn, selectors, afterSwap) {
         var running = false;
         var pending = false;
         function run() {
@@ -394,7 +395,7 @@
             }
             running = true;
             pending = false;
-            fetch(window.location.href, {
+            fetch(urlFn(), {
                 credentials: "same-origin",
                 headers: { "X-Requested-With": "fetch" },
             }).then(function (resp) {
@@ -431,14 +432,17 @@
         return run;
     }
 
-    var refreshList = makeRefresher([".gm-main", ".gm-nav"], function () {
+    var refreshList = makeRefresher(function () { return window.location.href; }, [".gm-main", ".gm-nav"], function () {
         initMessageList();
         hideBanner();
     });
 
     // 只刷新左侧导航（未读数），用于不属于当前列表的新邮件，
     // 例如正在看收件箱时收到垃圾邮件，或其他账号收到新邮件。
-    var refreshSidebar = makeRefresher([".gm-nav"]);
+    // 走专门的轻量接口，服务端不必查询和渲染整个邮件列表。
+    var refreshSidebar = makeRefresher(function () {
+        return "/messages/nav" + window.location.search;
+    }, [".gm-nav"]);
 
     function getNavScroll() {
         var el = document.querySelector(".gm-nav");
@@ -511,7 +515,16 @@
         var detail = e.detail || {};
         if (!detail.first && canAutoRefresh) {
             refreshList();
+        } else if (detail.first && ctx.anyBusy) {
+            // 页面渲染后、连接建立前同步可能已结束，sync_done 会错过，补刷新一次
+            refreshList();
         }
+    });
+    // 同步结束：刷新列表（去掉「正在同步…」，补上新邮件）
+    window.addEventListener("rcm:syncdone", function (e) {
+        var detail = e.detail || {};
+        if (ctx.accountId && detail.account_id !== ctx.accountId) return;
+        if (document.querySelector(".gm-busy")) refreshList();
     });
 
     // 标签页在后台超过 10 秒后切回前台时补刷新一次：浏览器可能冻结了长时间
@@ -543,8 +556,9 @@
         }, true);
     })();
 
-    // ---- Fallback: keep the legacy auto-reload while a sync is running ----
-    var anyBusy = !!ctx.anyBusy;
+    // ---- 没有实时连接时的兜底：同步进行中每 5 秒整页重载 ----
+    // 有实时连接时由上面的 sync_done 事件刷新，不再整页重载。
+    var anyBusy = !!ctx.anyBusy && !(window.RCM && window.RCM.sse);
     if (anyBusy) {
         setTimeout(function reload() {
             // 写邮件窗口打开时推迟刷新，避免丢失正在编写的内容

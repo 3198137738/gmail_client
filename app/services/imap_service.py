@@ -80,7 +80,7 @@ from .imap_client import (
     _try_acquire_for_sync,
 )
 from .email_parser import _message_base_dir, parse_email
-from .events import publish_mail_changed, publish_new_mail
+from .events import publish_mail_changed, publish_new_mail, publish_sync_done
 from .telegram_service import notify_new_mail
 from ..timeutil import utcnow
 
@@ -919,3 +919,5 @@ def safe_sync_account(account_id: int, folder: Optional[str] = None) -> dict:
         return {"error": exc.__class__.__name__}
     finally:
         _release_account_lock(account_id, lock)
+        # 页面据此去掉「正在同步…」并刷新（不再每 5 秒整页重载）
+        publish_sync_done(account_id)

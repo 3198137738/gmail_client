@@ -56,6 +56,9 @@ def _account_lock(account_id: int) -> threading.Lock:
 
 # 因账号锁被占用而跳过的同步请求；锁释放时补跑一次，避免 IDLE 通知丢失。
 _pending_resync: set[int] = set()
+# 正在做整账号同步的账号。账号锁还会被标记已读、删除等短操作持有，
+# 不能用「锁被占用」来判断是否在同步，否则打开一封邮件就会显示「正在同步」。
+_syncing: set[int] = set()
 
 
 def _try_acquire_for_sync(account_id: int, lock: threading.Lock) -> bool:
@@ -66,6 +69,7 @@ def _try_acquire_for_sync(account_id: int, lock: threading.Lock) -> bool:
     """
     with _locks_mutex:
         if lock.acquire(blocking=False):
+            _syncing.add(account_id)
             return True
         _pending_resync.add(account_id)
         return False
@@ -78,6 +82,7 @@ def _release_account_lock(account_id: int, lock: threading.Lock) -> None:
             lock.release()
         except RuntimeError:
             return
+        _syncing.discard(account_id)
         rerun = account_id in _pending_resync
         _pending_resync.discard(account_id)
     if rerun:
@@ -89,10 +94,9 @@ def _release_account_lock(account_id: int, lock: threading.Lock) -> None:
 
 
 def is_account_busy(account_id: int) -> bool:
-    """Return True when an IMAP operation is currently running on the account."""
+    """该账号是否正在做整账号同步（页面上的「正在同步…」）。"""
     with _locks_mutex:
-        lock = _sync_locks.get(account_id)
-    return bool(lock and lock.locked())
+        return account_id in _syncing
 
 
 @contextmanager

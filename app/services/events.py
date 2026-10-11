@@ -108,3 +108,8 @@ def publish_mail_changed(account_id: int, folder_kind: str) -> None:
     event_bus.publish(
         {"type": "mail_changed", "account_id": int(account_id), "kind": str(folder_kind)}
     )
+
+
+def publish_sync_done(account_id: int) -> None:
+    """一次整账号同步结束（无论有无新邮件），页面据此刷新「正在同步」状态。"""
+    event_bus.publish({"type": "sync_done", "account_id": int(account_id)})

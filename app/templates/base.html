@@ -3,6 +3,16 @@
   登录页、错误页和写邮件悬浮窗（embed）不显示框架。
 #}
 {% set bare = request.url.path == '/login' or status_code is defined or (embed is defined and embed) %}
+{# 列表页实时刷新（fetch 带 X-Requested-With: fetch）只需要侧栏和内容区，省去顶栏、脚本等页面框架 #}
+{% set partial = not bare and request.headers.get('x-requested-with') == 'fetch' %}
+{% if partial %}
+<!doctype html>
+<title>{{ self.title() }} - Roundcube</title>
+<div class="gm-app">
+    {{ self.sidebar() }}
+    <main class="gm-main" id="gm-main">{{ self.body() }}</main>
+</div>
+{% else %}
 <!doctype html>
 <html lang="zh-CN">
 <head>
@@ -103,3 +113,4 @@
 {% block extra_scripts %}{% endblock %}
 </body>
 </html>
+{% endif %}

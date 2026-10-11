@@ -35,6 +35,8 @@
         } else if (data && data.type === "mail_changed") {
             // 在手机 / Gmail 网页上读过、删除或归档的邮件已同步到本地
             window.dispatchEvent(new CustomEvent("rcm:mailchanged", { detail: data }));
+        } else if (data && data.type === "sync_done") {
+            window.dispatchEvent(new CustomEvent("rcm:syncdone", { detail: data }));
         }
     };
 

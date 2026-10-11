@@ -325,25 +325,8 @@ def list_messages(
     first_index = (page - 1) * page_size + 1 if total else 0
     last_index = first_index + len(messages) - 1 if first_index else 0
 
-    # 侧边栏未读数：按「账号 + 文件夹类型」统计，与当前视图、搜索、所选账号无关，
-    # 保证每个文件夹旁边显示的始终是它自己的未读数。
-    unread_rows = db.execute(
-        select(Message.account_id, Message.folder_kind, func.count(Message.id))
-        .where(Message.is_read.is_(False))
-        .group_by(Message.account_id, Message.folder_kind)
-    ).all()
-    unread_by_account: dict[int, int] = {}
-    junk_unread_by_account: dict[int, int] = {}
-    for acc_id, folder_kind, count in unread_rows:
-        if folder_kind == "inbox":
-            unread_by_account[acc_id] = count
-        elif folder_kind == "junk":
-            junk_unread_by_account[acc_id] = count
-    nav_unread_inbox = sum(unread_by_account.values())
-    nav_unread_junk = sum(junk_unread_by_account.values())
-
-    busy_by_account = {int(a.id): is_account_busy(int(a.id)) for a in accounts}
-    any_busy = any(busy_by_account.values())
+    # 侧栏未读数由 navigation.sidebar_data 统一查询（同一请求内只查一次），这里不再重复统计
+    any_busy = any(is_account_busy(int(a.id)) for a in accounts)
 
     selected_account = next(
         (a for a in accounts if int(a.id) == selected_account_id),
@@ -365,12 +348,7 @@ def list_messages(
             "pages": pages,
             "total": total,
             "unread_total": unread_total,
-            "unread_by_account": unread_by_account,
-            "junk_unread_by_account": junk_unread_by_account,
-            "busy_by_account": busy_by_account,
             "any_busy": any_busy,
-            "nav_unread_inbox": nav_unread_inbox,
-            "nav_unread_junk": nav_unread_junk,
             "first_index": first_index,
             "last_index": last_index,
             "page_size": page_size,
@@ -384,6 +362,29 @@ def list_messages(
     )
     _apply_cookie(response, cookie_to_persist)
     return response
+
+
+@router.get("/nav", response_class=HTMLResponse, name="messages.nav")
+def nav_partial(
+    request: Request,
+    kind: Optional[str] = Query("inbox"),
+    account_id: Optional[str] = Query(None),
+    unread: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    """只渲染左侧导航（各文件夹未读数），供列表页实时刷新侧栏用，不查询邮件列表。
+
+    参数与列表页相同（前端直接带上当前地址的查询串），以便高亮当前文件夹和账号。
+    """
+    valid_ids = {int(a) for a in db.execute(select(Account.id)).scalars()}
+    selected_account_id, _ = _resolve_selected_account(
+        account_id, request.cookies.get(PREFERRED_ACCOUNT_COOKIE), valid_ids
+    )
+    return templates.TemplateResponse(
+        request,
+        "_sidebar.html",
+        {"kind": _normalize_kind(kind), "current_account_id": selected_account_id, "unread_only": unread},
+    )
 
 
 @router.post("/mark-all-read", name="messages.mark_all_read")
