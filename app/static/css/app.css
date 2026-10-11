@@ -1995,3 +1995,5 @@ body[data-win-state="max"] .gc-icon-restore { display: inline-block !important; 
     text-align: center;
     box-shadow: none;
 }
+/* 撤销发送期间隐藏写邮件窗口（iframe 保留，撤销时原样恢复） */
+.gm-compose-win[data-state="sending"] { display: none; }

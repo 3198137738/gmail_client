@@ -11,7 +11,14 @@ from markupsafe import Markup, escape
 from .addresses import format_address, parse_list, parse_one
 from .csrf import csrf_input, csrf_token
 from .navigation import sidebar_data
-from .config import REALTIME_ENABLED, STATIC_DIR, SYNC_JUNK_ENABLED, TEMPLATES_DIR, WEB_AUTH_ENABLED
+from .config import (
+    REALTIME_ENABLED,
+    STATIC_DIR,
+    SYNC_JUNK_ENABLED,
+    TEMPLATES_DIR,
+    UNDO_SEND_SECONDS,
+    WEB_AUTH_ENABLED,
+)
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
@@ -240,6 +247,7 @@ templates.env.filters["fmt_rel_dt"] = _fmt_rel_dt
 templates.env.filters["shorten"] = _truncate
 templates.env.filters["initials"] = _initials
 templates.env.globals["web_auth_enabled"] = WEB_AUTH_ENABLED
+templates.env.globals["undo_send_seconds"] = UNDO_SEND_SECONDS
 templates.env.globals["realtime_enabled"] = REALTIME_ENABLED
 templates.env.globals["sync_junk_enabled"] = SYNC_JUNK_ENABLED
 templates.env.globals["static_version"] = _static_version()

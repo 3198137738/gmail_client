@@ -184,3 +184,14 @@ def test_parser_stores_addresses_without_duplicate_names():
     parsed = parse_email(msg.as_bytes(), account_id=950, uid=1)
     assert parsed.from_addr == "service@paypal.co.uk"
     assert parsed.to_addr == '"Smith, John" <j@x.com>'
+
+
+def test_compose_passes_undo_seconds(client):
+    """撤销发送的等待秒数传给写邮件页面脚本（默认 5 秒）。"""
+    import json
+
+    login(client)
+    create_account()
+    page = client.get("/compose/").text
+    raw = re.search(r'<script type="application/json" id="gc-compose-data">(.*?)</script>', page, re.S).group(1)
+    assert json.loads(raw)["undo_seconds"] == 5

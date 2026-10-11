@@ -489,7 +489,7 @@
 
     // ---------------- 发送 ----------------
     form.addEventListener("submit", function (ev) {
-        if (submitting) {
+        if (submitting || pendingSend) {
             ev.preventDefault();
             return;
         }
@@ -514,9 +514,68 @@
             document.getElementById("gc-body-html").value =
                 isEditorEmpty() ? "" : '<div dir="ltr">' + editor.innerHTML + "</div>";
         }
+        if (data.undo_seconds > 0 && !confirmedSend) {
+            // 撤销发送：先不提交，等待几秒（期间可撤销）后再提交
+            ev.preventDefault();
+            startPendingSend();
+            return;
+        }
         submitting = true;
         sendBtn.disabled = true;
         sendBtn.querySelector(".gc-send-label").textContent = "正在发送…";
+    });
+
+    // ---------------- 撤销发送 ----------------
+    // 悬浮窗：通知父页面隐藏窗口并显示「正在发送… 撤销」，由父页面计时，
+    // 到时发来 commit（真正提交）或用户点了撤销发来 undo（恢复窗口，内容和附件都还在）。
+    // 整页写邮件：在本页显示提示并计时。
+    var confirmedSend = false;
+    var pendingSend = false;
+    var pendingTimer = null;
+
+    function commitSend() {
+        if (!pendingSend) return;
+        pendingSend = false;
+        clearTimeout(pendingTimer);
+        confirmedSend = true;
+        submitting = true;
+        sendBtn.disabled = true;
+        sendBtn.querySelector(".gc-send-label").textContent = "正在发送…";
+        form.submit();   // 不再触发 submit 事件，字段已在上面填好
+    }
+
+    function undoSend() {
+        if (!pendingSend) return;
+        pendingSend = false;
+        clearTimeout(pendingTimer);
+        sendBtn.disabled = false;
+        sendBtn.querySelector(".gc-send-label").textContent = "发送";
+    }
+
+    function startPendingSend() {
+        pendingSend = true;
+        sendBtn.disabled = true;
+        sendBtn.querySelector(".gc-send-label").textContent = "等待发送…";
+        if (isEmbed) {
+            window.parent.postMessage(
+                { type: "gm:compose:pending", seconds: data.undo_seconds }, window.location.origin
+            );
+            return;
+        }
+        pendingTimer = setTimeout(commitSend, data.undo_seconds * 1000);
+        if (window.GM && window.GM.toast) {
+            window.GM.toast("正在发送…（" + data.undo_seconds + " 秒内可撤销）", {
+                actionText: "撤销",
+                onAction: undoSend,
+                duration: data.undo_seconds * 1000,
+            });
+        }
+    }
+
+    window.addEventListener("message", function (ev) {
+        if (ev.origin !== window.location.origin || !ev.data) return;
+        if (ev.data.type === "gm:compose:commit") commitSend();
+        else if (ev.data.type === "gm:compose:undo") undoSend();
     });
 
     // Ctrl/Cmd + Enter 发送
@@ -559,7 +618,8 @@
 
     // 供父页面查询：关闭窗口 / 离开页面前是否需要确认
     window.GCCompose = {
-        isDirty: function () { return dirty && !submitting; },
+        // 等待发送（撤销期内）也算未完成：此时离开页面邮件不会发出
+        isDirty: function () { return (dirty || pendingSend) && !submitting; },
     };
 
     // 舍弃 / 离开页面前确认，避免误丢内容。
@@ -579,8 +639,9 @@
             }
         });
     });
+    if (isEmbed) tellParent("ready");   // 发送失败后重新显示的写邮件页：让父页面恢复窗口
     window.addEventListener("beforeunload", function (ev) {
-        if (dirty && !submitting && !isEmbed) {
+        if ((dirty || pendingSend) && !submitting && !isEmbed) {
             ev.preventDefault();
             ev.returnValue = "";
         }

@@ -167,6 +167,11 @@ MAIL_LOAD_REMOTE_IMAGES = _get_bool("MAIL_LOAD_REMOTE_IMAGES", True)
 # mail triggers an incremental sync within seconds, and the change is pushed to
 # the browser over Server-Sent Events (no manual refresh needed).
 REALTIME_ENABLED = _get_bool("REALTIME_ENABLED", True)
+# 撤销发送：点击发送后等待几秒再真正提交，期间可以撤销（与 Gmail 一致，0 表示关闭，最长 30 秒）
+try:
+    UNDO_SEND_SECONDS = max(0, min(30, int(os.getenv("UNDO_SEND_SECONDS", "5"))))
+except ValueError:
+    UNDO_SEND_SECONDS = 5
 # How long a single IDLE wait blocks before we loop and re-check the stop flag.
 # Keep well under the IMAP socket timeout used for IDLE connections.
 IDLE_POLL_SEC = _get_positive_int("IDLE_POLL_SEC", 30)

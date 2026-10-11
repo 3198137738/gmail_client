@@ -210,6 +210,7 @@ document.addEventListener("click", function (ev) {
     }
 
     function open(href) {
+        if (win && state === "sending") return;   // 上一封还在撤销等待期，先不打开新窗口
         if (win) {
             // 只保留一个写邮件窗口：已有未发送的内容时恢复并聚焦它，否则直接替换
             if (isDirty()) {
@@ -233,7 +234,7 @@ document.addEventListener("click", function (ev) {
         frame.className = "gm-compose-frame";
         frame.title = "写邮件";
         frame.src = url.pathname + url.search;
-        frame.addEventListener("load", function () { setState(state); });
+        frame.addEventListener("load", function () { if (state !== "sending") setState(state); });
         win.appendChild(frame);
         document.body.appendChild(backdrop);
         document.body.appendChild(win);
@@ -261,6 +262,13 @@ document.addEventListener("click", function (ev) {
             case "gm:compose:close":
                 close();
                 break;
+            case "gm:compose:pending":
+                startPending(ev.data.seconds || 5);
+                break;
+            case "gm:compose:ready":
+                // 提交后又回到了写邮件页（发送失败），恢复窗口显示错误
+                if (state === "sending") setState("normal");
+                break;
             case "gm:compose:sent":
                 close();
                 if (window.GM && window.GM.toast) {
@@ -269,6 +277,35 @@ document.addEventListener("click", function (ev) {
                 break;
         }
     });
+
+    // 撤销发送：隐藏窗口（iframe 保留，内容和附件都在），倒计时结束后通知 iframe 真正提交
+    var pendingTimer = null;
+    function tellFrame(type) {
+        if (frame && frame.contentWindow) {
+            frame.contentWindow.postMessage({ type: type }, window.location.origin);
+        }
+    }
+    function startPending(seconds) {
+        setState("sending");
+        clearTimeout(pendingTimer);
+        pendingTimer = setTimeout(function () {
+            pendingTimer = null;
+            tellFrame("gm:compose:commit");
+        }, seconds * 1000);
+        if (window.GM && window.GM.toast) {
+            window.GM.toast("正在发送…（" + seconds + " 秒内可撤销）", {
+                actionText: "撤销",
+                duration: seconds * 1000,
+                onAction: function () {
+                    if (!pendingTimer) return;   // 已经提交，来不及撤销
+                    clearTimeout(pendingTimer);
+                    pendingTimer = null;
+                    tellFrame("gm:compose:undo");
+                    setState("normal");
+                },
+            });
+        }
+    }
 
     window.addEventListener("beforeunload", function (ev) {
         if (isDirty()) { ev.preventDefault(); ev.returnValue = ""; }
