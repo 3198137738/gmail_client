@@ -35,6 +35,8 @@ class FakeMailbox:
         self.modseq: int | None = None       # None 表示不支持 CONDSTORE
         self.changed_since: dict[int, int] = {}  # uid -> 最后一次变化时的 modseq
         self.thread_ids: dict[int, int] | None = None  # 设置后模拟 Gmail 扩展（X-GM-THRID）
+        self.labels: dict[int, tuple] = {}     # uid -> X-GM-LABELS 原始值
+        self.folders: list = []                # list_folders() 的返回值
 
     def select_folder(self, folder, readonly=True):
         info = {b"UIDVALIDITY": self.uidvalidity, b"EXISTS": len(self.uids)}
@@ -74,29 +76,33 @@ class FakeMailbox:
         return (b"\\Seen",) if uid in self.seen else ()
 
     def fetch(self, uids, items, modifiers=None):
-        uids = self._expand(uids)
+        uids = [u for u in self._expand(uids) if u in self.uids]
         if items == ["RFC822.SIZE"]:
             return {u: {b"RFC822.SIZE": 1000} for u in uids}
-        if items == ["X-GM-THRID"]:
-            return {u: {b"X-GM-THRID": self.thread_ids.get(u)} for u in uids if u in self.uids}
-        if items == ["FLAGS"]:
-            if modifiers:
-                since = int(modifiers[0].split()[1])
-                uids = [u for u in uids if self.changed_since.get(u, 0) > since]
-            return {u: {b"FLAGS": self._flags(u)} for u in uids if u in self.uids}
-        if self.fail_fetch:
+        if modifiers:
+            since = int(modifiers[0].split()[1])
+            uids = [u for u in uids if self.changed_since.get(u, 0) > since]
+        if "RFC822" in items and self.fail_fetch:
             raise IMAPClientError("connection reset")
-        result = {
-            u: {b"RFC822": _raw(u), b"FLAGS": self._flags(u), b"INTERNALDATE": None}
-            for u in uids if u in self.uids
-        }
-        if "X-GM-THRID" in items:
-            for u, data in result.items():
-                data[b"X-GM-THRID"] = self.thread_ids.get(u)
+        result = {}
+        for u in uids:
+            data = {}
+            for item in items:
+                if item == "RFC822":
+                    data[b"RFC822"] = _raw(u)
+                elif item == "FLAGS":
+                    data[b"FLAGS"] = self._flags(u)
+                elif item == "INTERNALDATE":
+                    data[b"INTERNALDATE"] = None
+                elif item == "X-GM-THRID":
+                    data[b"X-GM-THRID"] = (self.thread_ids or {}).get(u)
+                elif item == "X-GM-LABELS":
+                    data[b"X-GM-LABELS"] = tuple(self.labels.get(u, ()))
+            result[u] = data
         return result
 
     def list_folders(self):
-        return []
+        return list(self.folders)
 
 
 @pytest.fixture()

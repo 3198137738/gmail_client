@@ -56,6 +56,22 @@
         {{ nav_item(url_for('messages.blocked_senders'), 'block', '屏蔽的发件人', 0, active_section == 'blocked') }}
     </nav>
 
+    {% set nav_labels = nav.labels_for(nav_acc.id if nav_acc else None) %}
+    {% if nav_labels %}
+    <div class="gm-nav-heading"><span>标签</span></div>
+    <nav class="gm-nav-list gm-nav-labels" aria-label="标签">
+        {% for lb in nav_labels %}
+        {% set lb_acc = nav.account(lb.account_id) %}
+        <a class="gm-nav-item gm-nav-label-item {% if active_kind == 'label-' ~ lb.id %}is-active{% endif %}"
+           href="/messages/?kind=label-{{ lb.id }}&account_id={{ lb.account_id }}"
+           title="{{ lb.name }}{% if not nav_acc and nav.accounts|length > 1 and lb_acc %}（{{ lb_acc.email }}）{% endif %}">
+            <span class="gm-nav-icon">{{ icon('label', filled=active_kind == 'label-' ~ lb.id) }}</span>
+            <span class="gm-nav-label">{{ lb.short }}</span>
+        </a>
+        {% endfor %}
+    </nav>
+    {% endif %}
+
     <div class="gm-nav-heading">
         <span>账号</span>
         <a class="gm-icon-btn gm-icon-btn-sm" href="{{ url_for('accounts.list') }}" title="添加或管理账号" aria-label="添加或管理账号">

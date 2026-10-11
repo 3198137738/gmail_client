@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session, defer, selectinload
 
 from ..auth import is_safe_redirect
 from ..database import get_db
-from ..models import Account, Attachment, BlockedSender, Message
+from ..models import Account, Attachment, BlockedSender, Label, Message, MessageLabel
 from ..services import pagination
 from ..services.pagination import Cursor
 from ..services.search import message_search_filter
@@ -25,6 +25,7 @@ from ..services.mail_body import (
     remote_images_allowed,
 )
 from ..services.imap_client import is_account_busy
+from ..services import labels as gmail_labels
 from ..services import outbox, threads
 from ..services.message_actions import (
     delete_local_messages as _delete_local_messages,
@@ -49,10 +50,21 @@ PREFERRED_ACCOUNT_COOKIE = "gc_preferred_account"
 COOKIE_MAX_AGE = 60 * 60 * 24 * 365
 
 
+_LABEL_KIND_RE = re.compile(r"label-(\d+)")
+
+
 def _normalize_kind(kind: Optional[str]) -> str:
+    """文件夹类型；Gmail 标签视图写作 label-<标签 id>。"""
     if kind in KIND_LABELS:
         return kind
+    if kind and _LABEL_KIND_RE.fullmatch(kind):
+        return kind
     return "inbox"
+
+
+def _label_id_of(kind: str) -> Optional[int]:
+    match = _LABEL_KIND_RE.fullmatch(kind or "")
+    return int(match.group(1)) if match else None
 
 
 def _coerce_int(value) -> Optional[int]:
@@ -91,6 +103,11 @@ def _kind_condition(kind: str):
     if kind == "starred":
         # 与 Gmail 一致：垃圾邮件中的星标邮件不显示在「已加星标」里
         return (Message.is_starred.is_(True)) & (Message.folder_kind != "junk")
+    label_id = _label_id_of(kind)
+    if label_id is not None:
+        return Message.id.in_(
+            select(MessageLabel.message_id).where(MessageLabel.label_id == label_id)
+        ) & (Message.folder_kind != "junk")
     return Message.folder_kind == kind
 
 
@@ -339,6 +356,11 @@ def list_messages(
 
     page_ids = [int(m.id) for m in messages]
     thread_stats = threads.thread_stats(db, messages) if conversation else {}
+    message_labels = gmail_labels.labels_by_message(db, page_ids)
+    kind_label = KIND_LABELS.get(kind, kind)
+    current_label = db.get(Label, _label_id_of(kind)) if _label_id_of(kind) else None
+    if current_label is not None:
+        kind_label = current_label.name
     snippets = _load_snippets(db, page_ids)
     attachments_by_message = _load_attachment_names(db, page_ids)
 
@@ -366,7 +388,9 @@ def list_messages(
             "current_account_id": selected_account_id,
             "selected_account": selected_account,
             "kind": kind,
-            "kind_label": KIND_LABELS.get(kind, kind),
+            "kind_label": kind_label,
+            "current_label": current_label,
+            "message_labels": message_labels,
             "q": q_clean,
             "page": page,
             "pages": pages,
@@ -388,6 +412,56 @@ def list_messages(
     )
     _apply_cookie(response, cookie_to_persist)
     return response
+
+
+def _thread_labels(db: Session, thread: list[Message]) -> list[dict]:
+    """会话中所有邮件的标签（去重，按名称排序）。"""
+    merged: dict[int, dict] = {}
+    for items in gmail_labels.labels_by_message(db, [int(m.id) for m in thread]).values():
+        for item in items:
+            merged[item["id"]] = item
+    return sorted(merged.values(), key=lambda item: item["name"])
+
+
+@router.post("/{message_id}/labels", name="messages.set_labels")
+def set_labels(
+    request: Request,
+    message_id: int,
+    label_ids: list[int] = Form(default=[]),
+    next: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    """设置邮件（会话视图下为整个会话）的 Gmail 标签：勾选的加上，未勾选的去掉。"""
+    message = db.get(Message, message_id)
+    if message is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    targets = threads.expand(db, [message]) if threads.conversation_mode(request) else [message]
+    account_labels = {
+        int(label.id): label
+        for label in db.execute(select(Label).where(Label.account_id == message.account_id)).scalars()
+    }
+    wanted = {i for i in label_ids if i in account_labels}
+    current = gmail_labels.labels_by_message(db, [int(m.id) for m in targets])
+    # (文件夹, 标签名, 操作) -> UID 列表
+    ops: dict[tuple[str, str, str], list[int]] = defaultdict(list)
+    for m in targets:
+        have = {item["id"] for item in current.get(int(m.id), [])}
+        for label_id in wanted - have:
+            db.add(MessageLabel(message_id=int(m.id), label_id=label_id))
+            ops[(m.folder, account_labels[label_id].name, outbox.OP_ADD_LABEL)].append(int(m.uid))
+        for label_id in (have - wanted) & set(account_labels):
+            db.execute(MessageLabel.__table__.delete().where(
+                MessageLabel.message_id == int(m.id), MessageLabel.label_id == label_id
+            ))
+            ops[(m.folder, account_labels[label_id].name, outbox.OP_REMOVE_LABEL)].append(int(m.uid))
+    for (folder, name, op), uids in ops.items():
+        outbox.enqueue(db, int(message.account_id), folder, op, uids, name)
+    db.commit()
+    if ops:
+        outbox.kick([int(message.account_id)])
+    if is_safe_redirect(next):
+        return RedirectResponse(url=next, status_code=303)
+    return RedirectResponse(url=request.url_for("messages.detail", message_id=message_id), status_code=303)
 
 
 @router.post("/conversation-view", name="messages.conversation_view")
@@ -762,6 +836,10 @@ def view_message(
             "message": message,
             "thread": thread,
             "expanded_ids": expanded_ids,
+            "thread_labels": _thread_labels(db, thread),
+            "account_labels": db.execute(
+                select(Label).where(Label.account_id == message.account_id).order_by(Label.name)
+            ).scalars().all(),
             "remote_images": {int(m.id): body_has_remote_images(m.body_html) for m in thread},
             "file_attachments": file_attachments,
             "inline_attachments": inline_attachments,

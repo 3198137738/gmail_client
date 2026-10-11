@@ -34,6 +34,27 @@
                 <input type="hidden" name="next" value="{{ back_url }}">
                 <button type="submit" class="gm-icon-btn" title="标记为未读（Shift+U）" aria-label="标记为未读" data-shortcut="unread">{{ icon('mark_email_unread') }}</button>
             </form>
+            {% if account_labels %}
+            {% set have_label_ids = thread_labels|map(attribute='id')|list %}
+            <div class="dropdown">
+                <button type="button" class="gm-icon-btn" data-bs-toggle="dropdown" data-bs-auto-close="outside"
+                        aria-expanded="false" title="标签" aria-label="标签">{{ icon('label') }}</button>
+                <form class="dropdown-menu gm-menu gm-label-menu" method="post"
+                      action="{{ url_for('messages.set_labels', message_id=message.id) }}">
+                    {{ csrf_input() }}
+                    <input type="hidden" name="next" value="{{ request.url }}">
+                    <div class="gm-menu-label">标签</div>
+                    {% for lb in account_labels %}
+                    <label class="dropdown-item gc-more-item">
+                        <input class="gm-checkbox" type="checkbox" name="label_ids" value="{{ lb.id }}"
+                               {% if lb.id in have_label_ids %}checked{% endif %}> {{ lb.name }}
+                    </label>
+                    {% endfor %}
+                    <div class="dropdown-divider"></div>
+                    <div class="gm-label-menu-actions"><button type="submit" class="gm-btn gm-btn-text">应用</button></div>
+                </form>
+            </div>
+            {% endif %}
             <button type="button" class="gm-icon-btn gm-star-btn {% if message.is_starred %}is-starred{% endif %}"
                     data-star-url="{{ url_for('messages.star', message_id=message.id) }}"
                     aria-pressed="{{ 'true' if message.is_starred else 'false' }}"
@@ -74,6 +95,9 @@
             <h2 class="gm-subject">
                 <span class="gm-subject-text">{{ message.subject or "(无主题)" }}</span>
                 {% if thread|length > 1 %}<span class="gm-thread-total" title="会话中的邮件数">{{ thread|length }}</span>{% endif %}
+                {% for lb in thread_labels %}
+                <a class="gm-label-chip is-label" href="/messages/?kind=label-{{ lb.id }}&account_id={{ message.account_id }}" title="{{ lb.name }}">{{ lb.name }}</a>
+                {% endfor %}
                 <a class="gm-label-chip gm-folder-chip {% if message.folder_kind == 'junk' %}is-junk{% endif %}"
                    href="/messages/?kind={{ message.folder_kind }}&account_id={{ message.account_id }}">
                     {{ folder_labels.get(message.folder_kind, message.folder_kind) }}

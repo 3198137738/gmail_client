@@ -257,3 +257,51 @@ def move_imap_messages(
         return {"ok": False, "moved": 0, "error": exc.__class__.__name__}
     finally:
         _release_account_lock(account_id, lock)
+
+
+def update_gmail_labels(
+    account_id: int,
+    folder: str,
+    uids: list[int],
+    *,
+    add: Optional[list[str]] = None,
+    remove: Optional[list[str]] = None,
+    lock_timeout: float = 30.0,
+) -> dict:
+    """给邮件加上 / 去掉 Gmail 标签（STORE +X-GM-LABELS / -X-GM-LABELS）。"""
+    if not uids or not (add or remove):
+        return {"ok": True, "error": None}
+    try:
+        with session_scope() as db:
+            account = db.get(Account, account_id)
+            if account is None:
+                return {"ok": False, "error": "account_not_found"}
+            email = account.email
+            encrypted = account.encrypted_password
+        password = decrypt_password(encrypted)
+    except ValueError:
+        return {"ok": False, "error": "decrypt_failed"}
+    except Exception:
+        logger.exception("Failed to load account for label update id=%s", account_id)
+        return {"ok": False, "error": "db_load_failed"}
+
+    lock = _account_lock(account_id)
+    if not lock.acquire(blocking=True, timeout=lock_timeout):
+        return {"ok": False, "error": "busy"}
+    try:
+        with _imap_client(email, password) as client:
+            client.select_folder(folder, readonly=False)
+            if add:
+                client.add_gmail_labels(uids, add, silent=True)
+            if remove:
+                client.remove_gmail_labels(uids, remove, silent=True)
+        return {"ok": True, "error": None}
+    except (IMAPSyncError, IMAPClientError) as exc:
+        logger.warning("Failed to update Gmail labels account=%s folder=%s: %s", account_id, folder, exc)
+        return {"ok": False, "error": str(exc)}
+    except Exception as exc:
+        logger.exception("Unexpected update_gmail_labels failure account=%s", account_id)
+        return {"ok": False, "error": exc.__class__.__name__}
+    finally:
+        _release_account_lock(account_id, lock)
+

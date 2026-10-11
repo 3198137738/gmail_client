@@ -27,7 +27,12 @@ from ..database import session_scope
 from ..models import PendingOp, SyncState
 from ..timeutil import utcnow
 from .background import submit_bg
-from .imap_ops import delete_imap_messages, move_imap_messages, update_imap_flags
+from .imap_ops import (
+    delete_imap_messages,
+    move_imap_messages,
+    update_gmail_labels,
+    update_imap_flags,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +40,9 @@ OP_DELETE = "delete"
 OP_ADD_FLAGS = "add_flags"
 OP_REMOVE_FLAGS = "remove_flags"
 OP_MOVE = "move"
-_OPS = {OP_DELETE, OP_ADD_FLAGS, OP_REMOVE_FLAGS, OP_MOVE}
+OP_ADD_LABEL = "add_label"
+OP_REMOVE_LABEL = "remove_label"
+_OPS = {OP_DELETE, OP_ADD_FLAGS, OP_REMOVE_FLAGS, OP_MOVE, OP_ADD_LABEL, OP_REMOVE_LABEL}
 
 BASE_BACKOFF_SEC = 30
 MAX_BACKOFF_SEC = 3600
@@ -141,6 +148,10 @@ def _execute(op: PendingOp) -> Optional[str]:
         result = update_imap_flags(account_id, [(op.folder, uids)], remove_flags=[op.arg.encode()])
     elif op.op == OP_MOVE:
         result = move_imap_messages(account_id, op.folder, uids, target=op.arg)
+    elif op.op == OP_ADD_LABEL:
+        result = update_gmail_labels(account_id, op.folder, uids, add=[op.arg])
+    elif op.op == OP_REMOVE_LABEL:
+        result = update_gmail_labels(account_id, op.folder, uids, remove=[op.arg])
     else:
         return f"unknown op {op.op}"
     if result.get("ok"):

@@ -377,6 +377,7 @@
         if (ctx.kind === "sent") return ev.sent > 0;
         if (ctx.kind === "junk") return ev.junk > 0;
         if (ctx.kind === "starred") return false;  // 新邮件不会自带星标
+        if (/^label-/.test(ctx.kind || "")) return false;  // 标签视图：新邮件只更新侧栏
         return (ev.inbox > 0) || (ev.sent > 0); // "all"（不含垃圾邮件）
     }
 

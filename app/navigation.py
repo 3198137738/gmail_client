@@ -12,7 +12,7 @@ from fastapi import Request
 from sqlalchemy import func, select
 
 from .database import session_scope
-from .models import Account, Draft, Message
+from .models import Account, Draft, Label, Message
 
 # 与 routes/messages.py 中记住所选账号的 cookie 一致
 PREFERRED_ACCOUNT_COOKIE = "gc_preferred_account"
@@ -32,16 +32,34 @@ class NavAccount:
 
 
 @dataclass
+class NavLabel:
+    id: int
+    account_id: int
+    name: str        # 完整名称（嵌套标签用 / 分隔）
+    short: str       # 侧栏显示的最后一级
+
+
+@dataclass
 class Sidebar:
     accounts: list[NavAccount] = field(default_factory=list)
     unread_inbox: int = 0
     unread_junk: int = 0
     drafts: int = 0
+    labels: list[NavLabel] = field(default_factory=list)
     # 从 cookie 中记住的账号（列表页之外的页面用它来决定文件夹链接指向哪个账号）
     preferred_account_id: Optional[int] = None
 
     def account(self, account_id: Optional[int]) -> Optional[NavAccount]:
         return next((a for a in self.accounts if a.id == account_id), None)
+
+    def labels_for(self, account_id: Optional[int]) -> list[NavLabel]:
+        """选中账号时只列该账号的标签，否则列出全部账号的标签。"""
+        if account_id is None:
+            return self.labels
+        return [label for label in self.labels if label.account_id == account_id]
+
+    def label(self, label_id: Optional[int]) -> Optional[NavLabel]:
+        return next((label for label in self.labels if label.id == label_id), None)
 
 
 def _load(request: Request) -> Sidebar:
@@ -62,9 +80,13 @@ def _load(request: Request) -> Sidebar:
             .group_by(Message.account_id, Message.folder_kind)
         ).all()
         draft_count = db.execute(select(func.count(Draft.id))).scalar() or 0
+        label_rows = db.execute(select(Label.id, Label.account_id, Label.name).order_by(Label.name)).all()
 
     by_id = {a.id: a for a in accounts}
     nav = Sidebar(accounts=accounts, drafts=int(draft_count))
+    nav.labels = [
+        NavLabel(id=int(i), account_id=int(a), name=n, short=n.rsplit("/", 1)[-1]) for i, a, n in label_rows
+    ]
     for account_id, kind, count in unread:
         acc = by_id.get(int(account_id))
         if acc is None:

@@ -177,6 +177,9 @@
         </div>
     </div>
 
+    {% if current_label %}
+    <div class="gm-folder-banner">只显示收件箱、已发送和垃圾邮件中带有「{{ current_label.name }}」标签的邮件；在 Gmail 中已归档的邮件不在这里。</div>
+    {% endif %}
     {% if kind == 'junk' and messages %}
     <div class="gm-folder-banner">垃圾邮件文件夹中的邮件来自 Gmail 的垃圾邮件判断，确认无误的邮件可以打开后点「这不是垃圾邮件」。</div>
     {% endif %}
@@ -213,6 +216,9 @@
                     {% if kind == 'all' and m.folder_kind in kind_names %}
                     <span class="gm-label-chip">{{ kind_names[m.folder_kind] }}</span>
                     {% endif %}
+                    {% for lb in message_labels.get(m.id, []) %}
+                    <a class="gm-label-chip is-label" href="/messages/?kind=label-{{ lb.id }}&account_id={{ m.account_id }}" title="{{ lb.name }}">{{ lb.name.rsplit('/', 1)[-1] }}</a>
+                    {% endfor %}
                     {% if show_account_label and acc %}
                     <span class="gm-label-chip is-account" style="--label: {{ acc.color }}" title="{{ acc.email }}">{{ acc.name }}</span>
                     {% endif %}
@@ -265,6 +271,8 @@
             {% elif not accounts %}
                 <div class="gm-empty-title">还没有添加邮箱账号</div>
                 <div class="gm-empty-hint">先到 <a href="{{ url_for('accounts.list') }}">设置</a> 添加 Gmail 账号</div>
+            {% elif current_label %}
+                <div class="gm-empty-title">没有带「{{ current_label.name }}」标签的邮件</div>
             {% elif kind == 'starred' %}
                 <div class="gm-empty-title">没有已加星标的邮件</div>
                 <div class="gm-empty-hint">点邮件旁边的星形图标即可加星标，方便以后查找</div>

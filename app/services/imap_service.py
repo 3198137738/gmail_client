@@ -66,6 +66,7 @@ from ..config import (
 from ..crypto import decrypt_password
 from ..database import session_scope
 from ..models import Account, Attachment, BlockedSender, Message, SyncState, TrustedSender
+from . import labels as gmail_labels
 from . import outbox
 from .background import submit_bg
 from .imap_client import (
@@ -132,6 +133,33 @@ def _has_gmail_ext(client) -> bool:
         return bool(client.has_capability("X-GM-EXT-1"))
     except (AttributeError, IMAPClientError):
         return False
+
+
+def _backfill_labels(client: IMAPClient, account_id: int, folder: str) -> int:
+    """升级后第一次同步：把已入库邮件的 Gmail 标签全部取一遍（每个文件夹只做一次）。"""
+    if not _has_gmail_ext(client):
+        return 0
+    with session_scope() as db:
+        state = _get_or_create_sync_state(db, account_id, folder)
+        if state.labels_backfilled:
+            return 0
+        last_uid = int(state.last_uid or 0)
+    changed = 0
+    if last_uid > 0:
+        try:
+            fetched = client.fetch(f"1:{last_uid}", ["X-GM-LABELS"])
+        except IMAPClientError as exc:
+            logger.warning("Label backfill failed account=%s folder=%s: %s", account_id, folder, exc)
+            return 0
+        changed = gmail_labels.apply_remote_labels(
+            account_id, folder,
+            {int(uid): gmail_labels.parse_labels(data.get(b"X-GM-LABELS")) for uid, data in fetched.items()},
+        )
+    with session_scope() as db:
+        _get_or_create_sync_state(db, account_id, folder).labels_backfilled = True
+    if changed:
+        logger.info("Labels backfilled account=%s folder=%s messages=%s", account_id, folder, changed)
+    return changed
 
 
 # 每次同步最多为多少封已入库邮件补齐会话 id（升级后第一次运行时补齐历史邮件，分多次完成）
@@ -279,6 +307,7 @@ def _parse_fetched_messages(
                 "is_read": bool(_is_seen(data.get(b"FLAGS") or ())),
                 "is_starred": _has_flag(data.get(b"FLAGS"), FLAGGED_FLAG),
                 "thread_id": _int_or_none(data.get(b"X-GM-THRID")),
+                "labels": gmail_labels.parse_labels(data.get(b"X-GM-LABELS")),
                 "has_attachments": parsed.has_attachments,
                 "attachments": parsed.attachments,
             }
@@ -313,6 +342,8 @@ def _persist_parsed_messages(records: list[dict]) -> int:
             )
             db.add(message)
             db.flush()
+            if record.get("labels"):
+                gmail_labels.set_message_labels(db, record["account_id"], int(message.id), record["labels"])
 
             for att in record["attachments"]:
                 db.add(
@@ -461,7 +492,7 @@ def _ingest_uids(
     to_fetch = [uid for uid in uids if uid not in existing_before]
     fetch_items = ["RFC822", "FLAGS", "INTERNALDATE"]
     if _has_gmail_ext(client):
-        fetch_items.append("X-GM-THRID")
+        fetch_items += ["X-GM-THRID", "X-GM-LABELS"]
     for chunk in _plan_fetch_batches(client, to_fetch):
         try:
             fetched = client.fetch(chunk, fetch_items)
@@ -606,6 +637,7 @@ def _reset_folder(account_id: int, folder: str, uidvalidity: int) -> None:
         state.backfill_done = False
         state.highestmodseq = None
         state.reconciled_at = None
+        state.labels_backfilled = False
     logger.warning(
         "UIDVALIDITY changed account=%s folder=%s; cleared %s local messages, dropped %s pending ops",
         account_id, folder, removed, dropped,
@@ -637,13 +669,26 @@ def _apply_remote_flags(
     本地刚改过、还在 outbox 等待推送的邮件以本地为准，不被服务器旧状态覆盖。
     """
     modifiers = [f"CHANGEDSINCE {since}"] if since else None
-    fetched = client.fetch(f"1:{last_uid}", ["FLAGS"], modifiers=modifiers)
+    with_labels = _has_gmail_ext(client)
+    items = ["FLAGS", "X-GM-LABELS"] if with_labels else ["FLAGS"]
+    fetched = client.fetch(f"1:{last_uid}", items, modifiers=modifiers)
     flags_by_uid = {
         int(uid): data.get(b"FLAGS") for uid, data in fetched.items() if int(uid) <= last_uid
     }
     if not flags_by_uid:
         return 0
     changed = 0
+    if with_labels:
+        with session_scope() as db:
+            pending = outbox.pending_uids(
+                db, account_id, folder, ops=(outbox.OP_ADD_LABEL, outbox.OP_REMOVE_LABEL)
+            )
+        changed += gmail_labels.apply_remote_labels(
+            account_id, folder,
+            {int(uid): gmail_labels.parse_labels(data.get(b"X-GM-LABELS"))
+             for uid, data in fetched.items() if int(uid) <= last_uid},
+            skip_uids=pending,
+        )
     with session_scope() as db:
         for column, flag in ((Message.is_read, SEEN_FLAG), (Message.is_starred, FLAGGED_FLAG)):
             skip = outbox.pending_uids(
@@ -792,6 +837,8 @@ def _sync_one_folder(
     )
     if _backfill_thread_ids(client, account_id, folder):
         changed_flags += 1   # 会话分组变了，页面需要刷新
+    if _backfill_labels(client, account_id, folder):
+        changed_flags += 1
     if changed_flags or removed:
         publish_mail_changed(account_id, folder_kind)
 
@@ -949,6 +996,11 @@ def safe_sync_account(account_id: int, folder: Optional[str] = None) -> dict:
         results: dict[str, dict] = {}
         try:
             with _imap_client(email, password) as client:
+                if _has_gmail_ext(client):
+                    try:
+                        gmail_labels.sync_label_list(account_id, gmail_labels.discover_label_names(client))
+                    except Exception:
+                        logger.exception("Label list sync failed account=%s", account_id)
                 for folder_name, kind in sync_targets(client, account_id):
                     folder_lock = _folder_lock(account_id, folder_name)
                     if not folder_lock.acquire(timeout=_FOLDER_LOCK_TIMEOUT_SEC):

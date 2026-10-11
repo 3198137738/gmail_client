@@ -54,6 +54,7 @@ class Account(Base):
         "PendingOp", back_populates="account", cascade="all, delete-orphan"
     )
     drafts = relationship("Draft", back_populates="account", cascade="all, delete-orphan")
+    labels = relationship("Label", back_populates="account", cascade="all, delete-orphan")
 
 
 class Message(Base):
@@ -153,6 +154,10 @@ class SyncState(Base):
     highestmodseq: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     # 上次与服务器比对「哪些邮件已被删除 / 移走」的时间
     reconciled_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # 已入库邮件的 Gmail 标签是否已全部取过一遍（升级前入库的邮件需要补齐）
+    labels_backfilled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
 
     account = relationship("Account", back_populates="sync_states")
 
@@ -304,3 +309,35 @@ class AppSetting(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=_now, onupdate=_now, nullable=False
     )
+
+
+class Label(Base):
+    """Gmail 用户标签（不含收件箱、已发送等系统标签）。名称即 Gmail 中的标签名，嵌套标签用 / 分隔。"""
+
+    __tablename__ = "labels"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(512), nullable=False)
+
+    account = relationship("Account", back_populates="labels")
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "name", name="uq_labels_account_name"),
+    )
+
+
+class MessageLabel(Base):
+    """邮件与标签的多对多关系。"""
+
+    __tablename__ = "message_labels"
+
+    message_id: Mapped[int] = mapped_column(
+        ForeignKey("messages.id", ondelete="CASCADE"), primary_key=True
+    )
+    label_id: Mapped[int] = mapped_column(
+        ForeignKey("labels.id", ondelete="CASCADE"), primary_key=True, index=True
+    )
+

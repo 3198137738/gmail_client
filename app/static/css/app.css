@@ -2036,3 +2036,8 @@ body[data-win-state="max"] .gc-icon-restore { display: inline-block !important; 
 .gm-msg.is-threaded:not(.is-expanded) .gm-msg-to,
 .gm-msg.is-threaded:not(.is-expanded) .gm-msg-email,
 .gm-msg.is-threaded:not(.is-expanded) .gm-msg-action { display: none; }
+/* Gmail 标签 */
+.gm-label-chip.is-label { background: #e8eaed; color: var(--gm-text-2); text-decoration: none; }
+.gm-label-chip.is-label:hover { background: #dadce0; }
+.gm-label-menu { min-width: 220px; max-height: 360px; overflow-y: auto; }
+.gm-label-menu-actions { display: flex; justify-content: flex-end; padding: 0 8px; }
