@@ -436,6 +436,8 @@
     var refreshList = makeRefresher(function () { return window.location.href; }, [".gm-main", ".gm-nav"], function () {
         initMessageList();
         hideBanner();
+        // 键盘快捷键据此恢复当前选中的行
+        window.dispatchEvent(new CustomEvent("gm:listrefreshed"));
     });
 
     // 只刷新左侧导航（未读数），用于不属于当前列表的新邮件，

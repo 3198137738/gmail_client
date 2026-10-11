@@ -91,3 +91,17 @@ def test_server_star_is_synced(no_notify):
     box.changed_since[2] = box.changed_since[3] = box.modseq
     _sync_one_folder(box, acc, "INBOX", "inbox")
     assert starred_uids() == {3}
+
+
+def test_shortcut_targets_present(client):
+    """键盘快捷键依赖的标记：脚本已加载，详情页按钮带 data-shortcut。"""
+    login(client)
+    acc = create_account()
+    mid = create_message(acc)
+    listing = client.get(f"/messages/?account_id={acc}").text
+    assert "js/shortcuts.js" in listing
+    assert 'data-shortcut="compose"' in listing
+    detail = client.get(f"/messages/{mid}").text
+    for name in ("back", "delete", "unread", "reply", "reply-all", "forward"):
+        assert f'data-shortcut="{name}"' in detail, name
+    assert "js/shortcuts.js" not in client.get("/login").text

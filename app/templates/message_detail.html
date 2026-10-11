@@ -11,7 +11,7 @@
 <div class="gm-detail">
     <div class="gm-toolbar gm-detail-toolbar">
         <div class="gm-toolbar-start">
-            <a class="gm-icon-btn" href="{{ back_url }}" title="返回列表" aria-label="返回列表">{{ icon('arrow_back') }}</a>
+            <a class="gm-icon-btn" href="{{ back_url }}" title="返回列表（u）" aria-label="返回列表" data-shortcut="back">{{ icon('arrow_back') }}</a>
             <span class="gm-toolbar-gap"></span>
             {% if message.folder_kind == 'junk' %}
             <form method="post" action="{{ url_for('messages.not_spam', message_id=message.id) }}"
@@ -25,13 +25,13 @@
                   data-confirm="确定删除这封邮件吗？邮件会移到 Gmail 的「已删除邮件」，30 天后由 Gmail 自动清除。">
                 {{ csrf_input() }}
                 <input type="hidden" name="next" value="{{ back_url }}">
-                <button type="submit" class="gm-icon-btn" title="删除" aria-label="删除">{{ icon('delete') }}</button>
+                <button type="submit" class="gm-icon-btn" title="删除（#）" aria-label="删除" data-shortcut="delete">{{ icon('delete') }}</button>
             </form>
             <span class="gm-toolbar-sep"></span>
             <form method="post" action="{{ url_for('messages.mark_unread', message_id=message.id) }}">
                 {{ csrf_input() }}
                 <input type="hidden" name="next" value="{{ back_url }}">
-                <button type="submit" class="gm-icon-btn" title="标记为未读" aria-label="标记为未读">{{ icon('mark_email_unread') }}</button>
+                <button type="submit" class="gm-icon-btn" title="标记为未读（Shift+U）" aria-label="标记为未读" data-shortcut="unread">{{ icon('mark_email_unread') }}</button>
             </form>
             <button type="button" class="gm-icon-btn gm-star-btn {% if message.is_starred %}is-starred{% endif %}"
                     data-star-url="{{ url_for('messages.star', message_id=message.id) }}"
@@ -55,13 +55,13 @@
             <span class="gm-pager-info">第 {{ pos.position }} 封，共 {{ pos.total }} 封</span>
             {% if pos.newer_id %}
             <a class="gm-icon-btn gm-pager-btn" href="{{ url_for('messages.detail', message_id=pos.newer_id).include_query_params(back=back_url) }}"
-               title="较新" aria-label="较新">{{ icon('chevron_left') }}</a>
+               title="较新（k）" aria-label="较新" data-shortcut="newer">{{ icon('chevron_left') }}</a>
             {% else %}
             <span class="gm-icon-btn gm-pager-btn is-disabled" aria-disabled="true">{{ icon('chevron_left') }}</span>
             {% endif %}
             {% if pos.older_id %}
             <a class="gm-icon-btn gm-pager-btn" href="{{ url_for('messages.detail', message_id=pos.older_id).include_query_params(back=back_url) }}"
-               title="较旧" aria-label="较旧">{{ icon('chevron_right') }}</a>
+               title="较旧（j）" aria-label="较旧" data-shortcut="older">{{ icon('chevron_right') }}</a>
             {% else %}
             <span class="gm-icon-btn gm-pager-btn is-disabled" aria-disabled="true">{{ icon('chevron_right') }}</span>
             {% endif %}
@@ -169,13 +169,13 @@
         {% endif %}
 
         <div class="gm-reply-row">
-            <a class="gm-btn gm-btn-outlined" href="{{ url_for('compose.form').include_query_params(reply_to=message.id) }}" data-compose>
+            <a class="gm-btn gm-btn-outlined" href="{{ url_for('compose.form').include_query_params(reply_to=message.id) }}" data-compose data-shortcut="reply">
                 {{ icon('reply') }}回复
             </a>
-            <a class="gm-btn gm-btn-outlined" href="{{ url_for('compose.form').include_query_params(reply_to=message.id, mode='all') }}" data-compose>
+            <a class="gm-btn gm-btn-outlined" href="{{ url_for('compose.form').include_query_params(reply_to=message.id, mode='all') }}" data-compose data-shortcut="reply-all">
                 {{ icon('reply_all') }}回复全部
             </a>
-            <a class="gm-btn gm-btn-outlined" href="{{ url_for('compose.form').include_query_params(forward=message.id) }}" data-compose>
+            <a class="gm-btn gm-btn-outlined" href="{{ url_for('compose.form').include_query_params(forward=message.id) }}" data-compose data-shortcut="forward">
                 {{ icon('forward') }}转发
             </a>
         </div>
