@@ -192,13 +192,19 @@ def login_2fa_submit(request: Request, code: str = Form("")):
         request.session.clear()
         return _redirect_to_login(request, next_url=next_url, error="该 IP 已被封禁，请稍后再试")
     if not two_factor.verify_and_consume(code):
-        throttle = register_failed_login(ip_address)
+        # 验证码输错只临时封禁（即使配置了永久封禁），防止暴力猜测的同时不把自己永久锁在外面
+        throttle = register_failed_login(ip_address, allow_permanent=False)
         if throttle.is_blocked:
             request.session.clear()
             return _redirect_to_login(
-                request, next_url=next_url, error=f"连续输错达到 {WEB_AUTH_MAX_FAILURES} 次，该 IP 已被封禁"
+                request, next_url=next_url,
+                error=f"连续输错达到 {WEB_AUTH_MAX_FAILURES} 次，该 IP 已被临时封禁 {WEB_AUTH_LOCKOUT_MINUTES} 分钟",
             )
-        set_auth_error(request, f"验证码不正确，还可再尝试 {throttle.remaining_attempts} 次")
+        set_auth_error(
+            request,
+            f"验证码不正确，还可再尝试 {throttle.remaining_attempts} 次。"
+            "同一个验证码只能用一次，请等 App 中出现新的验证码；仍不对时检查手机时间是否准确",
+        )
         return RedirectResponse(url=request.url_for("auth.login_2fa_form"), status_code=303)
     clear_failed_logins(ip_address)
     mark_authenticated(request)   # 会清空会话（含待验证状态）

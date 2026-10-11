@@ -235,7 +235,9 @@ def get_login_throttle_status(ip_address: str) -> LoginThrottleStatus:
         )
 
 
-def register_failed_login(ip_address: str) -> LoginThrottleStatus:
+def register_failed_login(ip_address: str, *, allow_permanent: bool = True) -> LoginThrottleStatus:
+    """记录一次失败。``allow_permanent=False`` 时达到上限只临时封禁（用于两步验证码输错：
+    验证码 30 秒就变、手机时钟偏差或重复使用都会导致失败，不应与输错密码一样永久封禁）。"""
     if is_explicitly_blocked_ip(ip_address):
         return LoginThrottleStatus(
             ip_address=ip_address,
@@ -259,7 +261,7 @@ def register_failed_login(ip_address: str) -> LoginThrottleStatus:
         state.last_failed_at = now
 
         if state.failed_attempts >= WEB_AUTH_MAX_FAILURES:
-            if WEB_AUTH_PERMANENT_BLOCK_AFTER_FAILURES:
+            if WEB_AUTH_PERMANENT_BLOCK_AFTER_FAILURES and allow_permanent:
                 state.is_permanent_blocked = True
                 state.blocked_until = None
                 logger.warning(

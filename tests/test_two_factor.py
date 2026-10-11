@@ -90,6 +90,19 @@ def test_wrong_codes_count_toward_lockout_and_password_does_not_reset(client, se
     assert client.get("/messages/", follow_redirects=False).status_code == 303
 
 
+def test_wrong_codes_never_cause_permanent_block(client, secret, monkeypatch):
+    """即使开启了「输错即永久封禁」，验证码输错也只临时封禁。"""
+    import app.auth as auth_module
+
+    monkeypatch.setattr(auth_module, "WEB_AUTH_PERMANENT_BLOCK_AFTER_FAILURES", True)
+    wrong = "000000" if totp.code_at(secret, totp.current_step()) != "000000" else "111111"
+    for _ in range(WEB_AUTH_MAX_FAILURES):
+        _password_step(client)
+        _code_step(client, wrong)
+    status = auth_module.get_login_throttle_status("198.51.100.99")
+    assert status.is_blocked and not status.is_permanent_blocked and status.blocked_until is not None
+
+
 def test_2fa_page_without_password_step_redirects(client, secret):
     resp = client.get("/login/2fa", follow_redirects=False)
     assert resp.status_code == 303 and resp.headers["location"].endswith("/login")
