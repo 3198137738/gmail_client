@@ -150,8 +150,8 @@ def login_submit(
 
     set_auth_error(request, None)
     if two_factor.is_enabled():
-        # 密码正确，还要输入验证码。此时不清零失败计数：否则知道密码的人可以
-        # 每输错两次验证码就重新输一次密码，无限尝试验证码。
+        # 密码正确，还要输入验证码。密码的失败计数等整个登录完成后才清零。
+        # 验证码输错不封禁 IP，单次登录最多试 TWO_FACTOR_MAX_ATTEMPTS 次，之后需重新输入密码。
         request.session.clear()   # 防会话固定
         request.session[TWO_FACTOR_PENDING_KEY] = int(time.time())
         request.session[TWO_FACTOR_NEXT_KEY] = next_url
@@ -166,6 +166,10 @@ TWO_FACTOR_PENDING_KEY = "2fa_pending_at"
 TWO_FACTOR_NEXT_KEY = "2fa_next"
 # 密码通过后必须在这段时间内输入验证码，否则重新输入密码
 TWO_FACTOR_PENDING_SEC = 300
+TWO_FACTOR_ATTEMPTS_KEY = "2fa_attempts"
+# 验证码输错不封禁 IP；同一次登录连续输错这么多次后退回密码步骤（不是封禁，重新输密码即可），
+# 防止已知密码的人在一次登录中无限猜测 6 位验证码
+TWO_FACTOR_MAX_ATTEMPTS = 10
 
 
 def _two_factor_pending(request: Request) -> bool:
@@ -192,18 +196,18 @@ def login_2fa_submit(request: Request, code: str = Form("")):
         request.session.clear()
         return _redirect_to_login(request, next_url=next_url, error="该 IP 已被封禁，请稍后再试")
     if not two_factor.verify_and_consume(code):
-        # 验证码输错只临时封禁（即使配置了永久封禁），防止暴力猜测的同时不把自己永久锁在外面
-        throttle = register_failed_login(ip_address, allow_permanent=False)
-        if throttle.is_blocked:
+        # 验证码输错不计入失败次数、不封禁 IP
+        attempts = int(request.session.get(TWO_FACTOR_ATTEMPTS_KEY) or 0) + 1
+        if attempts >= TWO_FACTOR_MAX_ATTEMPTS:
             request.session.clear()
             return _redirect_to_login(
-                request, next_url=next_url,
-                error=f"连续输错达到 {WEB_AUTH_MAX_FAILURES} 次，该 IP 已被临时封禁 {WEB_AUTH_LOCKOUT_MINUTES} 分钟",
+                request, next_url=next_url, error="验证码错误次数过多，请重新输入密码后再试"
             )
+        request.session[TWO_FACTOR_ATTEMPTS_KEY] = attempts
         set_auth_error(
             request,
-            f"验证码不正确，还可再尝试 {throttle.remaining_attempts} 次。"
-            "同一个验证码只能用一次，请等 App 中出现新的验证码；仍不对时检查手机时间是否准确",
+            "验证码不正确。同一个验证码只能用一次，请等 App 中出现新的验证码；"
+            "仍不对时检查手机时间是否准确",
         )
         return RedirectResponse(url=request.url_for("auth.login_2fa_form"), status_code=303)
     clear_failed_logins(ip_address)

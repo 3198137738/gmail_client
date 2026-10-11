@@ -80,27 +80,33 @@ def test_code_cannot_be_reused(client, secret):
     assert resp.headers["location"].endswith("/login/2fa")   # 同一个验证码第二次无效
 
 
-def test_wrong_codes_count_toward_lockout_and_password_does_not_reset(client, secret):
-    # 交替「输对密码 + 输错验证码」也会累计，达到上限后封禁
-    for _ in range(WEB_AUTH_MAX_FAILURES):
-        _password_step(client)
-        _code_step(client, "000000" if totp.code_at(secret, totp.current_step()) != "000000" else "111111")
-    resp = _password_step(client)
-    assert "/login/2fa" not in resp.headers["location"]       # 已封禁，停在密码页
-    assert client.get("/messages/", follow_redirects=False).status_code == 303
+def _wrong(secret):
+    return "000000" if totp.code_at(secret, totp.current_step()) != "000000" else "111111"
 
 
-def test_wrong_codes_never_cause_permanent_block(client, secret, monkeypatch):
-    """即使开启了「输错即永久封禁」，验证码输错也只临时封禁。"""
+def test_wrong_codes_do_not_block_ip(client, secret):
+    """验证码输错不计入失败次数、不封禁 IP。"""
     import app.auth as auth_module
 
-    monkeypatch.setattr(auth_module, "WEB_AUTH_PERMANENT_BLOCK_AFTER_FAILURES", True)
-    wrong = "000000" if totp.code_at(secret, totp.current_step()) != "000000" else "111111"
-    for _ in range(WEB_AUTH_MAX_FAILURES):
+    for _ in range(WEB_AUTH_MAX_FAILURES + 2):
         _password_step(client)
-        _code_step(client, wrong)
-    status = auth_module.get_login_throttle_status("198.51.100.99")
-    assert status.is_blocked and not status.is_permanent_blocked and status.blocked_until is not None
+        _code_step(client, _wrong(secret))
+    assert not auth_module.get_login_throttle_status("198.51.100.99").is_blocked
+    # 之后输入正确的验证码仍能登录
+    _password_step(client)
+    resp = _code_step(client, totp.code_at(secret, totp.current_step()))
+    assert resp.headers["location"] == "/messages/"
+
+
+def test_too_many_wrong_codes_return_to_password_step(client, secret):
+    _password_step(client)
+    for _ in range(auth_routes.TWO_FACTOR_MAX_ATTEMPTS - 1):
+        assert _code_step(client, _wrong(secret)).headers["location"].endswith("/login/2fa")
+    resp = _code_step(client, _wrong(secret))
+    assert "/login/2fa" not in resp.headers["location"]          # 退回密码步骤
+    assert client.get("/login/2fa", follow_redirects=False).headers["location"].endswith("/login")
+    import app.auth as auth_module
+    assert not auth_module.get_login_throttle_status("198.51.100.99").is_blocked
 
 
 def test_2fa_page_without_password_step_redirects(client, secret):
