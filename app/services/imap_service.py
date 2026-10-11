@@ -119,6 +119,62 @@ def _is_seen(flags) -> bool:
     return _has_flag(flags, SEEN_FLAG)
 
 
+def _int_or_none(value) -> Optional[int]:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _has_gmail_ext(client) -> bool:
+    """服务器是否支持 Gmail IMAP 扩展（X-GM-THRID / X-GM-LABELS 等）。"""
+    try:
+        return bool(client.has_capability("X-GM-EXT-1"))
+    except (AttributeError, IMAPClientError):
+        return False
+
+
+# 每次同步最多为多少封已入库邮件补齐会话 id（升级后第一次运行时补齐历史邮件，分多次完成）
+THREAD_BACKFILL_LIMIT = 2000
+
+
+def _backfill_thread_ids(client: IMAPClient, account_id: int, folder: str) -> int:
+    """为还没有会话 id 的本地邮件补上 X-GM-THRID，返回补齐的封数。"""
+    if not _has_gmail_ext(client):
+        return 0
+    with session_scope() as db:
+        uids = list(
+            db.execute(
+                select(Message.uid).where(
+                    Message.account_id == account_id,
+                    Message.folder == folder,
+                    Message.thread_id.is_(None),
+                ).order_by(Message.uid.desc()).limit(THREAD_BACKFILL_LIMIT)
+            ).scalars()
+        )
+    if not uids:
+        return 0
+    try:
+        fetched = client.fetch(uids, ["X-GM-THRID"])
+    except IMAPClientError as exc:
+        logger.warning("Thread id backfill failed account=%s folder=%s: %s", account_id, folder, exc)
+        return 0
+    filled = 0
+    with session_scope() as db:
+        for uid, data in fetched.items():
+            thread_id = _int_or_none(data.get(b"X-GM-THRID"))
+            if thread_id is None:
+                continue
+            filled += db.execute(
+                update(Message)
+                .where(Message.account_id == account_id, Message.folder == folder, Message.uid == int(uid))
+                .values(thread_id=thread_id)
+            ).rowcount or 0
+    if filled:
+        logger.info("Thread ids backfilled account=%s folder=%s count=%s", account_id, folder, filled)
+    return filled
+
+
 def _record_error(account_id: int, folder: str, error: str) -> None:
     try:
         with session_scope() as db:
@@ -222,6 +278,7 @@ def _parse_fetched_messages(
                 "body_html": parsed.body_html,
                 "is_read": bool(_is_seen(data.get(b"FLAGS") or ())),
                 "is_starred": _has_flag(data.get(b"FLAGS"), FLAGGED_FLAG),
+                "thread_id": _int_or_none(data.get(b"X-GM-THRID")),
                 "has_attachments": parsed.has_attachments,
                 "attachments": parsed.attachments,
             }
@@ -251,6 +308,7 @@ def _persist_parsed_messages(records: list[dict]) -> int:
                 body_html=record["body_html"],
                 is_read=record["is_read"],
                 is_starred=record.get("is_starred", False),
+                thread_id=record.get("thread_id"),
                 has_attachments=record["has_attachments"],
             )
             db.add(message)
@@ -401,9 +459,12 @@ def _ingest_uids(
             db, account_id, folder, ops=(outbox.OP_DELETE, outbox.OP_MOVE)
         )
     to_fetch = [uid for uid in uids if uid not in existing_before]
+    fetch_items = ["RFC822", "FLAGS", "INTERNALDATE"]
+    if _has_gmail_ext(client):
+        fetch_items.append("X-GM-THRID")
     for chunk in _plan_fetch_batches(client, to_fetch):
         try:
-            fetched = client.fetch(chunk, ["RFC822", "FLAGS", "INTERNALDATE"])
+            fetched = client.fetch(chunk, fetch_items)
         except IMAPClientError as exc:
             logger.warning(
                 "IMAP fetch failed account=%s folder=%s uids=%s: %s",
@@ -729,6 +790,8 @@ def _sync_one_folder(
         client, account_id, folder, select_info,
         last_uid=last_uid, prev_modseq=prev_modseq, reconciled_at=reconciled_at,
     )
+    if _backfill_thread_ids(client, account_id, folder):
+        changed_flags += 1   # 会话分组变了，页面需要刷新
     if changed_flags or removed:
         publish_mail_changed(account_id, folder_kind)
 

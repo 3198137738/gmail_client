@@ -6,6 +6,7 @@
 {% set sender_label = message.from_addr|addr_name %}
 {% set raw_sender_email = message.from_addr|addr_email %}
 {% set pos = list_position %}
+{% set last_msg = thread[-1] %}
 
 {% block content %}
 <div class="gm-detail">
@@ -72,6 +73,7 @@
         <div class="gm-subject-row">
             <h2 class="gm-subject">
                 <span class="gm-subject-text">{{ message.subject or "(无主题)" }}</span>
+                {% if thread|length > 1 %}<span class="gm-thread-total" title="会话中的邮件数">{{ thread|length }}</span>{% endif %}
                 <a class="gm-label-chip gm-folder-chip {% if message.folder_kind == 'junk' %}is-junk{% endif %}"
                    href="/messages/?kind={{ message.folder_kind }}&account_id={{ message.account_id }}">
                     {{ folder_labels.get(message.folder_kind, message.folder_kind) }}
@@ -84,74 +86,98 @@
             </div>
         </div>
 
-        <div class="gm-msg-head">
-            <div class="gm-msg-avatar tone-{{ sender_label|avatar_tone }}" aria-hidden="true">{{ (sender_label or '?')[:1]|upper }}</div>
+        {# 会话中的每封邮件：未读的、当前打开的、最后一封默认展开，其余折叠（点击展开，正文按需加载） #}
+        {% for m in thread %}
+        {% set expanded = m.id in expanded_ids %}
+        {% set m_sender = m.from_addr|addr_name %}
+        {% set m_email = m.from_addr|addr_email %}
+        {% set m_files = m.attachments|rejectattr('is_inline')|list %}
+        {% set m_inline = m.attachments|selectattr('is_inline')|list %}
+        {% set m_body_url = url_for('messages.body', message_id=m.id).include_query_params(images=1) if show_images else url_for('messages.body', message_id=m.id) %}
+        <article class="gm-msg {% if expanded %}is-expanded{% endif %} {% if thread|length > 1 %}is-threaded{% endif %}" data-msg-id="{{ m.id }}">
+        <div class="gm-msg-head" {% if thread|length > 1 %}data-msg-toggle{% endif %}>
+            <div class="gm-msg-avatar tone-{{ m_sender|avatar_tone }}" aria-hidden="true">{{ (m_sender or '?')[:1]|upper }}</div>
             <div class="gm-msg-from">
                 <div class="gm-msg-from-line">
-                    <span class="gm-msg-name">{{ sender_label or '(未知发件人)' }}</span>
-                    {% if raw_sender_email and sender_label != raw_sender_email %}
-                    <span class="gm-msg-email">&lt;{{ raw_sender_email }}&gt;</span>
+                    <span class="gm-msg-name">{{ m_sender or '(未知发件人)' }}</span>
+                    {% if m_email and m_sender != m_email %}
+                    <span class="gm-msg-email">&lt;{{ m_email }}&gt;</span>
+                    {% endif %}
+                    {% if thread|length > 1 and m.folder_kind != message.folder_kind %}
+                    <span class="gm-label-chip">{{ folder_labels.get(m.folder_kind, m.folder_kind) }}</span>
                     {% endif %}
                 </div>
+                <div class="gm-msg-snippet">{{ m.body_text|snippet }}</div>
                 <div class="dropdown gm-msg-to">
                     <button type="button" class="gm-msg-to-btn" data-bs-toggle="dropdown" aria-expanded="false" title="显示详细信息">
-                        发送至 {{ message.to_addr|recipients(message.account.email) or message.account.email }}{% if message.cc_addr %}、{{ message.cc_addr|recipients(message.account.email) }}{% endif %}
+                        发送至 {{ m.to_addr|recipients(m.account.email) or m.account.email }}{% if m.cc_addr %}、{{ m.cc_addr|recipients(m.account.email) }}{% endif %}
                         {{ icon('arrow_drop_down') }}
                     </button>
                     <div class="dropdown-menu gm-menu gm-msg-details">
                         <table>
-                            <tr><th>发件人：</th><td>{{ message.from_addr|addr_list }}</td></tr>
-                            <tr><th>收件人：</th><td>{{ (message.to_addr or message.account.email)|addr_list }}</td></tr>
-                            {% if message.cc_addr %}<tr><th>抄送：</th><td>{{ message.cc_addr|addr_list }}</td></tr>{% endif %}
-                            <tr><th>日期：</th><td>{{ message.date|fmt_dt('%Y年%m月%d日 %H:%M') }}</td></tr>
-                            <tr><th>主题：</th><td>{{ message.subject or "(无主题)" }}</td></tr>
-                            <tr><th>账号：</th><td>{{ message.account.email }}</td></tr>
+                            <tr><th>发件人：</th><td>{{ m.from_addr|addr_list }}</td></tr>
+                            <tr><th>收件人：</th><td>{{ (m.to_addr or m.account.email)|addr_list }}</td></tr>
+                            {% if m.cc_addr %}<tr><th>抄送：</th><td>{{ m.cc_addr|addr_list }}</td></tr>{% endif %}
+                            <tr><th>日期：</th><td>{{ m.date|fmt_dt('%Y年%m月%d日 %H:%M') }}</td></tr>
+                            <tr><th>主题：</th><td>{{ m.subject or "(无主题)" }}</td></tr>
+                            <tr><th>账号：</th><td>{{ m.account.email }}</td></tr>
                         </table>
                     </div>
                 </div>
             </div>
             <div class="gm-msg-meta">
-                <span class="gm-msg-date" title="{{ message.date|fmt_dt('%Y-%m-%d %H:%M:%S') }}">{{ message.date|gmail_full_date }}</span>
-                <span class="gm-msg-date-short">{{ message.date|gmail_date }}</span>
-                {% if file_attachments %}{{ icon('attach_file', cls='gm-msg-clip') }}{% endif %}
-                <a class="gm-icon-btn" href="{{ url_for('compose.form').include_query_params(reply_to=message.id) }}" data-compose
+                <span class="gm-msg-date" title="{{ m.date|fmt_dt('%Y-%m-%d %H:%M:%S') }}">{{ m.date|gmail_full_date }}</span>
+                <span class="gm-msg-date-short">{{ m.date|gmail_date }}</span>
+                {% if m_files %}{{ icon('attach_file', cls='gm-msg-clip') }}{% endif %}
+                <a class="gm-icon-btn gm-msg-action" href="{{ url_for('compose.form').include_query_params(reply_to=m.id) }}" data-compose
                    title="回复" aria-label="回复">{{ icon('reply') }}</a>
-                <div class="dropdown">
+                <div class="dropdown gm-msg-action">
                     <button type="button" class="gm-icon-btn" data-bs-toggle="dropdown" aria-expanded="false" title="更多" aria-label="更多">
                         {{ icon('more_vert') }}
                     </button>
                     <ul class="dropdown-menu dropdown-menu-end gm-menu">
-                        <li><a class="dropdown-item" href="{{ url_for('compose.form').include_query_params(reply_to=message.id) }}" data-compose>{{ icon('reply') }}回复</a></li>
-                        <li><a class="dropdown-item" href="{{ url_for('compose.form').include_query_params(reply_to=message.id, mode='all') }}" data-compose>{{ icon('reply_all') }}回复全部</a></li>
-                        <li><a class="dropdown-item" href="{{ url_for('compose.form').include_query_params(forward=message.id) }}" data-compose>{{ icon('forward') }}转发</a></li>
+                        <li><a class="dropdown-item" href="{{ url_for('compose.form').include_query_params(reply_to=m.id) }}" data-compose>{{ icon('reply') }}回复</a></li>
+                        <li><a class="dropdown-item" href="{{ url_for('compose.form').include_query_params(reply_to=m.id, mode='all') }}" data-compose>{{ icon('reply_all') }}回复全部</a></li>
+                        <li><a class="dropdown-item" href="{{ url_for('compose.form').include_query_params(forward=m.id) }}" data-compose>{{ icon('forward') }}转发</a></li>
                         <li><hr class="dropdown-divider"></li>
                         <li><button type="button" class="dropdown-item" data-print>{{ icon('print') }}打印</button></li>
-                        <li><a class="dropdown-item" href="{{ url_for('messages.body', message_id=message.id).include_query_params(images=1) }}" target="_blank" rel="noopener">{{ icon('open_in_new') }}在新窗口中打开正文</a></li>
+                        <li><a class="dropdown-item" href="{{ url_for('messages.body', message_id=m.id).include_query_params(images=1) }}" target="_blank" rel="noopener">{{ icon('open_in_new') }}在新窗口中打开正文</a></li>
                     </ul>
                 </div>
             </div>
         </div>
 
+        <div class="gm-msg-content">
         <div class="gm-msg-body">
-            {% set body_url = url_for('messages.body', message_id=message.id).include_query_params(images=1) if show_images else url_for('messages.body', message_id=message.id) %}
-            {% include "_mail_body_frame.html" %}
+            {% if remote_images.get(m.id) and not show_images %}
+            <div class="gm-images-banner">
+                <span>为保护隐私，下方的外部图片未显示。</span>
+                <a href="{{ request.url.include_query_params(images=1) }}">显示图片</a>
+            </div>
+            {% endif %}
+            {# 正文在 sandbox iframe 中渲染（不允许脚本）；折叠的邮件展开时才加载 #}
+            <iframe class="gm-body-frame"
+                    {% if expanded %}src="{{ m_body_url }}"{% else %}data-src="{{ m_body_url }}"{% endif %}
+                    sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+                    referrerpolicy="no-referrer"
+                    title="邮件正文"></iframe>
         </div>
 
-        {% if file_attachments or inline_attachments %}
+        {% if m_files or m_inline %}
         <div class="gm-msg-atts">
             <div class="gm-msg-atts-title">
-                {% if file_attachments %}{{ file_attachments|length }} 个附件{% endif %}
-                {% if file_attachments and inline_attachments %} · {% endif %}
-                {% if inline_attachments %}{{ inline_attachments|length }} 张内嵌图片{% endif %}
+                {% if m_files %}{{ m_files|length }} 个附件{% endif %}
+                {% if m_files and m_inline %} · {% endif %}
+                {% if m_inline %}{{ m_inline|length }} 张内嵌图片{% endif %}
             </div>
             <div class="gm-att-cards">
-                {% for a in file_attachments + inline_attachments %}
+                {% for a in m_files + m_inline %}
                 {% set mt = (a.mime_type or '')|lower %}
                 {% set href = a.public_url ~ ('?download=true' if a.is_inline else '') %}
                 <a class="gm-att-card" href="{{ href }}" download title="下载 {{ a.display_name or a.filename }}">
                     <span class="gm-att-card-preview">
                         {% if mt.startswith('image/') %}
-                        <img src="{{ a.public_url }}" alt="" loading="lazy">
+                        <img {% if expanded %}src{% else %}data-src{% endif %}="{{ a.public_url }}" alt="" loading="lazy">
                         {% elif 'pdf' in mt %}{{ icon('picture_as_pdf', cls='is-pdf') }}
                         {% elif 'sheet' in mt or 'excel' in mt or 'csv' in mt %}{{ icon('table_chart', cls='is-sheet') }}
                         {% elif 'zip' in mt or 'compressed' in mt %}{{ icon('folder_zip') }}
@@ -167,15 +193,18 @@
             </div>
         </div>
         {% endif %}
+        </div>
+        </article>
+        {% endfor %}
 
         <div class="gm-reply-row">
-            <a class="gm-btn gm-btn-outlined" href="{{ url_for('compose.form').include_query_params(reply_to=message.id) }}" data-compose data-shortcut="reply">
+            <a class="gm-btn gm-btn-outlined" href="{{ url_for('compose.form').include_query_params(reply_to=last_msg.id) }}" data-compose data-shortcut="reply">
                 {{ icon('reply') }}回复
             </a>
-            <a class="gm-btn gm-btn-outlined" href="{{ url_for('compose.form').include_query_params(reply_to=message.id, mode='all') }}" data-compose data-shortcut="reply-all">
+            <a class="gm-btn gm-btn-outlined" href="{{ url_for('compose.form').include_query_params(reply_to=last_msg.id, mode='all') }}" data-compose data-shortcut="reply-all">
                 {{ icon('reply_all') }}回复全部
             </a>
-            <a class="gm-btn gm-btn-outlined" href="{{ url_for('compose.form').include_query_params(forward=message.id) }}" data-compose data-shortcut="forward">
+            <a class="gm-btn gm-btn-outlined" href="{{ url_for('compose.form').include_query_params(forward=last_msg.id) }}" data-compose data-shortcut="forward">
                 {{ icon('forward') }}转发
             </a>
         </div>

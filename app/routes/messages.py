@@ -25,7 +25,7 @@ from ..services.mail_body import (
     remote_images_allowed,
 )
 from ..services.imap_client import is_account_busy
-from ..services import outbox
+from ..services import outbox, threads
 from ..services.message_actions import (
     delete_local_messages as _delete_local_messages,
     set_starred as _set_starred,
@@ -185,6 +185,12 @@ def _redirect_to_list(
     )
 
 
+def _load_for_action(request: Request, db: Session, raw_ids: list[int]) -> list[Message]:
+    """批量操作的目标邮件：会话视图下选中一行代表整个会话（与 Gmail 一致）。"""
+    messages = _load_messages_by_ids(db, raw_ids)
+    return threads.expand(db, messages) if threads.conversation_mode(request) else messages
+
+
 def _load_messages_by_ids(db: Session, raw_ids: list[int]) -> list[Message]:
     message_ids = sorted({int(mid) for mid in raw_ids if mid})
     if not message_ids:
@@ -294,6 +300,19 @@ def list_messages(
     total, unread_total = db.execute(count_stmt).one()
     total = int(total or 0)
     unread_total = int(unread_total or 0)
+    conversation = threads.conversation_mode(request)
+    if conversation:
+        # 会话视图：每个会话只取符合条件的最新一封；总数按会话计（未读数仍按邮件计）
+        view_conditions = [_kind_condition(kind)]
+        if selected_account_id:
+            view_conditions.append(Message.account_id == selected_account_id)
+        if search_filter is not None:
+            view_conditions.append(search_filter)
+        if unread:
+            view_conditions.append(Message.is_read.is_(False))
+        rep_condition = threads.representative_condition(view_conditions)
+        stmt = stmt.where(rep_condition)
+        total = int(db.execute(select(func.count(Message.id)).where(*view_conditions, rep_condition)).scalar_one())
     pages = max(1, (total + page_size - 1) // page_size)
     page = min(page, pages)
 
@@ -319,6 +338,7 @@ def list_messages(
         messages = db.execute(stmt).scalars().all()
 
     page_ids = [int(m.id) for m in messages]
+    thread_stats = threads.thread_stats(db, messages) if conversation else {}
     snippets = _load_snippets(db, page_ids)
     attachments_by_message = _load_attachment_names(db, page_ids)
 
@@ -353,6 +373,8 @@ def list_messages(
             "total": total,
             "unread_total": unread_total,
             "any_busy": any_busy,
+            "conversation": conversation,
+            "thread_stats": thread_stats,
             "first_index": first_index,
             "last_index": last_index,
             "page_size": page_size,
@@ -365,6 +387,25 @@ def list_messages(
         },
     )
     _apply_cookie(response, cookie_to_persist)
+    return response
+
+
+@router.post("/conversation-view", name="messages.conversation_view")
+def set_conversation_view(
+    request: Request,
+    on: str = Form("1"),
+    next: Optional[str] = Form(None),
+):
+    """开启 / 关闭会话视图（记在 cookie 中）。"""
+    target = next if is_safe_redirect(next) else str(request.url_for("messages.list"))
+    response = RedirectResponse(url=target, status_code=303)
+    response.set_cookie(
+        threads.CONVERSATION_COOKIE,
+        "1" if on == "1" else "0",
+        max_age=COOKIE_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+    )
     return response
 
 
@@ -469,7 +510,7 @@ def batch_mark_read(
     db: Session = Depends(get_db),
 ):
     account_id_int = _coerce_int(account_id)
-    messages = _load_messages_by_ids(db, message_ids)
+    messages = _load_for_action(request, db, message_ids)
     affected = _toggle_messages_read_state(db, messages, is_read=True)
     logger.info(
         "batch-mark-read kind=%s account_id=%s selected=%s affected=%s",
@@ -499,7 +540,7 @@ def batch_mark_unread(
     db: Session = Depends(get_db),
 ):
     account_id_int = _coerce_int(account_id)
-    messages = _load_messages_by_ids(db, message_ids)
+    messages = _load_for_action(request, db, message_ids)
     affected = _toggle_messages_read_state(db, messages, is_read=False)
     logger.info(
         "batch-mark-unread kind=%s account_id=%s selected=%s affected=%s",
@@ -529,7 +570,7 @@ def batch_delete(
     db: Session = Depends(get_db),
 ):
     account_id_int = _coerce_int(account_id)
-    messages = _load_messages_by_ids(db, message_ids)
+    messages = _load_for_action(request, db, message_ids)
     touched = _enqueue_remote_delete(db, messages)
     deleted = _delete_local_messages(db, messages)
     outbox.kick(touched)
@@ -558,7 +599,8 @@ def mark_unread(
     message = db.get(Message, message_id)
     if message is None:
         raise HTTPException(status_code=404, detail="Message not found")
-    _toggle_messages_read_state(db, [message], is_read=False)
+    targets = threads.expand(db, [message]) if threads.conversation_mode(request) else [message]
+    _toggle_messages_read_state(db, targets, is_read=False)
     if is_safe_redirect(next):
         return RedirectResponse(url=next, status_code=303)
     return RedirectResponse(url=request.url_for("messages.detail", message_id=message_id), status_code=303)
@@ -579,8 +621,9 @@ def delete_one(
     if message is None:
         raise HTTPException(status_code=404, detail="Message not found")
 
-    touched = _enqueue_remote_delete(db, [message])
-    _delete_local_messages(db, [message])
+    targets = threads.expand(db, [message]) if threads.conversation_mode(request) else [message]
+    touched = _enqueue_remote_delete(db, targets)
+    _delete_local_messages(db, targets)
     outbox.kick(touched)
     logger.info("delete-one message_id=%s account_id=%s mode=async_remote", message_id, message.account_id)
 
@@ -627,9 +670,11 @@ def _list_conditions(back_url: str, fallback_kind: str) -> list:
     return conditions
 
 
-def _position_in_list(db: Session, message: Message, back_url: str) -> dict:
+def _position_in_list(db: Session, message: Message, back_url: str, conversation: bool = False) -> dict:
     """详情页右上角「第 N 封，共 M 封」以及较新 / 较旧邮件（与列表的排序一致）。"""
     conditions = _list_conditions(back_url, message.folder_kind)
+    if conversation:
+        conditions.append(threads.representative_condition(list(conditions)))
     cursor = Cursor.of(message)
     count = lambda *extra: db.execute(  # noqa: E731
         select(func.count(Message.id)).where(*conditions, *extra)
@@ -686,15 +731,13 @@ def view_message(
     if message is None:
         raise HTTPException(status_code=404, detail="Message not found")
 
-    needs_imap_seen = not message.is_read
-    if needs_imap_seen:
-        account_id = int(message.account_id)
-        folder = message.folder
-        uid = int(message.uid)
-        message.is_read = True
-        outbox.enqueue(db, account_id, folder, outbox.OP_ADD_FLAGS, [uid], SEEN_FLAG.decode())
-        db.commit()
-        outbox.kick([account_id])
+    conversation = threads.conversation_mode(request)
+    thread = threads.thread_messages(db, message) if conversation else [message]
+    unread_in_thread = [m for m in thread if not m.is_read]
+    # 默认展开：未读的邮件、当前打开的邮件，以及会话中最后一封（与 Gmail 一致）
+    expanded_ids = {int(m.id) for m in unread_in_thread} | {int(message.id), int(thread[-1].id)}
+    if unread_in_thread:
+        _toggle_messages_read_state(db, unread_in_thread, is_read=True)
 
     file_attachments = [a for a in message.attachments if not a.is_inline]
     inline_attachments = [a for a in message.attachments if a.is_inline]
@@ -717,13 +760,16 @@ def view_message(
         "message_detail.html",
         {
             "message": message,
+            "thread": thread,
+            "expanded_ids": expanded_ids,
+            "remote_images": {int(m.id): body_has_remote_images(m.body_html) for m in thread},
             "file_attachments": file_attachments,
             "inline_attachments": inline_attachments,
             "sender_email": sender_email,
             "sender_blocked": sender_blocked,
             "show_images": remote_images_allowed(images),
             "back_url": back_url,
-            "list_position": _position_in_list(db, message, back_url),
+            "list_position": _position_in_list(db, message, back_url, conversation),
             "has_remote_images": body_has_remote_images(message.body_html),
         },
     )

@@ -34,6 +34,7 @@ class FakeMailbox:
         self.seen: set[int] = set()          # 服务器上已读的 UID
         self.modseq: int | None = None       # None 表示不支持 CONDSTORE
         self.changed_since: dict[int, int] = {}  # uid -> 最后一次变化时的 modseq
+        self.thread_ids: dict[int, int] | None = None  # 设置后模拟 Gmail 扩展（X-GM-THRID）
 
     def select_folder(self, folder, readonly=True):
         info = {b"UIDVALIDITY": self.uidvalidity, b"EXISTS": len(self.uids)}
@@ -42,6 +43,8 @@ class FakeMailbox:
         return info
 
     def has_capability(self, cap):
+        if cap == "X-GM-EXT-1":
+            return self.thread_ids is not None
         return cap == "CONDSTORE" and self.modseq is not None
 
     def set_seen(self, uid: int, seen: bool = True):
@@ -74,6 +77,8 @@ class FakeMailbox:
         uids = self._expand(uids)
         if items == ["RFC822.SIZE"]:
             return {u: {b"RFC822.SIZE": 1000} for u in uids}
+        if items == ["X-GM-THRID"]:
+            return {u: {b"X-GM-THRID": self.thread_ids.get(u)} for u in uids if u in self.uids}
         if items == ["FLAGS"]:
             if modifiers:
                 since = int(modifiers[0].split()[1])
@@ -81,10 +86,14 @@ class FakeMailbox:
             return {u: {b"FLAGS": self._flags(u)} for u in uids if u in self.uids}
         if self.fail_fetch:
             raise IMAPClientError("connection reset")
-        return {
+        result = {
             u: {b"RFC822": _raw(u), b"FLAGS": self._flags(u), b"INTERNALDATE": None}
             for u in uids if u in self.uids
         }
+        if "X-GM-THRID" in items:
+            for u, data in result.items():
+                data[b"X-GM-THRID"] = self.thread_ids.get(u)
+        return result
 
     def list_folders(self):
         return []

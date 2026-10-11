@@ -100,6 +100,16 @@
                                 </button>
                             </form>
                         </li>
+                        <li>
+                            <form method="post" action="{{ url_for('messages.conversation_view') }}" data-no-loading>
+                                {{ csrf_input() }}
+                                <input type="hidden" name="on" value="{{ '0' if conversation else '1' }}">
+                                <input type="hidden" name="next" value="{{ self_url }}">
+                                <button type="submit" class="dropdown-item">
+                                    {{ '关闭会话视图' if conversation else '开启会话视图' }}
+                                </button>
+                            </form>
+                        </li>
                         {% if selected_account %}
                         <li>
                             <form action="{{ url_for('sync.all') }}" method="post" data-no-loading>
@@ -177,7 +187,9 @@
         {% set peer = (m.to_addr if m.folder_kind == 'sent' else m.from_addr)|addr_name %}
         {% set acc = sidebar_data(request).account(m.account_id) %}
         {% set atts = attachments_by_message.get(m.id, []) %}
-        <div class="rcm-row gm-row {% if not m.is_read %}is-unread{% endif %} {% if atts %}has-atts{% endif %}"
+        {% set ts = thread_stats.get(m.id) %}
+        {% set row_unread = (not m.is_read) or (ts and ts.unread) %}
+        <div class="rcm-row gm-row {% if row_unread %}is-unread{% endif %} {% if atts %}has-atts{% endif %}"
              data-href="{{ detail_url }}" role="listitem">
             <div class="gm-row-check">
                 <input type="checkbox" class="gm-checkbox rcm-row-check" id="rcm-check-{{ m.id }}"
@@ -194,6 +206,7 @@
                     title="{{ '已加星标' if m.is_starred else '未加星标' }}" aria-label="星标">{{ icon('star', filled=m.is_starred) }}</button>
             <div class="gm-row-sender" title="{{ m.to_addr if m.folder_kind == 'sent' else m.from_addr }}">
                 {% if m.folder_kind == 'sent' %}收件人：{% endif %}{{ peer or '(未知)' }}
+                {%- if ts and ts.count > 1 %} <span class="gm-thread-count">{{ ts.count }}</span>{% endif %}
             </div>
             <div class="gm-row-main">
                 <div class="gm-row-line">
@@ -232,7 +245,7 @@
                 <button type="button" class="gm-icon-btn gm-icon-btn-sm" data-row-action="{{ url_for('messages.batch_delete') }}"
                         data-id="{{ m.id }}" data-confirm="确定删除这封邮件吗？邮件会移到 Gmail 的「已删除邮件」，30 天后由 Gmail 自动清除。"
                         title="删除" aria-label="删除">{{ icon('delete') }}</button>
-                {% if m.is_read %}
+                {% if not row_unread %}
                 <button type="button" class="gm-icon-btn gm-icon-btn-sm" data-row-action="{{ url_for('messages.batch_mark_unread') }}"
                         data-id="{{ m.id }}" title="标记为未读" aria-label="标记为未读">{{ icon('mark_email_unread') }}</button>
                 {% else %}

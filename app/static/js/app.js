@@ -349,3 +349,20 @@ document.addEventListener("click", function (ev) {
         if (window.GM && window.GM.toast) window.GM.toast("星标操作失败，请稍后重试");
     });
 });
+
+// 会话视图：点击邮件头部折叠 / 展开；折叠的邮件第一次展开时才加载正文和图片
+document.addEventListener("click", function (ev) {
+    var head = ev.target.closest && ev.target.closest("[data-msg-toggle]");
+    if (!head) return;
+    if (ev.target.closest("a, button, .dropdown, .dropdown-menu")) return;
+    var msg = head.closest(".gm-msg");
+    if (!msg) return;
+    var expand = !msg.classList.contains("is-expanded");
+    msg.classList.toggle("is-expanded", expand);
+    if (expand) {
+        msg.querySelectorAll("[data-src]").forEach(function (el) {
+            el.setAttribute("src", el.getAttribute("data-src"));
+            el.removeAttribute("data-src");
+        });
+    }
+});

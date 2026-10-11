@@ -86,6 +86,8 @@ class Message(Base):
         Boolean, default=False, server_default="0", nullable=False
     )
     has_attachments: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Gmail 会话 id（X-GM-THRID）：同一会话的往来邮件相同，用于会话视图；非 Gmail 或尚未补齐时为 NULL
+    thread_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
 
@@ -102,6 +104,7 @@ class Message(Base):
         Index("ix_messages_account_kind_date", "account_id", "folder_kind", "date"),
         Index("ix_messages_kind_unread", "folder_kind", "is_read"),
         Index("ix_messages_starred_date", "is_starred", "date"),
+        Index("ix_messages_account_thread", "account_id", "thread_id"),
     )
 
 
