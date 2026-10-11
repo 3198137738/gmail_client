@@ -1,6 +1,7 @@
 """Login/logout routes for the app-wide password gate."""
 from __future__ import annotations
 
+import time
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, Query, Request
@@ -26,6 +27,7 @@ from ..config import (
     WEB_AUTH_PASSWORD,
     WEB_AUTH_PERMANENT_BLOCK_AFTER_FAILURES,
 )
+from ..services import two_factor
 from ..templating import templates
 
 router = APIRouter(tags=["auth"])
@@ -147,8 +149,59 @@ def login_submit(
         return _redirect_to_login(request, next_url=next_url, error=error)
 
     set_auth_error(request, None)
+    if two_factor.is_enabled():
+        # 密码正确，还要输入验证码。此时不清零失败计数：否则知道密码的人可以
+        # 每输错两次验证码就重新输一次密码，无限尝试验证码。
+        request.session.clear()   # 防会话固定
+        request.session[TWO_FACTOR_PENDING_KEY] = int(time.time())
+        request.session[TWO_FACTOR_NEXT_KEY] = next_url
+        return RedirectResponse(url=request.url_for("auth.login_2fa_form"), status_code=303)
     clear_failed_logins(ip_address)
     mark_authenticated(request)
+    return RedirectResponse(url=next_url, status_code=303)
+
+
+# ---- 两步验证（第二步：输入认证器 App 中的 6 位验证码） ------------------------
+TWO_FACTOR_PENDING_KEY = "2fa_pending_at"
+TWO_FACTOR_NEXT_KEY = "2fa_next"
+# 密码通过后必须在这段时间内输入验证码，否则重新输入密码
+TWO_FACTOR_PENDING_SEC = 300
+
+
+def _two_factor_pending(request: Request) -> bool:
+    started = request.session.get(TWO_FACTOR_PENDING_KEY)
+    return isinstance(started, int) and 0 <= time.time() - started <= TWO_FACTOR_PENDING_SEC
+
+
+@router.get("/login/2fa", response_class=HTMLResponse, name="auth.login_2fa_form")
+def login_2fa_form(request: Request):
+    if not _two_factor_pending(request):
+        return RedirectResponse(url=request.url_for("auth.login_form"), status_code=303)
+    return templates.TemplateResponse(
+        request, "login_2fa.html", {"error": pop_auth_error(request)}
+    )
+
+
+@router.post("/login/2fa", name="auth.login_2fa_submit")
+def login_2fa_submit(request: Request, code: str = Form("")):
+    next_url = safe_next_url(request.session.get(TWO_FACTOR_NEXT_KEY))
+    if not _two_factor_pending(request):
+        return _redirect_to_login(request, next_url=next_url, error="验证超时，请重新输入密码")
+    ip_address = get_client_ip(request)
+    if get_login_throttle_status(ip_address).is_blocked:
+        request.session.clear()
+        return _redirect_to_login(request, next_url=next_url, error="该 IP 已被封禁，请稍后再试")
+    if not two_factor.verify_and_consume(code):
+        throttle = register_failed_login(ip_address)
+        if throttle.is_blocked:
+            request.session.clear()
+            return _redirect_to_login(
+                request, next_url=next_url, error=f"连续输错达到 {WEB_AUTH_MAX_FAILURES} 次，该 IP 已被封禁"
+            )
+        set_auth_error(request, f"验证码不正确，还可再尝试 {throttle.remaining_attempts} 次")
+        return RedirectResponse(url=request.url_for("auth.login_2fa_form"), status_code=303)
+    clear_failed_logins(ip_address)
+    mark_authenticated(request)   # 会清空会话（含待验证状态）
     return RedirectResponse(url=next_url, status_code=303)
 
 

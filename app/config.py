@@ -212,6 +212,9 @@ WEB_AUTH_ENABLED = bool(WEB_AUTH_PASSWORD)
 # 没有设置访问密码时默认拒绝启动（.env 丢失或变量名写错时不能把整个邮箱公开出去）。
 # 只在确实不需要密码的环境（例如仅本机访问）显式设置 ALLOW_NO_AUTH=true。
 ALLOW_NO_AUTH = _get_bool("ALLOW_NO_AUTH", False)
+# 手机丢失、无法生成验证码时的应急开关：设为 true 并重启后忽略两步验证（只用密码登录），
+# 登录后到「设置 → 安全」重新绑定，再删掉此变量。
+WEB_AUTH_2FA_RESET = _get_bool("WEB_AUTH_2FA_RESET", False)
 WEB_AUTH_MAX_FAILURES = _get_positive_int("WEB_AUTH_MAX_FAILURES", 3)
 WEB_AUTH_LOCKOUT_MINUTES = _get_positive_int("WEB_AUTH_LOCKOUT_MINUTES", 30)
 WEB_AUTH_PERMANENT_BLOCK_AFTER_FAILURES = _get_bool(

@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}设置 - 安全{% endblock %}
+{% block body_class %}page-settings page-security{% endblock %}
+{% set nav_section = 'settings' %}
+{% set settings_tab = 'security' %}
+{% block content %}
+<div class="gm-settings">
+    {% include "_settings_tabs.html" %}
+
+    {% if flash %}
+    <div class="gm-settings-flash is-{{ flash_level }}" role="status">{{ flash }}</div>
+    {% endif %}
+
+    <section class="gm-settings-row">
+        <div class="gm-settings-label">
+            两步验证：
+            <div class="gm-settings-hint">登录时除了访问密码，还要输入手机认证器 App（Google Authenticator、Microsoft Authenticator 等）生成的 6 位验证码</div>
+        </div>
+        <div class="gm-settings-content">
+            {% if not auth_enabled %}
+                <p class="gm-settings-hint">未设置访问密码（WEB_AUTH_PASSWORD），无法开启两步验证。</p>
+            {% elif reset_active %}
+                <div class="gm-settings-status"><span class="gm-badge is-warn">应急模式</span></div>
+                <p>已设置 <code>WEB_AUTH_2FA_RESET=true</code>，两步验证暂时停用，只需密码即可登录。</p>
+                <p class="gm-settings-hint">请从 <code>.env</code> 中删除该变量并重启；如需重新绑定手机，在删除前先在这里关闭再重新开启。</p>
+            {% elif enabled %}
+                <div class="gm-settings-status"><span class="gm-badge is-ok">已开启</span></div>
+                <form method="post" action="{{ url_for('accounts.security_disable') }}" class="gm-form gm-2fa-form"
+                      data-confirm="确定关闭两步验证吗？关闭后只需密码即可登录。">
+                    {{ csrf_input() }}
+                    <label class="gm-input-group">
+                        <span>输入当前验证码以关闭</span>
+                        <input type="text" name="code" class="gm-input" inputmode="numeric" maxlength="7"
+                               autocomplete="one-time-code" required placeholder="6 位验证码">
+                    </label>
+                    <div><button type="submit" class="gm-btn gm-btn-outlined">关闭两步验证</button></div>
+                </form>
+                <p class="gm-settings-hint">手机丢失时：在服务器 <code>.env</code> 中设置 <code>WEB_AUTH_2FA_RESET=true</code> 并重启，即可只用密码登录。</p>
+            {% elif setup_secret %}
+                <div class="gm-settings-status"><span class="gm-badge is-muted">正在设置</span></div>
+                <ol class="gm-2fa-steps">
+                    <li>在手机认证器 App 中选择「输入设置密钥」（或在手机上 <a href="{{ setup_uri }}">点此直接添加</a>），账号名随意，密钥填写：
+                        <div class="gm-2fa-secret"><code id="gm-2fa-secret">{{ setup_secret }}</code></div>
+                        类型选择「基于时间」。
+                    </li>
+                    <li>输入 App 中显示的 6 位验证码完成绑定：</li>
+                </ol>
+                <form method="post" action="{{ url_for('accounts.security_enable') }}" class="gm-form gm-2fa-form">
+                    {{ csrf_input() }}
+                    <label class="gm-input-group">
+                        <span>验证码</span>
+                        <input type="text" name="code" class="gm-input" inputmode="numeric" maxlength="7"
+                               autocomplete="one-time-code" required autofocus placeholder="6 位验证码">
+                    </label>
+                    <div class="gm-2fa-actions">
+                        <button type="submit" class="gm-btn gm-btn-filled">验证并开启</button>
+                    </div>
+                </form>
+                <form method="post" action="{{ url_for('accounts.security_cancel') }}">
+                    {{ csrf_input() }}
+                    <button type="submit" class="gm-btn gm-btn-text">取消</button>
+                </form>
+            {% else %}
+                <div class="gm-settings-status"><span class="gm-badge is-warn">未开启</span></div>
+                <p class="gm-settings-hint">开启后，即使访问密码泄露，没有你的手机也无法登录。</p>
+                <form method="post" action="{{ url_for('accounts.security_setup') }}">
+                    {{ csrf_input() }}
+                    <button type="submit" class="gm-btn gm-btn-filled">开启两步验证</button>
+                </form>
+            {% endif %}
+        </div>
+    </section>
+</div>
+{% endblock %}

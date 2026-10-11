@@ -289,3 +289,15 @@ class Draft(Base):
     )
 
     account = relationship("Account", back_populates="drafts")
+
+
+class AppSetting(Base):
+    """应用级的键值设置（如两步验证密钥）。敏感值由调用方加密后再存。"""
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=_now, onupdate=_now, nullable=False
+    )

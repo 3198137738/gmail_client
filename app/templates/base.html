@@ -2,7 +2,7 @@
   Gmail 式整体框架：顶栏（菜单 / 品牌 / 搜索 / 设置）+ 左侧导航 + 右侧白色内容卡片。
   登录页、错误页和写邮件悬浮窗（embed）不显示框架。
 #}
-{% set bare = request.url.path == '/login' or status_code is defined or (embed is defined and embed) %}
+{% set bare = request.url.path in ('/login', '/login/2fa') or status_code is defined or (embed is defined and embed) %}
 {# 列表页实时刷新（fetch 带 X-Requested-With: fetch）只需要侧栏和内容区，省去顶栏、脚本等页面框架 #}
 {% set partial = not bare and request.headers.get('x-requested-with') == 'fetch' %}
 {% if partial %}

@@ -35,7 +35,8 @@ AUTH_ERROR_SESSION_KEY = "auth_error"
 LOGIN_PATH = "/login"
 LOGOUT_PATH = "/logout"
 PUBLIC_PATH_PREFIXES = ("/static/", "/healthz")
-PUBLIC_PATHS = {LOGIN_PATH, LOGOUT_PATH}
+LOGIN_2FA_PATH = "/login/2fa"
+PUBLIC_PATHS = {LOGIN_PATH, LOGOUT_PATH, LOGIN_2FA_PATH}
 
 
 @dataclass

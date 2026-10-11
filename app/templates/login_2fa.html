@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}两步验证{% endblock %}
+{% block body_class %}page-auth{% endblock %}
+{% block bare_body %}
+<main class="gm-auth">
+    <div class="gm-auth-card">
+        <div class="gm-auth-intro">
+            <img class="gm-auth-logo" src="{{ url_for('static', path='img/logo.svg') }}" alt="" width="48" height="36">
+            <h1 class="gm-auth-title">两步验证</h1>
+            <p class="gm-auth-sub">打开手机上的认证器 App，输入 Roundcube 的 6 位验证码</p>
+        </div>
+        <form class="gm-auth-form" method="post" action="{{ url_for('auth.login_2fa_submit') }}">
+            {{ csrf_input() }}
+            <div class="gm-field {% if error %}is-error{% endif %}">
+                <input id="code" type="text" name="code" class="gm-field-input" placeholder=" "
+                       inputmode="numeric" pattern="[0-9 ]*" maxlength="7" autocomplete="one-time-code" required autofocus>
+                <label class="gm-field-label" for="code">验证码</label>
+            </div>
+            {% if error %}
+            <div class="gm-field-error">{{ icon('error', filled=True) }}<span>{{ error }}</span></div>
+            {% endif %}
+            <div class="gm-auth-actions">
+                <a class="gm-btn gm-btn-text" href="{{ url_for('auth.login_form') }}">返回</a>
+                <button type="submit" class="gm-btn gm-btn-filled">验证</button>
+            </div>
+        </form>
+    </div>
+    <footer class="gm-auth-footer">
+        <span>简体中文</span>
+        <span>Roundcube 邮件客户端</span>
+    </footer>
+</main>
+{% endblock %}

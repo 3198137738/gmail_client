@@ -336,3 +336,80 @@ def delete_account(request: Request, account_id: int, db: Session = Depends(get_
     db.commit()
     reconcile_idle()
     return RedirectResponse(url=request.url_for("accounts.list"), status_code=303)
+
+
+# ---- 设置 › 安全：两步验证 ---------------------------------------------------
+_SETUP_SECRET_KEY = "2fa_setup_secret"
+_SECURITY_FLASH_KEY = "security_flash"
+
+
+def _security_redirect(request: Request, message: Optional[str] = None, level: str = "ok") -> RedirectResponse:
+    # 提示放在会话里而不是 URL 参数，避免被人构造成钓鱼链接
+    if message:
+        request.session[_SECURITY_FLASH_KEY] = [message, level]
+    return RedirectResponse(url=request.url_for("accounts.security"), status_code=303)
+
+
+@router.get("/security", response_class=HTMLResponse, name="accounts.security")
+def security(request: Request):
+    from .. import totp
+    from ..config import WEB_AUTH_2FA_RESET, WEB_AUTH_ENABLED
+    from ..services import two_factor
+
+    flash = request.session.pop(_SECURITY_FLASH_KEY, None)
+    setup_secret = request.session.get(_SETUP_SECRET_KEY)
+    return templates.TemplateResponse(
+        request,
+        "security.html",
+        {
+            "enabled": two_factor.is_enabled(),
+            "auth_enabled": WEB_AUTH_ENABLED,
+            "reset_active": WEB_AUTH_2FA_RESET,
+            "setup_secret": totp.format_secret(setup_secret) if setup_secret else None,
+            "setup_uri": totp.provisioning_uri(setup_secret, request.url.hostname or "mail") if setup_secret else None,
+            "flash": flash[0] if flash else None,
+            "flash_level": flash[1] if flash else "ok",
+        },
+    )
+
+
+@router.post("/security/setup", name="accounts.security_setup")
+def security_setup(request: Request):
+    """生成新的密钥（暂存在会话中），用户在认证器中添加并输入验证码确认后才生效。"""
+    from .. import totp
+
+    request.session[_SETUP_SECRET_KEY] = totp.generate_secret()
+    return _security_redirect(request)
+
+
+@router.post("/security/enable", name="accounts.security_enable")
+def security_enable(request: Request, code: str = Form("")):
+    from .. import totp
+    from ..services import two_factor
+
+    secret = request.session.get(_SETUP_SECRET_KEY)
+    if not secret:
+        return _security_redirect(request, "请先点击「开启两步验证」生成密钥", "error")
+    if totp.verify(secret, code) is None:
+        return _security_redirect(request, "验证码不正确，请确认手机时间准确后重试", "error")
+    two_factor.enable(secret)
+    request.session.pop(_SETUP_SECRET_KEY, None)
+    return _security_redirect(request, "两步验证已开启，下次登录时需要输入验证码")
+
+
+@router.post("/security/cancel", name="accounts.security_cancel")
+def security_cancel(request: Request):
+    request.session.pop(_SETUP_SECRET_KEY, None)
+    return _security_redirect(request)
+
+
+@router.post("/security/disable", name="accounts.security_disable")
+def security_disable(request: Request, code: str = Form("")):
+    """关闭两步验证需要输入当前验证码，防止他人用一个未退出的会话把它关掉。"""
+    from ..services import two_factor
+
+    if not two_factor.verify_and_consume(code):
+        return _security_redirect(request, "验证码不正确，两步验证仍保持开启", "error")
+    two_factor.disable()
+    return _security_redirect(request, "两步验证已关闭")
+

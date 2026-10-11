@@ -2000,3 +2000,18 @@ body[data-win-state="max"] .gc-icon-restore { display: inline-block !important; 
 /* 草稿：写邮件底栏的保存状态；草稿列表中红色的「草稿」字样（与 Gmail 一致） */
 .gc-draft-status { margin-right: 8px; color: var(--gm-text-3); font-size: 12px; white-space: nowrap; }
 .gm-draft-label { color: #d93025; }
+/* 设置 › 安全：两步验证 */
+.gm-2fa-steps { padding-left: 20px; color: var(--gm-text-2); }
+.gm-2fa-steps li { margin-bottom: 12px; }
+.gm-2fa-secret code {
+    display: inline-block;
+    margin: 8px 0;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: #f1f3f4;
+    color: var(--gm-text);
+    font-size: 16px;
+    letter-spacing: 1px;
+    user-select: all;
+}
+.gm-2fa-form { max-width: 280px; }
