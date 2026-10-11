@@ -215,6 +215,11 @@ ALLOW_NO_AUTH = _get_bool("ALLOW_NO_AUTH", False)
 # 手机丢失、无法生成验证码时的应急开关：设为 true 并重启后忽略两步验证（只用密码登录），
 # 登录后到「设置 → 安全」重新绑定，再删掉此变量。
 WEB_AUTH_2FA_RESET = _get_bool("WEB_AUTH_2FA_RESET", False)
+# 用 Google 账号授权（OAuth2）添加 Gmail 账号，替代应用专用密码。
+# 在 Google Cloud Console 创建「Web 应用」类型的 OAuth 客户端，已获授权的重定向 URI 填
+# https://<你的域名>/accounts/oauth/callback
+GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "").strip()
+GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
 WEB_AUTH_MAX_FAILURES = _get_positive_int("WEB_AUTH_MAX_FAILURES", 3)
 WEB_AUTH_LOCKOUT_MINUTES = _get_positive_int("WEB_AUTH_LOCKOUT_MINUTES", 30)
 WEB_AUTH_PERMANENT_BLOCK_AFTER_FAILURES = _get_bool(

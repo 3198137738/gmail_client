@@ -14,6 +14,7 @@ from typing import Iterable, Optional
 
 from ..config import SMTP_HOST, SMTP_SSL_PORT, SMTP_STARTTLS_PORT, SMTP_TIMEOUT_SEC
 from ..crypto import decrypt_password
+from . import google_oauth
 
 logger = logging.getLogger(__name__)
 
@@ -127,20 +128,33 @@ def send_email(
     )
     recipients = to_list + cc_list + bcc_list
 
+    if google_oauth.is_oauth_secret(password):
+        try:
+            token = google_oauth.access_token_for_secret(password)
+        except google_oauth.OAuthError as exc:
+            raise SMTPSendError(f"Google 授权已失效，请在设置中重新授权：{exc}") from exc
+
+        def authenticate(server) -> None:
+            server.ehlo()
+            server.auth("XOAUTH2", lambda challenge=None: google_oauth.xoauth2_string(from_email, token))
+    else:
+        def authenticate(server) -> None:
+            server.login(from_email, password)
+
     context = ssl.create_default_context()
     try:
         if use_ssl:
             with smtplib.SMTP_SSL(
                 SMTP_HOST, SMTP_SSL_PORT, timeout=SMTP_TIMEOUT_SEC, context=context
             ) as server:
-                server.login(from_email, password)
+                authenticate(server)
                 server.send_message(msg, from_addr=from_email, to_addrs=recipients)
         else:
             with smtplib.SMTP(SMTP_HOST, SMTP_STARTTLS_PORT, timeout=SMTP_TIMEOUT_SEC) as server:
                 server.ehlo()
                 server.starttls(context=context)
                 server.ehlo()
-                server.login(from_email, password)
+                authenticate(server)
                 server.send_message(msg, from_addr=from_email, to_addrs=recipients)
     except smtplib.SMTPAuthenticationError as exc:
         raise SMTPSendError("SMTP authentication failed") from exc

@@ -16,6 +16,7 @@ from imapclient import IMAPClient
 from imapclient.exceptions import IMAPClientError, LoginError
 
 from ..config import DEFAULT_FOLDER, IMAP_HOST, IMAP_PORT, IMAP_TIMEOUT_SEC
+from . import google_oauth
 from .background import submit_bg
 
 logger = logging.getLogger(__name__)
@@ -112,7 +113,15 @@ def _imap_client(email: str, password: str, *, timeout: Optional[int] = None):
             timeout=timeout or IMAP_TIMEOUT_SEC,
         )
         try:
-            client.login(email, password)
+            if google_oauth.is_oauth_secret(password):
+                # OAuth2 授权的账号：用 refresh token 换取访问令牌，以 XOAUTH2 方式登录
+                try:
+                    token = google_oauth.access_token_for_secret(password)
+                except google_oauth.OAuthError as exc:
+                    raise IMAPSyncError(f"Google 授权已失效，请在设置中重新授权：{exc}") from exc
+                client.oauth2_login(email, token)
+            else:
+                client.login(email, password)
         except LoginError as exc:
             raise IMAPSyncError("IMAP authentication failed") from exc
         yield client

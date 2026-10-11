@@ -12,10 +12,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..config import TELEGRAM_CHAT_ID, TELEGRAM_NOTIFY_SENT
-from ..crypto import encrypt_password
+from ..crypto import decrypt_password, encrypt_password
 from ..database import get_db
 from ..models import Account, Message, SyncState
-from ..services import telegram_service
+from ..services import google_oauth, telegram_service
 from ..services.idle_service import reconcile_idle
 from ..services.background import submit_bg
 from ..services.imap_backfill import is_backfilling, sync_then_backfill
@@ -87,8 +87,16 @@ def list_accounts(request: Request, db: Session = Depends(get_db)):
         ).all()
     )
 
-    flash = request.query_params.get("flash")
-    flash_level = request.query_params.get("level", "info")
+    session_flash = request.session.pop(_ACCOUNTS_FLASH_KEY, None)
+    flash = session_flash[0] if session_flash else request.query_params.get("flash")
+    flash_level = session_flash[1] if session_flash else request.query_params.get("level", "info")
+    oauth_accounts = set()
+    for a in accounts:
+        try:
+            if google_oauth.is_oauth_secret(decrypt_password(a.encrypted_password)):
+                oauth_accounts.add(int(a.id))
+        except ValueError:
+            pass
 
     return templates.TemplateResponse(
         request,
@@ -105,6 +113,8 @@ def list_accounts(request: Request, db: Session = Depends(get_db)):
             "telegram_enabled": telegram_service.is_enabled(),
             "telegram_chat_id": TELEGRAM_CHAT_ID,
             "telegram_notify_sent": TELEGRAM_NOTIFY_SENT,
+            "oauth_configured": google_oauth.is_configured(),
+            "oauth_accounts": oauth_accounts,
         },
     )
 
@@ -412,4 +422,79 @@ def security_disable(request: Request, code: str = Form("")):
         return _security_redirect(request, "验证码不正确，两步验证仍保持开启", "error")
     two_factor.disable()
     return _security_redirect(request, "两步验证已关闭")
+
+
+# ---- 用 Google 账号授权添加（OAuth2） ------------------------------------------
+_ACCOUNTS_FLASH_KEY = "accounts_flash"
+_OAUTH_STATE_KEY = "oauth_state"
+_OAUTH_VERIFIER_KEY = "oauth_verifier"
+
+
+def _accounts_redirect(request: Request, message: str, level: str = "success") -> RedirectResponse:
+    # 提示放在会话里而不是 URL 参数，避免被人构造成钓鱼链接
+    request.session[_ACCOUNTS_FLASH_KEY] = [message, level]
+    return RedirectResponse(url=request.url_for("accounts.list"), status_code=303)
+
+
+def _oauth_redirect_uri(request: Request) -> str:
+    # 必须与 Google Cloud Console 中登记的「已获授权的重定向 URI」完全一致
+    return str(request.url_for("accounts.oauth_callback"))
+
+
+# 用 GET 链接而不是表单：页面 CSP 的 form-action 'self' 会拦截「提交表单后重定向到 Google」；
+# 发起授权只是在会话中记下随机 state，回调时校验，无 CSRF 风险。
+@router.get("/oauth/start", name="accounts.oauth_start")
+def oauth_start(request: Request, login_hint: Optional[str] = None):
+    if not google_oauth.is_configured():
+        return _accounts_redirect(request, "尚未配置 Google OAuth 客户端（GOOGLE_OAUTH_CLIENT_ID / SECRET）", "danger")
+    import secrets as _secrets
+
+    state = _secrets.token_urlsafe(32)
+    verifier, challenge = google_oauth.new_pkce()
+    request.session[_OAUTH_STATE_KEY] = state
+    request.session[_OAUTH_VERIFIER_KEY] = verifier
+    url = google_oauth.authorize_url(
+        _oauth_redirect_uri(request), state, challenge, (login_hint or "").strip() or None
+    )
+    return RedirectResponse(url=url, status_code=303)
+
+
+@router.get("/oauth/callback", name="accounts.oauth_callback")
+def oauth_callback(
+    request: Request,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    import secrets as _secrets
+
+    expected = request.session.pop(_OAUTH_STATE_KEY, None)
+    verifier = request.session.pop(_OAUTH_VERIFIER_KEY, None)
+    if error:
+        return _accounts_redirect(request, f"Google 授权未完成：{error}", "warning")
+    if not expected or not state or not verifier or not _secrets.compare_digest(expected, state):
+        # state 不匹配：可能是伪造的回调（CSRF），或者授权页面停留太久会话已变
+        return _accounts_redirect(request, "授权请求已失效，请重新点击「使用 Google 账号授权」", "danger")
+    try:
+        email, refresh_token = google_oauth.exchange_code(code or "", _oauth_redirect_uri(request), verifier)
+    except google_oauth.OAuthError as exc:
+        logger.warning("OAuth code exchange failed: %s", exc)
+        return _accounts_redirect(request, f"授权失败：{exc}", "danger")
+
+    secret = encrypt_password(google_oauth.make_secret(refresh_token))
+    account = db.execute(select(Account).where(func.lower(Account.email) == email)).scalar_one_or_none()
+    if account is None:
+        account = Account(email=email, encrypted_password=secret, enabled=True)
+        db.add(account)
+        message = f"已通过 Google 授权添加 {email}，正在同步邮件"
+    else:
+        account.encrypted_password = secret
+        account.enabled = True
+        message = f"{email} 已改为使用 Google 授权登录"
+    db.commit()
+    logger.info("OAuth account linked email=%s account_id=%s", email, account.id)
+    reconcile_idle()   # 凭据变化：IDLE 连接用新的方式重连
+    submit_bg(sync_then_backfill, int(account.id))
+    return _accounts_redirect(request, message)
 

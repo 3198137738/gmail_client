@@ -2041,3 +2041,6 @@ body[data-win-state="max"] .gc-icon-restore { display: inline-block !important; 
 .gm-label-chip.is-label:hover { background: #dadce0; }
 .gm-label-menu { min-width: 220px; max-height: 360px; overflow-y: auto; }
 .gm-label-menu-actions { display: flex; justify-content: flex-end; padding: 0 8px; }
+/* 设置：Google 授权添加账号 */
+.gm-oauth-box { margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--gm-divider); }
+.gm-oauth-form { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }

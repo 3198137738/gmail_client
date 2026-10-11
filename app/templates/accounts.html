@@ -55,6 +55,8 @@
                         </div>
                         <div class="gm-acct-badges">
                             {% if not a.enabled %}<span class="gm-badge is-muted">已停用</span>{% endif %}
+                            {% if a.id in oauth_accounts %}<span class="gm-badge is-ok" title="通过 Google 账号授权登录（OAuth2）">Google 授权</span>
+                            {% else %}<span class="gm-badge" title="使用应用专用密码登录">应用专用密码</span>{% endif %}
                             {% if busy.get(a.id) %}<span class="gm-badge is-info"><span class="gm-spinner"></span>同步中</span>{% endif %}
                             {% if backfilling.get(a.id) %}
                             <span class="gm-badge is-warn" title="正在后台同步更早的历史邮件，刷新页面查看进度"><span class="gm-spinner"></span>同步历史邮件中</span>
@@ -137,6 +139,19 @@
             </div>
         </div>
         <div class="gm-settings-content">
+            <div class="gm-oauth-box">
+                {% if oauth_configured %}
+                <div class="gm-oauth-form">
+                    <a class="gm-btn gm-btn-filled" href="{{ url_for('accounts.oauth_start') }}">使用 Google 账号授权添加（推荐）</a>
+                    <span class="gm-settings-hint">无需应用专用密码；已有的账号再授权一次即可改为授权登录，随时可在 Google 账号中撤销。</span>
+                </div>
+                {% else %}
+                <p class="gm-settings-hint">
+                    想用 Google 账号授权（OAuth2）代替应用专用密码？在 <code>.env</code> 中设置
+                    <code>GOOGLE_OAUTH_CLIENT_ID</code> 与 <code>GOOGLE_OAUTH_CLIENT_SECRET</code> 后重启。
+                </p>
+                {% endif %}
+            </div>
             <div class="gm-subtabs" role="tablist">
                 <button class="gm-subtab active" data-bs-toggle="tab" data-bs-target="#tab-single" type="button" role="tab">单个添加</button>
                 <button class="gm-subtab" data-bs-toggle="tab" data-bs-target="#tab-batch" type="button" role="tab">批量添加</button>
