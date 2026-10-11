@@ -334,4 +334,9 @@ async def require_app_password(request: Request, call_next):
 
 
 def password_matches(candidate: str, expected: str) -> bool:
-    return bool(candidate) and bool(expected) and secrets.compare_digest(candidate, expected)
+    # compare_digest 对 str 只接受 ASCII，含中文等字符时会抛 TypeError（登录页 500），统一按 UTF-8 字节比较
+    return (
+        bool(candidate)
+        and bool(expected)
+        and secrets.compare_digest(candidate.encode("utf-8"), expected.encode("utf-8"))
+    )

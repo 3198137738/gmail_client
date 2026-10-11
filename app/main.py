@@ -13,6 +13,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from .auth import require_app_password
 from .config import (
+    ALLOW_NO_AUTH,
     BACKGROUND_MAX_WORKERS,
     IMAP_FETCH_BATCH_SIZE,
     INITIAL_SYNC_LIMIT,
@@ -47,8 +48,18 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 
+def check_auth_configured(enabled: bool = WEB_AUTH_ENABLED, allow_no_auth: bool = ALLOW_NO_AUTH) -> None:
+    """没有访问密码时拒绝启动，除非显式允许（fail-closed）。"""
+    if not enabled and not allow_no_auth:
+        raise RuntimeError(
+            "WEB_AUTH_PASSWORD 未设置：拒绝启动，避免邮箱界面对外公开。"
+            "请在 .env 中设置 WEB_AUTH_PASSWORD；确实不需要密码时设置 ALLOW_NO_AUTH=true。"
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    check_auth_configured()
     init_db()
     start_backfill()
     start_scheduler()
@@ -66,7 +77,7 @@ async def lifespan(app: FastAPI):
     if WEB_AUTH_ENABLED:
         logger.info("Web password protection is enabled")
     else:
-        logger.warning("WEB_AUTH_PASSWORD is not set; the web UI is publicly accessible")
+        logger.warning("WEB_AUTH_PASSWORD is not set and ALLOW_NO_AUTH=true; the web UI is publicly accessible")
     logger.info("Application startup complete")
     try:
         yield

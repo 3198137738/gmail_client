@@ -36,3 +36,25 @@ def test_cookie_flags(client):
     assert "httponly" in cookie
     assert "samesite=lax" in cookie
     assert "max-age=" in cookie
+
+
+def test_password_with_non_ascii_characters(client, monkeypatch):
+    """含中文的密码：之前 compare_digest(str, str) 抛 TypeError，登录页 500。"""
+    import app.routes.auth as auth_routes
+
+    assert auth.password_matches("邮箱密码123", "邮箱密码123")
+    assert not auth.password_matches("邮箱密码124", "邮箱密码123")
+    assert not auth.password_matches("abc", "邮箱密码123")
+    monkeypatch.setattr(auth_routes, "WEB_AUTH_PASSWORD", "邮箱密码123")
+    login(client, password="邮箱密码123")
+
+
+def test_refuses_to_start_without_password():
+    import pytest
+
+    from app.main import check_auth_configured
+
+    with pytest.raises(RuntimeError, match="WEB_AUTH_PASSWORD"):
+        check_auth_configured(enabled=False, allow_no_auth=False)
+    check_auth_configured(enabled=False, allow_no_auth=True)   # 显式允许
+    check_auth_configured(enabled=True, allow_no_auth=False)
