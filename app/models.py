@@ -80,6 +80,10 @@ class Message(Base):
     body_html: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     is_read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # 星标，对应 IMAP 的 \Flagged（Gmail 的「已加星标」）
+    is_starred: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
     has_attachments: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
@@ -96,6 +100,7 @@ class Message(Base):
         # 选中某个账号时的列表/游标分页：账号 + 文件夹 + 日期
         Index("ix_messages_account_kind_date", "account_id", "folder_kind", "date"),
         Index("ix_messages_kind_unread", "folder_kind", "is_read"),
+        Index("ix_messages_starred_date", "is_starred", "date"),
     )
 
 

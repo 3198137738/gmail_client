@@ -188,6 +188,10 @@
                     {{ icon('check', cls='gm-avatar-tick') }}
                 </label>
             </div>
+            <button type="button" class="gm-row-star {% if m.is_starred %}is-starred{% endif %}"
+                    data-star-url="{{ url_for('messages.star', message_id=m.id) }}"
+                    aria-pressed="{{ 'true' if m.is_starred else 'false' }}"
+                    title="{{ '已加星标' if m.is_starred else '未加星标' }}" aria-label="星标">{{ icon('star', filled=m.is_starred) }}</button>
             <div class="gm-row-sender" title="{{ m.to_addr if m.folder_kind == 'sent' else m.from_addr }}">
                 {% if m.folder_kind == 'sent' %}收件人：{% endif %}{{ peer or '(未知)' }}
             </div>
@@ -248,6 +252,9 @@
             {% elif not accounts %}
                 <div class="gm-empty-title">还没有添加邮箱账号</div>
                 <div class="gm-empty-hint">先到 <a href="{{ url_for('accounts.list') }}">设置</a> 添加 Gmail 账号</div>
+            {% elif kind == 'starred' %}
+                <div class="gm-empty-title">没有已加星标的邮件</div>
+                <div class="gm-empty-hint">点邮件旁边的星形图标即可加星标，方便以后查找</div>
             {% elif kind == 'inbox' %}
                 <div class="gm-empty-title">收件箱里没有邮件</div>
                 <div class="gm-empty-hint">点工具栏的刷新按钮拉取最新邮件</div>

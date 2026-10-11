@@ -33,6 +33,10 @@
                 <input type="hidden" name="next" value="{{ back_url }}">
                 <button type="submit" class="gm-icon-btn" title="标记为未读" aria-label="标记为未读">{{ icon('mark_email_unread') }}</button>
             </form>
+            <button type="button" class="gm-icon-btn gm-star-btn {% if message.is_starred %}is-starred{% endif %}"
+                    data-star-url="{{ url_for('messages.star', message_id=message.id) }}"
+                    aria-pressed="{{ 'true' if message.is_starred else 'false' }}"
+                    title="{{ '已加星标' if message.is_starred else '未加星标' }}" aria-label="星标">{{ icon('star', filled=message.is_starred) }}</button>
             {% if sender_email and message.folder_kind != 'sent' %}
                 {% if sender_blocked %}
                 <a class="gm-icon-btn" href="{{ url_for('messages.blocked_senders').include_query_params(account_id=message.account_id, q=sender_email) }}"

@@ -25,6 +25,7 @@ from .imap_service import _normalize_sender_email
 logger = logging.getLogger(__name__)
 
 SEEN_FLAG = b"\\Seen"
+FLAGGED_FLAG = b"\\Flagged"
 
 
 def _cleanup_dirs_async(base_dir_str: str, dirs: list[str]) -> None:
@@ -100,6 +101,24 @@ def toggle_messages_read_state(
     for account_id, folder_uids in grouped.items():
         for folder, uids in folder_uids.items():
             outbox.enqueue(db, account_id, folder, op, uids, SEEN_FLAG.decode())
+    db.commit()
+    outbox.kick(grouped)
+    return len(changed)
+
+
+def set_starred(db: Session, messages: list[Message], starred: bool) -> int:
+    """加 / 取消星标：本地立即生效，``\\Flagged`` 标记经 outbox 推送到 Gmail。"""
+    changed = [m for m in messages if bool(m.is_starred) != starred]
+    if not changed:
+        return 0
+    grouped: dict[int, dict[str, list[int]]] = defaultdict(lambda: defaultdict(list))
+    for message in changed:
+        message.is_starred = starred
+        grouped[int(message.account_id)][message.folder].append(int(message.uid))
+    op = outbox.OP_ADD_FLAGS if starred else outbox.OP_REMOVE_FLAGS
+    for account_id, folder_uids in grouped.items():
+        for folder, uids in folder_uids.items():
+            outbox.enqueue(db, account_id, folder, op, uids, FLAGGED_FLAG.decode())
     db.commit()
     outbox.kick(grouped)
     return len(changed)

@@ -96,7 +96,11 @@ def kick(account_ids: Iterable[int]) -> None:
 
 
 def pending_uids(
-    db: Session, account_id: int, folder: str, ops: Optional[Iterable[str]] = None
+    db: Session,
+    account_id: int,
+    folder: str,
+    ops: Optional[Iterable[str]] = None,
+    arg: Optional[str] = None,
 ) -> set[int]:
     """该文件夹中还有远程操作在排队的 UID。
 
@@ -108,6 +112,8 @@ def pending_uids(
     )
     if ops is not None:
         stmt = stmt.where(PendingOp.op.in_(list(ops)))
+    if arg is not None:
+        stmt = stmt.where(PendingOp.arg == arg)
     result: set[int] = set()
     for raw in db.execute(stmt).scalars():
         result.update(_decode_uids(raw))

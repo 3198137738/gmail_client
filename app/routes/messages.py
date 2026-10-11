@@ -9,7 +9,7 @@ from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session, defer, selectinload
 
@@ -28,6 +28,7 @@ from ..services.imap_client import is_account_busy
 from ..services import outbox
 from ..services.message_actions import (
     delete_local_messages as _delete_local_messages,
+    set_starred as _set_starred,
     toggle_messages_read_state as _toggle_messages_read_state,
 )
 from ..templating import templates
@@ -38,7 +39,7 @@ router = APIRouter(prefix="/messages", tags=["messages"])
 
 DEFAULT_PAGE_SIZE = 25
 PAGE_SIZE_OPTIONS = (25, 50, 100)
-KIND_LABELS = {"inbox": "收件箱", "sent": "已发送", "junk": "垃圾邮件", "all": "全部邮件"}
+KIND_LABELS = {"inbox": "收件箱", "sent": "已发送", "junk": "垃圾邮件", "all": "全部邮件", "starred": "已加星标"}
 SEEN_FLAG = b"\\Seen"
 
 # Cookie name + lifetime for persisting the user's account filter choice.
@@ -87,6 +88,9 @@ def _kind_condition(kind: str):
     """按文件夹类型过滤；与 Gmail 一致，「全部邮件」不包含垃圾邮件。"""
     if kind == "all":
         return Message.folder_kind != "junk"
+    if kind == "starred":
+        # 与 Gmail 一致：垃圾邮件中的星标邮件不显示在「已加星标」里
+        return (Message.is_starred.is_(True)) & (Message.folder_kind != "junk")
     return Message.folder_kind == kind
 
 
@@ -385,6 +389,27 @@ def nav_partial(
         "_sidebar.html",
         {"kind": _normalize_kind(kind), "current_account_id": selected_account_id, "unread_only": unread},
     )
+
+
+@router.post("/{message_id}/star", name="messages.star")
+def toggle_star(
+    request: Request,
+    message_id: int,
+    starred: Optional[str] = Form(None),
+    next: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    """加 / 取消星标。``starred`` 为空时切换。页面脚本（fetch）调用时返回 JSON。"""
+    message = db.get(Message, message_id)
+    if message is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    value = (starred in ("1", "true", "on")) if starred is not None else not message.is_starred
+    _set_starred(db, [message], value)
+    if request.headers.get("x-requested-with") == "fetch":
+        return JSONResponse({"id": message_id, "starred": value})
+    if is_safe_redirect(next):
+        return RedirectResponse(url=next, status_code=303)
+    return RedirectResponse(url=request.url_for("messages.detail", message_id=message_id), status_code=303)
 
 
 @router.post("/mark-all-read", name="messages.mark_all_read")

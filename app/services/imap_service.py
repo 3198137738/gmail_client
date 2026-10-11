@@ -101,13 +101,22 @@ def _get_or_create_sync_state(db: Session, account_id: int, folder: str) -> Sync
     return state
 
 
-def _is_seen(flags) -> bool:
-    if not flags:
-        return False
-    for flag in flags:
-        if flag in (b"\\Seen", "\\Seen"):
+SEEN_FLAG = "\\Seen"
+FLAGGED_FLAG = "\\Flagged"
+
+
+def _has_flag(flags, name: str) -> bool:
+    """IMAP 标记比较（不区分大小写；IMAPClient 返回 bytes，测试替身可能是 str）。"""
+    wanted = name.lower()
+    for flag in flags or ():
+        text = flag.decode("ascii", "replace") if isinstance(flag, bytes) else str(flag)
+        if text.lower() == wanted:
             return True
     return False
+
+
+def _is_seen(flags) -> bool:
+    return _has_flag(flags, SEEN_FLAG)
 
 
 def _record_error(account_id: int, folder: str, error: str) -> None:
@@ -212,6 +221,7 @@ def _parse_fetched_messages(
                 "body_text": parsed.body_text,
                 "body_html": parsed.body_html,
                 "is_read": bool(_is_seen(data.get(b"FLAGS") or ())),
+                "is_starred": _has_flag(data.get(b"FLAGS"), FLAGGED_FLAG),
                 "has_attachments": parsed.has_attachments,
                 "attachments": parsed.attachments,
             }
@@ -240,6 +250,7 @@ def _persist_parsed_messages(records: list[dict]) -> int:
                 body_text=record["body_text"],
                 body_html=record["body_html"],
                 is_read=record["is_read"],
+                is_starred=record.get("is_starred", False),
                 has_attachments=record["has_attachments"],
             )
             db.add(message)
@@ -558,7 +569,7 @@ def _highest_modseq(client: IMAPClient, folder: str, select_info: dict) -> Optio
 def _apply_remote_flags(
     client: IMAPClient, account_id: int, folder: str, last_uid: int, since: Optional[int]
 ) -> int:
-    """把服务器上的已读状态同步到本地，返回改动的邮件数。
+    """把服务器上的已读状态和星标同步到本地，返回改动的邮件数。
 
     ``since`` 为上次的 HIGHESTMODSEQ 时只取之后变化过的邮件（CONDSTORE），
     为 None 时取全部（服务器不支持 CONDSTORE 时的兜底）。
@@ -566,32 +577,32 @@ def _apply_remote_flags(
     """
     modifiers = [f"CHANGEDSINCE {since}"] if since else None
     fetched = client.fetch(f"1:{last_uid}", ["FLAGS"], modifiers=modifiers)
-    seen: list[int] = []
-    unseen: list[int] = []
-    for uid, data in fetched.items():
-        uid = int(uid)
-        if uid > last_uid:
-            continue
-        (seen if _is_seen(data.get(b"FLAGS")) else unseen).append(uid)
-    if not seen and not unseen:
+    flags_by_uid = {
+        int(uid): data.get(b"FLAGS") for uid, data in fetched.items() if int(uid) <= last_uid
+    }
+    if not flags_by_uid:
         return 0
     changed = 0
     with session_scope() as db:
-        skip = outbox.pending_uids(
-            db, account_id, folder, ops=(outbox.OP_ADD_FLAGS, outbox.OP_REMOVE_FLAGS)
-        )
-        for value, uids in ((True, seen), (False, unseen)):
-            for chunk in _chunks(sorted(set(uids) - skip)):
-                changed += db.execute(
-                    update(Message)
-                    .where(
-                        Message.account_id == account_id,
-                        Message.folder == folder,
-                        Message.uid.in_(chunk),
-                        Message.is_read.is_not(value),
-                    )
-                    .values(is_read=value)
-                ).rowcount or 0
+        for column, flag in ((Message.is_read, SEEN_FLAG), (Message.is_starred, FLAGGED_FLAG)):
+            skip = outbox.pending_uids(
+                db, account_id, folder,
+                ops=(outbox.OP_ADD_FLAGS, outbox.OP_REMOVE_FLAGS), arg=flag,
+            )
+            on = sorted(u for u, f in flags_by_uid.items() if _has_flag(f, flag) and u not in skip)
+            off = sorted(u for u, f in flags_by_uid.items() if not _has_flag(f, flag) and u not in skip)
+            for value, uids in ((True, on), (False, off)):
+                for chunk in _chunks(uids):
+                    changed += db.execute(
+                        update(Message)
+                        .where(
+                            Message.account_id == account_id,
+                            Message.folder == folder,
+                            Message.uid.in_(chunk),
+                            column.is_not(value),
+                        )
+                        .values({column: value})
+                    ).rowcount or 0
     return changed
 
 

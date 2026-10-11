@@ -54,6 +54,7 @@ send
 settings
 shield_person
 stacks
+star
 strikethrough_s
 sync
 table_chart

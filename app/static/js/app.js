@@ -278,3 +278,37 @@ document.addEventListener("click", function (ev) {
     // 写邮件窗口打开时，页面不要自动整页刷新（会丢失正在编写的内容）
     window.GM.composeOpen = function () { return !!win; };
 })();
+
+// 星标按钮（列表行、邮件详情）：先在界面上切换，再后台提交；失败时恢复
+document.addEventListener("click", function (ev) {
+    var btn = ev.target.closest && ev.target.closest("[data-star-url]");
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    var tokenInput = document.querySelector('input[name="csrf_token"]');
+    var starred = !btn.classList.contains("is-starred");
+    function apply(value) {
+        btn.classList.toggle("is-starred", value);
+        btn.setAttribute("aria-pressed", value ? "true" : "false");
+        btn.title = value ? "已加星标" : "未加星标";
+        var iconEl = btn.querySelector(".ms");
+        if (iconEl) iconEl.classList.toggle("ms-fill", value);
+    }
+    apply(starred);
+    var body = new FormData();
+    body.append("starred", starred ? "1" : "0");
+    fetch(btn.getAttribute("data-star-url"), {
+        method: "POST",
+        body: body,
+        credentials: "same-origin",
+        headers: {
+            "X-Requested-With": "fetch",
+            "X-CSRF-Token": tokenInput ? tokenInput.value : "",
+        },
+    }).then(function (resp) {
+        if (!resp.ok) throw new Error("bad status");
+    }).catch(function () {
+        apply(!starred);
+        if (window.GM && window.GM.toast) window.GM.toast("星标操作失败，请稍后重试");
+    });
+});
