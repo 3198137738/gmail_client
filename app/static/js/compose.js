@@ -13,9 +13,14 @@
     var sendBtn = document.getElementById("gc-send");
     var suggestBox = document.getElementById("gc-suggest");
     var submitting = false;
-    var dirty = false;
+    var dirty = false;      // 填写过内容（舍弃时需要确认）
+    var unsaved = false;    // 有尚未保存到草稿的修改
 
-    function markDirty() { dirty = true; }
+    function markDirty() {
+        dirty = true;
+        unsaved = true;
+        scheduleDraftSave();
+    }
 
     function showError(msg) {
         errorText.textContent = msg;
@@ -506,14 +511,7 @@
             showError("有无效的邮箱地址（红色标记），请修改后再发送。");
             return;
         }
-        if (plainToggle.checked) {
-            document.getElementById("gc-body-text").value = plain.value;
-            document.getElementById("gc-body-html").value = "";
-        } else {
-            document.getElementById("gc-body-text").value = editor.innerText;
-            document.getElementById("gc-body-html").value =
-                isEditorEmpty() ? "" : '<div dir="ltr">' + editor.innerHTML + "</div>";
-        }
+        fillBodyFields();
         if (data.undo_seconds > 0 && !confirmedSend) {
             // 撤销发送：先不提交，等待几秒（期间可撤销）后再提交
             ev.preventDefault();
@@ -524,6 +522,84 @@
         sendBtn.disabled = true;
         sendBtn.querySelector(".gc-send-label").textContent = "正在发送…";
     });
+
+    function fillBodyFields() {
+        if (plainToggle.checked) {
+            document.getElementById("gc-body-text").value = plain.value;
+            document.getElementById("gc-body-html").value = "";
+        } else {
+            document.getElementById("gc-body-text").value = editor.innerText;
+            document.getElementById("gc-body-html").value =
+                isEditorEmpty() ? "" : '<div dir="ltr">' + editor.innerHTML + "</div>";
+        }
+    }
+
+    // ---------------- 草稿自动保存 ----------------
+    // 停止输入 2 秒后保存到服务器（不含附件）；关闭窗口时立即保存。发送成功后服务端删除草稿。
+    var draftIdInput = document.getElementById("gc-draft-id");
+    var draftStatus = document.getElementById("gc-draft-status");
+    var saveTimer = null;
+    var savingPromise = null;
+
+    function scheduleDraftSave() {
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(function () { saveDraft(false); }, 2000);
+    }
+
+    function csrfToken() {
+        var input = form.querySelector('input[name="csrf_token"]');
+        return input ? input.value : "";
+    }
+
+    function saveDraft(keepalive) {
+        clearTimeout(saveTimer);
+        if (!unsaved || submitting || pendingSend || !data.draft_url) {
+            return savingPromise || Promise.resolve(true);
+        }
+        // 上一次保存还没回来时排在它后面，保证用的是最新的草稿 id
+        var previous = savingPromise || Promise.resolve(true);
+        var mine = previous.then(function () {
+            unsaved = false;
+            fillBodyFields();
+            var body = new FormData(form);
+            body.delete("attachments");
+            body.delete("embed");
+            if (draftStatus) draftStatus.textContent = "正在保存…";
+            return fetch(data.draft_url, {
+                method: "POST",
+                body: body,
+                credentials: "same-origin",
+                keepalive: !!keepalive,
+                headers: { "X-Requested-With": "fetch", "X-CSRF-Token": csrfToken() },
+            }).then(function (resp) {
+                if (!resp.ok) throw new Error("bad status");
+                return resp.json();
+            }).then(function (result) {
+                draftIdInput.value = result.id || "";
+                if (draftStatus) draftStatus.textContent = result.id ? "草稿已保存 " + result.saved_at : "";
+                return true;
+            }).catch(function () {
+                unsaved = true;
+                if (draftStatus) draftStatus.textContent = "草稿保存失败";
+                return false;
+            });
+        });
+        savingPromise = mine;
+        mine.then(function () { if (savingPromise === mine) savingPromise = null; });
+        return mine;
+    }
+
+    function deleteDraft() {
+        var id = draftIdInput.value;
+        draftIdInput.value = "";
+        if (!id) return Promise.resolve();
+        return fetch(data.draft_url + "/" + encodeURIComponent(id) + "/delete", {
+            method: "POST",
+            credentials: "same-origin",
+            keepalive: true,
+            headers: { "X-Requested-With": "fetch", "X-CSRF-Token": csrfToken() },
+        }).catch(function () { /* 留在草稿列表里，用户可以手动删除 */ });
+    }
 
     // ---------------- 撤销发送 ----------------
     // 悬浮窗：通知父页面隐藏窗口并显示「正在发送… 撤销」，由父页面计时，
@@ -541,18 +617,23 @@
         submitting = true;
         sendBtn.disabled = true;
         sendBtn.querySelector(".gc-send-label").textContent = "正在发送…";
-        form.submit();   // 不再触发 submit 事件，字段已在上面填好
+        // 等进行中的草稿保存结束（拿到草稿 id），服务端发送成功后才能把它删掉
+        (savingPromise || Promise.resolve()).then(function () {
+            form.submit();   // 不再触发 submit 事件，字段已在上面填好
+        });
     }
 
     function undoSend() {
         if (!pendingSend) return;
         pendingSend = false;
         clearTimeout(pendingTimer);
+        if (unsaved) scheduleDraftSave();
         sendBtn.disabled = false;
         sendBtn.querySelector(".gc-send-label").textContent = "发送";
     }
 
     function startPendingSend() {
+        clearTimeout(saveTimer);
         pendingSend = true;
         sendBtn.disabled = true;
         sendBtn.querySelector(".gc-send-label").textContent = "等待发送…";
@@ -619,29 +700,39 @@
     // 供父页面查询：关闭窗口 / 离开页面前是否需要确认
     window.GCCompose = {
         // 等待发送（撤销期内）也算未完成：此时离开页面邮件不会发出
-        isDirty: function () { return (dirty || pendingSend) && !submitting; },
+        isDirty: function () { return (unsaved || pendingSend) && !submitting; },
     };
 
-    // 舍弃 / 离开页面前确认，避免误丢内容。
+    function leave(href) {
+        if (isEmbed) tellParent("close");
+        else window.location.href = href || data.list_url || "/messages/";
+    }
+
+    // 关闭（×）：与 Gmail 一致，先保存草稿再关闭；舍弃（垃圾桶）：确认后删除草稿。
     form.querySelectorAll("[data-discard]").forEach(function (el) {
         el.addEventListener("click", function (ev) {
             ev.stopPropagation();
-            if (dirty && !window.confirm("舍弃这封邮件？已填写的内容将不会保存。")) {
-                ev.preventDefault();
+            ev.preventDefault();
+            var href = el.tagName === "A" ? el.getAttribute("href") : null;
+            if (el.hasAttribute("data-discard-confirm")) {
+                if ((dirty || draftIdInput.value) && !window.confirm("舍弃这封草稿？已填写的内容将被删除。")) return;
+                clearTimeout(saveTimer);
+                dirty = unsaved = false;
+                deleteDraft().then(function () { leave(href); });
                 return;
             }
-            dirty = false;
-            if (isEmbed) {
-                ev.preventDefault();
-                tellParent("close");
-            } else if (el.tagName === "BUTTON") {
-                window.location.href = data.list_url || "/messages/";
-            }
+            saveDraft(true).then(function (ok) {
+                if (!ok && !window.confirm("草稿保存失败，仍要关闭吗？未保存的内容会丢失。")) return;
+                dirty = unsaved = false;
+                leave(href);
+            });
         });
     });
     if (isEmbed) tellParent("ready");   // 发送失败后重新显示的写邮件页：让父页面恢复窗口
+    // 页面被关闭 / 跳转时尽量把最后的修改存进草稿（keepalive 请求在页面卸载后仍会发出）
+    window.addEventListener("pagehide", function () { if (unsaved) saveDraft(true); });
     window.addEventListener("beforeunload", function (ev) {
-        if ((dirty || pendingSend) && !submitting && !isEmbed) {
+        if ((unsaved || pendingSend) && !submitting && !isEmbed) {
             ev.preventDefault();
             ev.returnValue = "";
         }

@@ -51,6 +51,7 @@
         {% endif %}
         {{ nav_item('/messages/?kind=all&account_id=' ~ acc_param ~ unread_param, 'mail', '所有邮件',
                     0, active_kind == 'all' and not active_section) }}
+        {{ nav_item(url_for('compose.drafts'), 'draft', '草稿', nav.drafts, active_section == 'drafts') }}
         {{ nav_item(url_for('compose.sent_list'), 'outbox', '发件记录', 0, active_section == 'sent_log') }}
         {{ nav_item(url_for('messages.blocked_senders'), 'block', '屏蔽的发件人', 0, active_section == 'blocked') }}
     </nav>

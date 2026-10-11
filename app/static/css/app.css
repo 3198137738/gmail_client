@@ -47,7 +47,7 @@
     font-weight: 400;
     /* 图标字体未加载完时不显示文字（否则会闪现 "inbox" 之类的图标名） */
     font-display: block;
-    src: url("../fonts/material-symbols-a4a0f83921.woff2") format("woff2");
+    src: url("../fonts/material-symbols-2a5120d78f.woff2") format("woff2");
 }
 
 /* ---- 设计变量（Gmail Material 3 浅色主题） ---------------------------- */
@@ -1997,3 +1997,6 @@ body[data-win-state="max"] .gc-icon-restore { display: inline-block !important; 
 }
 /* 撤销发送期间隐藏写邮件窗口（iframe 保留，撤销时原样恢复） */
 .gm-compose-win[data-state="sending"] { display: none; }
+/* 草稿：写邮件底栏的保存状态；草稿列表中红色的「草稿」字样（与 Gmail 一致） */
+.gc-draft-status { margin-right: 8px; color: var(--gm-text-3); font-size: 12px; white-space: nowrap; }
+.gm-draft-label { color: #d93025; }

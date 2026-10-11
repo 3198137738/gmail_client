@@ -20,6 +20,7 @@
       enctype="multipart/form-data" novalidate data-no-loading>
     {{ csrf_input() }}
     {% if is_embed %}<input type="hidden" name="embed" value="1">{% endif %}
+    <input type="hidden" name="draft_id" id="gc-draft-id" value="{{ pf.get('draft_id', '') }}">
     <input type="hidden" name="in_reply_to" value="{{ pf.get('in_reply_to', '') }}">
     <input type="hidden" name="references" value="{{ pf.get('references', '') }}">
     {% if is_forward %}
@@ -161,6 +162,7 @@
             </div>
         </div>
         <span class="gc-foot-spacer"></span>
+        <span class="gc-draft-status" id="gc-draft-status" aria-live="polite"></span>
         <button type="button" class="gc-icon-btn" title="舍弃草稿" aria-label="舍弃草稿" data-discard data-discard-confirm>
             {{ icon('delete') }}
         </button>
@@ -183,6 +185,7 @@
     "embed": is_embed,
     "undo_seconds": undo_send_seconds,
     "list_url": url_for('messages.list')|string,
+    "draft_url": url_for('compose.save_draft')|string,
 }|tojson }}</script>
 {% endif %}
 </div>

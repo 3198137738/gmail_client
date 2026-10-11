@@ -13,6 +13,7 @@ close_fullscreen
 delete
 description
 download
+draft
 drafts
 edit
 error

@@ -12,7 +12,7 @@ from fastapi import Request
 from sqlalchemy import func, select
 
 from .database import session_scope
-from .models import Account, Message
+from .models import Account, Draft, Message
 
 # 与 routes/messages.py 中记住所选账号的 cookie 一致
 PREFERRED_ACCOUNT_COOKIE = "gc_preferred_account"
@@ -36,6 +36,7 @@ class Sidebar:
     accounts: list[NavAccount] = field(default_factory=list)
     unread_inbox: int = 0
     unread_junk: int = 0
+    drafts: int = 0
     # 从 cookie 中记住的账号（列表页之外的页面用它来决定文件夹链接指向哪个账号）
     preferred_account_id: Optional[int] = None
 
@@ -60,9 +61,10 @@ def _load(request: Request) -> Sidebar:
             .where(Message.is_read.is_(False), Message.folder_kind.in_(("inbox", "junk")))
             .group_by(Message.account_id, Message.folder_kind)
         ).all()
+        draft_count = db.execute(select(func.count(Draft.id))).scalar() or 0
 
     by_id = {a.id: a for a in accounts}
-    nav = Sidebar(accounts=accounts)
+    nav = Sidebar(accounts=accounts, drafts=int(draft_count))
     for account_id, kind, count in unread:
         acc = by_id.get(int(account_id))
         if acc is None:

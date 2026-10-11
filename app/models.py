@@ -53,6 +53,7 @@ class Account(Base):
     pending_ops = relationship(
         "PendingOp", back_populates="account", cascade="all, delete-orphan"
     )
+    drafts = relationship("Draft", back_populates="account", cascade="all, delete-orphan")
 
 
 class Message(Base):
@@ -261,3 +262,30 @@ class PendingOp(Base):
     __table_args__ = (
         Index("ix_pending_ops_account_due", "account_id", "next_attempt_at"),
     )
+
+
+class Draft(Base):
+    """写邮件时自动保存的草稿（只保存在本地，不含附件）。发送成功后删除。"""
+
+    __tablename__ = "drafts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    to_addr: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    cc_addr: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    bcc_addr: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    subject: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    body_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    body_html: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # 回复 / 转发的上下文，恢复草稿时继续以回复 / 转发的方式发送
+    in_reply_to: Mapped[Optional[str]] = mapped_column(String(998), nullable=True)
+    references: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    forward_message_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=_now, onupdate=_now, nullable=False, index=True
+    )
+
+    account = relationship("Account", back_populates="drafts")

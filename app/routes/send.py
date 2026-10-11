@@ -12,14 +12,14 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..config import ATTACHMENTS_DIR, SYNC_SENT_ENABLED
 from ..auth import is_safe_redirect
 from ..database import get_db
-from ..models import Account, Attachment, Message, SentMessage
+from ..models import Account, Attachment, Draft, Message, SentMessage
 from ..services.mail_body import (
     body_document_response,
     body_has_remote_images,
@@ -214,6 +214,104 @@ def _build_forward_prefill(message: Message) -> dict:
     }
 
 
+def _build_draft_prefill(db: Session, draft: Draft) -> dict:
+    """打开草稿继续编辑：恢复各字段，以及回复 / 转发的上下文。"""
+    prefill = {
+        "draft_id": int(draft.id),
+        "account_id": int(draft.account_id),
+        "to": draft.to_addr or "",
+        "cc": draft.cc_addr or "",
+        "bcc": draft.bcc_addr or "",
+        "subject": draft.subject or "",
+        "body_text": draft.body_text or "",
+        "body_html": draft.body_html or _text_to_html(draft.body_text or ""),
+        "in_reply_to": draft.in_reply_to or "",
+        "references": draft.references or "",
+        "is_reply": bool(draft.in_reply_to),
+    }
+    if draft.forward_message_id:
+        original = db.execute(
+            select(Message).options(selectinload(Message.attachments))
+            .where(Message.id == draft.forward_message_id)
+        ).scalar_one_or_none()
+        if original is not None:
+            prefill.update(
+                is_forward=True,
+                forward_message_id=int(original.id),
+                forward_attachments=[
+                    (a.display_name or a.filename) for a in original.attachments if not a.is_inline
+                ],
+            )
+    return prefill
+
+
+def _draft_is_empty(*values: Optional[str]) -> bool:
+    return not any((v or "").strip() for v in values)
+
+
+@router.post("/draft", name="compose.save_draft")
+def save_draft(
+    draft_id: Optional[str] = Form(None),
+    account_id: Optional[str] = Form(None),
+    to: Optional[str] = Form(None),
+    cc: Optional[str] = Form(None),
+    bcc: Optional[str] = Form(None),
+    subject: Optional[str] = Form(None),
+    body_text: Optional[str] = Form(None),
+    body_html: Optional[str] = Form(None),
+    in_reply_to: Optional[str] = Form(None),
+    references: Optional[str] = Form(None),
+    forward_message_id: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    """写邮件时自动保存草稿（新建或更新），返回 JSON。内容全部清空时删除草稿。"""
+    record = db.get(Draft, _coerce_int(draft_id)) if _coerce_int(draft_id) else None
+    if _draft_is_empty(to, cc, bcc, subject, body_text):
+        if record is not None:
+            db.delete(record)
+            db.commit()
+        return JSONResponse({"id": None})
+    account = db.get(Account, _coerce_int(account_id) or 0)
+    if account is None:
+        raise HTTPException(status_code=400, detail="Selected account is not available")
+    if record is None:
+        record = Draft(account_id=int(account.id))
+        db.add(record)
+    record.account_id = int(account.id)
+    record.to_addr = to or ""
+    record.cc_addr = cc or ""
+    record.bcc_addr = bcc or ""
+    record.subject = subject or ""
+    record.body_text = body_text or ""
+    record.body_html = body_html or ""
+    record.in_reply_to = in_reply_to or None
+    record.references = references or None
+    record.forward_message_id = _coerce_int(forward_message_id)
+    db.commit()
+    return JSONResponse({"id": int(record.id), "saved_at": utc_to_local(record.updated_at).strftime("%H:%M")})
+
+
+@router.post("/draft/{draft_id}/delete", name="compose.delete_draft")
+def delete_draft(
+    request: Request,
+    draft_id: int,
+    db: Session = Depends(get_db),
+):
+    record = db.get(Draft, draft_id)
+    if record is not None:
+        db.delete(record)
+        db.commit()
+    if request.headers.get("x-requested-with") == "fetch":
+        return JSONResponse({"ok": True})
+    return RedirectResponse(url=request.url_for("compose.drafts"), status_code=303)
+
+
+@router.get("/drafts", response_class=HTMLResponse, name="compose.drafts")
+def drafts_list(request: Request, db: Session = Depends(get_db)):
+    drafts = db.execute(select(Draft).order_by(Draft.updated_at.desc())).scalars().all()
+    return templates.TemplateResponse(request, "drafts.html", {"drafts": drafts})
+
+
 # 收件人自动补全：扫描最近多少封邮件、最多返回多少个联系人。
 _CONTACT_SCAN_LIMIT = 3000
 _CONTACT_MAX = 300
@@ -267,6 +365,7 @@ def compose_form(
     reply_to: Optional[int] = None,
     mode: Optional[str] = None,
     forward: Optional[int] = None,
+    draft: Optional[int] = None,
     embed: bool = Query(False),
 ):
     accounts = db.execute(
@@ -275,7 +374,12 @@ def compose_form(
 
     prefill: Optional[dict] = None
     source_id = forward if forward is not None else reply_to
-    if source_id is not None:
+    if draft is not None:
+        record = db.get(Draft, draft)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Draft not found")
+        prefill = _build_draft_prefill(db, record)
+    elif source_id is not None:
         message = db.execute(
             select(Message)
             .options(
@@ -329,6 +433,7 @@ def send(
     references: Optional[str] = Form(None),
     forward_message_id: Optional[str] = Form(None),
     embed: Optional[str] = Form(None),
+    draft_id: Optional[str] = Form(None),
     attachments: List[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
 ):
@@ -422,6 +527,9 @@ def send(
             error=error,
         )
         db.add(record)
+        draft_record = db.get(Draft, _coerce_int(draft_id)) if _coerce_int(draft_id) else None
+        if status == "sent" and draft_record is not None:
+            db.delete(draft_record)   # 已发出，草稿不再需要
         db.commit()
 
         if status == "failed":
@@ -442,6 +550,7 @@ def send(
                 "is_forward": bool(fwd_id),
                 "forward_message_id": fwd_id or "",
                 "forward_attachments": fwd_names,
+                "draft_id": _coerce_int(draft_id) or "",
             }
             accounts = db.execute(
                 select(Account).where(Account.enabled.is_(True)).order_by(Account.email)
