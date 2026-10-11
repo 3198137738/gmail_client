@@ -132,7 +132,7 @@ def send_email(
         try:
             token = google_oauth.access_token_for_secret(password)
         except google_oauth.OAuthError as exc:
-            raise SMTPSendError(f"Google 授权已失效，请在设置中重新授权：{exc}") from exc
+            raise SMTPSendError(f"Google 授权已失效：{exc}") from exc
 
         def authenticate(server) -> None:
             server.ehlo()

@@ -124,9 +124,9 @@ def exchange_code(code: str, redirect_uri: str, code_verifier: str) -> tuple[str
     })
     refresh_token = tokens.get("refresh_token")
     if not refresh_token:
-        raise OAuthError("Google 没有返回 refresh token，请到 Google 账号「第三方访问权限」中移除本应用后重试")
+        raise OAuthError("Google 没有返回 refresh token")
     if "https://mail.google.com/" not in (tokens.get("scope") or ""):
-        raise OAuthError("没有授予访问 Gmail 的权限，请在授权页面勾选「阅读、撰写、发送和永久删除您的所有 Gmail 电子邮件」")
+        raise OAuthError("未授予访问 Gmail 的权限")
     claims = _id_token_claims(tokens.get("id_token") or "")
     email = (claims.get("email") or "").strip().lower()
     if not email or not claims.get("email_verified", False):
@@ -163,7 +163,7 @@ def access_token(refresh_token: str) -> str:
     if cached and cached[1] > time.time():
         return cached[0]
     if not is_configured():
-        raise OAuthError("未配置 GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET")
+        raise OAuthError("未配置 Google OAuth 客户端")
     tokens = _post({
         "client_id": GOOGLE_OAUTH_CLIENT_ID,
         "client_secret": GOOGLE_OAUTH_CLIENT_SECRET,

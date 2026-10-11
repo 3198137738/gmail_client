@@ -346,7 +346,7 @@ document.addEventListener("click", function (ev) {
         if (!resp.ok) throw new Error("bad status");
     }).catch(function () {
         apply(!starred);
-        if (window.GM && window.GM.toast) window.GM.toast("星标操作失败，请稍后重试");
+        if (window.GM && window.GM.toast) window.GM.toast("星标操作失败");
     });
 });
 

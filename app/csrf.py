@@ -39,7 +39,7 @@ async def verify_csrf(request: Request) -> None:
             value = form.get(CSRF_FIELD_NAME)
             supplied = value if isinstance(value, str) else None
     if not expected or not supplied or not secrets.compare_digest(expected, supplied):
-        raise HTTPException(status_code=403, detail="页面已过期或请求来源不可信，请刷新页面后重试")
+        raise HTTPException(status_code=403, detail="页面已过期")
 
 
 @pass_context

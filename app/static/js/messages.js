@@ -172,7 +172,7 @@
             if (canAutoRefresh) refreshList(); else refreshSidebar();
         }).catch(function () {
             ids.forEach(function (id) { swipeDeleted.delete(id); restoreSwipedRow(rowById(id)); });
-            if (window.GM && window.GM.toast) window.GM.toast("删除失败，请稍后重试");
+            if (window.GM && window.GM.toast) window.GM.toast("删除失败");
         });
     }
 

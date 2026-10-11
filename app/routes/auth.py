@@ -108,44 +108,15 @@ def login_submit(
     throttle = get_login_throttle_status(ip_address)
 
     if throttle.is_blocked:
-        if throttle.is_permanent_blocked:
-            error = (
-                "\u8be5 IP \u5df2\u88ab\u6c38\u4e45\u5c01\u7981\uff0c"
-                "\u65e0\u6cd5\u7ee7\u7eed\u767b\u5f55"
-            )
-        else:
-            error = (
-                f"\u8be5 IP \u5df2\u88ab\u4e34\u65f6\u5c01\u7981\uff0c"
-                f"\u8bf7\u5728\u7ea6 {throttle.remaining_lockout_minutes} "
-                "\u5206\u949f\u540e\u518d\u8bd5"
-            )
+        error = "该 IP 已被永久封禁" if throttle.is_permanent_blocked else "该 IP 已被临时封禁"
         return _redirect_to_login(request, next_url=next_url, error=error)
 
     if not password_matches(password, WEB_AUTH_PASSWORD):
         throttle = register_failed_login(ip_address)
         if throttle.is_blocked:
-            if throttle.is_permanent_blocked:
-                error = (
-                    f"\u8fde\u7eed\u8f93\u9519\u8fbe\u5230 {WEB_AUTH_MAX_FAILURES} "
-                    "\u6b21\uff0c\u8be5 IP \u5df2\u88ab\u6c38\u4e45\u5c01\u7981"
-                )
-            else:
-                error = (
-                    f"\u8fde\u7eed\u8f93\u9519\u8fbe\u5230 {WEB_AUTH_MAX_FAILURES} "
-                    f"\u6b21\uff0c\u8be5 IP \u5df2\u88ab\u5c01\u7981 "
-                    f"{WEB_AUTH_LOCKOUT_MINUTES} \u5206\u949f"
-                )
+            error = "该 IP 已被永久封禁" if throttle.is_permanent_blocked else "该 IP 已被临时封禁"
         else:
-            next_block_text = (
-                "\u6c38\u4e45\u5c01\u7981\u8be5 IP"
-                if WEB_AUTH_PERMANENT_BLOCK_AFTER_FAILURES
-                else f"\u5c01\u7981 IP {WEB_AUTH_LOCKOUT_MINUTES} \u5206\u949f"
-            )
-            error = (
-                f"\u5bc6\u7801\u4e0d\u6b63\u786e\uff0c\u8fd8\u53ef\u518d\u5c1d\u8bd5 "
-                f"{throttle.remaining_attempts} \u6b21\uff1b"
-                f"\u8fbe\u5230 {WEB_AUTH_MAX_FAILURES} \u6b21\u5c06{next_block_text}"
-            )
+            error = "密码不正确"
         return _redirect_to_login(request, next_url=next_url, error=error)
 
     set_auth_error(request, None)
@@ -190,25 +161,21 @@ def login_2fa_form(request: Request):
 def login_2fa_submit(request: Request, code: str = Form("")):
     next_url = safe_next_url(request.session.get(TWO_FACTOR_NEXT_KEY))
     if not _two_factor_pending(request):
-        return _redirect_to_login(request, next_url=next_url, error="验证超时，请重新输入密码")
+        return _redirect_to_login(request, next_url=next_url, error="验证已超时")
     ip_address = get_client_ip(request)
     if get_login_throttle_status(ip_address).is_blocked:
         request.session.clear()
-        return _redirect_to_login(request, next_url=next_url, error="该 IP 已被封禁，请稍后再试")
+        return _redirect_to_login(request, next_url=next_url, error="该 IP 已被封禁")
     if not two_factor.verify_and_consume(code):
         # 验证码输错不计入失败次数、不封禁 IP
         attempts = int(request.session.get(TWO_FACTOR_ATTEMPTS_KEY) or 0) + 1
         if attempts >= TWO_FACTOR_MAX_ATTEMPTS:
             request.session.clear()
             return _redirect_to_login(
-                request, next_url=next_url, error="验证码错误次数过多，请重新输入密码后再试"
+                request, next_url=next_url, error="验证码错误次数过多"
             )
         request.session[TWO_FACTOR_ATTEMPTS_KEY] = attempts
-        set_auth_error(
-            request,
-            "验证码不正确。同一个验证码只能用一次，请等 App 中出现新的验证码；"
-            "仍不对时检查手机时间是否准确",
-        )
+        set_auth_error(request, "验证码不正确")
         return RedirectResponse(url=request.url_for("auth.login_2fa_form"), status_code=303)
     clear_failed_logins(ip_address)
     mark_authenticated(request)   # 会清空会话（含待验证状态）

@@ -16,9 +16,8 @@
             <div class="gm-auth-alert">
                 {{ icon('error', filled=True) }}
                 <span>
-                {% if is_permanent_blocked %}当前 IP 已被永久封禁。
-                {% else %}当前 IP 已被临时封禁。{% if remaining_lockout_minutes %}请约 {{ remaining_lockout_minutes }} 分钟后再试。{% endif %}
-                {% endif %}
+                {% if is_permanent_blocked %}当前 IP 已被永久封禁
+                {% else %}当前 IP 已被临时封禁{% endif %}
                 </span>
             </div>
             {% endif %}
@@ -31,10 +30,7 @@
             <div class="gm-field-error">{{ icon('error', filled=True) }}<span>{{ error }}</span></div>
             {% endif %}
             <div class="gm-auth-meta">
-                当前访问 IP：{{ client_ip }}<br>
-                {% if permanent_block_after_failures %}连续输错 {{ max_failures }} 次会永久封禁该 IP。
-                {% else %}连续输错 {{ max_failures }} 次会临时封禁该 IP {{ lockout_minutes }} 分钟。{% endif %}
-                {% if blocked_ips_count %}<br>当前还启用了手动永久封禁 IP 列表。{% endif %}
+                当前访问 IP：{{ client_ip }}
             </div>
             <div class="gm-auth-actions">
                 <button type="submit" class="gm-btn gm-btn-filled" {% if is_blocked %}disabled{% endif %}>下一步</button>

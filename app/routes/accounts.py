@@ -280,7 +280,7 @@ def batch_delete_accounts(
 def telegram_test(request: Request):
     """Send a test Telegram message to validate the bot configuration."""
     if not telegram_service.is_configured():
-        flash = "Telegram 未配置：请在 .env 中设置 TELEGRAM_BOT_TOKEN 和 TELEGRAM_CHAT_ID"
+        flash = "Telegram 未配置"
         level = "warning"
     else:
         ok, detail = telegram_service.send_test_message()
@@ -399,12 +399,12 @@ def security_enable(request: Request, code: str = Form("")):
 
     secret = request.session.get(_SETUP_SECRET_KEY)
     if not secret:
-        return _security_redirect(request, "请先点击「开启两步验证」生成密钥", "error")
+        return _security_redirect(request, "密钥已失效", "error")
     if totp.verify(secret, code) is None:
-        return _security_redirect(request, "验证码不正确，请确认手机时间准确后重试", "error")
+        return _security_redirect(request, "验证码不正确", "error")
     two_factor.enable(secret)
     request.session.pop(_SETUP_SECRET_KEY, None)
-    return _security_redirect(request, "两步验证已开启，下次登录时需要输入验证码")
+    return _security_redirect(request, "两步验证已开启")
 
 
 @router.post("/security/cancel", name="accounts.security_cancel")
@@ -419,7 +419,7 @@ def security_disable(request: Request, code: str = Form("")):
     from ..services import two_factor
 
     if not two_factor.verify_and_consume(code):
-        return _security_redirect(request, "验证码不正确，两步验证仍保持开启", "error")
+        return _security_redirect(request, "验证码不正确", "error")
     two_factor.disable()
     return _security_redirect(request, "两步验证已关闭")
 
@@ -446,7 +446,7 @@ def _oauth_redirect_uri(request: Request) -> str:
 @router.get("/oauth/start", name="accounts.oauth_start")
 def oauth_start(request: Request, login_hint: Optional[str] = None):
     if not google_oauth.is_configured():
-        return _accounts_redirect(request, "尚未配置 Google OAuth 客户端（GOOGLE_OAUTH_CLIENT_ID / SECRET）", "danger")
+        return _accounts_redirect(request, "未配置 Google OAuth 客户端", "danger")
     import secrets as _secrets
 
     state = _secrets.token_urlsafe(32)
@@ -475,7 +475,7 @@ def oauth_callback(
         return _accounts_redirect(request, f"Google 授权未完成：{error}", "warning")
     if not expected or not state or not verifier or not _secrets.compare_digest(expected, state):
         # state 不匹配：可能是伪造的回调（CSRF），或者授权页面停留太久会话已变
-        return _accounts_redirect(request, "授权请求已失效，请重新点击「使用 Google 账号授权」", "danger")
+        return _accounts_redirect(request, "授权请求已失效", "danger")
     try:
         email, refresh_token = google_oauth.exchange_code(code or "", _oauth_redirect_uri(request), verifier)
     except google_oauth.OAuthError as exc:
@@ -487,7 +487,7 @@ def oauth_callback(
     if account is None:
         account = Account(email=email, encrypted_password=secret, enabled=True)
         db.add(account)
-        message = f"已通过 Google 授权添加 {email}，正在同步邮件"
+        message = f"已通过 Google 授权添加 {email}"
     else:
         account.encrypted_password = secret
         account.enabled = True

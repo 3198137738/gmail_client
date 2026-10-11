@@ -118,7 +118,7 @@ def _imap_client(email: str, password: str, *, timeout: Optional[int] = None):
                 try:
                     token = google_oauth.access_token_for_secret(password)
                 except google_oauth.OAuthError as exc:
-                    raise IMAPSyncError(f"Google 授权已失效，请在设置中重新授权：{exc}") from exc
+                    raise IMAPSyncError(f"Google 授权已失效：{exc}") from exc
                 client.oauth2_login(email, token)
             else:
                 client.login(email, password)

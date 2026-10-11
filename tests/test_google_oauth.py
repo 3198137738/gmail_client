@@ -156,7 +156,7 @@ def test_imap_reports_revoked_authorization(monkeypatch):
 
     monkeypatch.setattr(imap_client, "IMAPClient", FakeIMAP)
     monkeypatch.setattr(google_oauth, "access_token_for_secret", revoked)
-    with pytest.raises(imap_client.IMAPSyncError, match="重新授权"):
+    with pytest.raises(imap_client.IMAPSyncError, match="Google 授权已失效"):
         with imap_client._imap_client("u@gmail.com", "oauth2:rt"):
             pass
 

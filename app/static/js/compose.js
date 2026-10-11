@@ -502,13 +502,13 @@
         var total = fields.reduce(function (n, f) { return n + f.addresses.length; }, 0);
         if (!total) {
             ev.preventDefault();
-            showError("请至少填写一个收件人。");
+            showError("没有填写收件人");
             fields[0].input.focus();
             return;
         }
         if (fields.some(function (f) { return f.hasInvalid(); })) {
             ev.preventDefault();
-            showError("有无效的邮箱地址（红色标记），请修改后再发送。");
+            showError("邮箱地址无效");
             return;
         }
         fillBodyFields();
