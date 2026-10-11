@@ -1038,7 +1038,7 @@ body.gm-nav-collapsed .gm-nav .gm-nav-labels { margin-top: 16px; }
 .gm-field-input {
     width: 100%;
     height: 56px;
-    padding: 16px 15px 0;
+    padding: 0 15px;
     border: 1px solid var(--gm-outline);
     border-radius: 4px;
     outline: 0;
@@ -1047,7 +1047,7 @@ body.gm-nav-collapsed .gm-nav .gm-nav-labels { margin-top: 16px; }
     font-size: 16px;
 }
 .gm-field-input:hover { border-color: var(--gm-text); }
-.gm-field-input:focus { border: 2px solid var(--gm-primary); padding: 15px 14px 0; }
+.gm-field-input:focus { border: 2px solid var(--gm-primary); padding: 0 14px; }
 .gm-field-label {
     position: absolute;
     top: 18px;
@@ -1063,7 +1063,7 @@ body.gm-nav-collapsed .gm-nav .gm-nav-labels { margin-top: 16px; }
 .gm-field-input:focus + .gm-field-label,
 .gm-field-input:not(:placeholder-shown) + .gm-field-label { top: -9px; font-size: 12px; }
 .gm-field-input:focus + .gm-field-label { color: var(--gm-primary); }
-.gm-field.is-error .gm-field-input { border: 2px solid var(--gm-error); padding: 15px 14px 0; }
+.gm-field.is-error .gm-field-input { border: 2px solid var(--gm-error); padding: 0 14px; }
 .gm-field.is-error .gm-field-label { color: var(--gm-error); }
 .gm-field-error { display: flex; align-items: flex-start; gap: 8px; margin-top: 8px; color: var(--gm-error); font-size: 12px; line-height: 16px; }
 .gm-field-error .ms { font-size: 16px; }
