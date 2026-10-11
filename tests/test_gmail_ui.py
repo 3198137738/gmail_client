@@ -24,14 +24,14 @@ def test_detail_position_and_neighbors(client):
 
     page = client.get(f"/messages/{ids[2]}", params={"back": back}).text
     assert "第 3 封，共 5 封" in page
-    newer = re.search(r'href="([^"]+)"\s+title="较新"', page).group(1)
-    older = re.search(r'href="([^"]+)"\s+title="较旧"', page).group(1)
+    newer = re.search(r'href="([^"]+)"\s+title="较新[^"]*"', page).group(1)
+    older = re.search(r'href="([^"]+)"\s+title="较旧[^"]*"', page).group(1)
     assert f"/messages/{ids[1]}?" in html.unescape(newer)
     assert f"/messages/{ids[3]}?" in html.unescape(older)
 
     first = client.get(f"/messages/{ids[0]}", params={"back": back}).text
     assert "第 1 封，共 5 封" in first
-    assert 'title="较新"' not in first  # 第一封没有更新的邮件
+    assert 'title="较新' not in first  # 第一封没有更新的邮件
 
 
 def test_detail_position_respects_unread_filter(client):
@@ -44,7 +44,7 @@ def test_detail_position_respects_unread_filter(client):
     page = client.get(f"/messages/{a}", params={"back": back}).text
     # 打开后 a 已标为已读，但仍算在内；已读的 b 不在「仅看未读」中
     assert "第 1 封，共 2 封" in page
-    older = re.search(r'href="([^"]+)"\s+title="较旧"', page).group(1)
+    older = re.search(r'href="([^"]+)"\s+title="较旧[^"]*"', page).group(1)
     assert f"/messages/{c}?" in html.unescape(older)
 
 

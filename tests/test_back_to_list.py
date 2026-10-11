@@ -28,7 +28,7 @@ def test_back_button_returns_to_same_list_view(client):
 
     detail_html = client.get(detail_url).text
     back_href = html.unescape(
-        re.search(r'href="([^"]+)" title="返回列表"', detail_html).group(1)
+        re.search(r'href="([^"]+)" title="返回列表[^"]*"', detail_html).group(1)
     )
     assert back_href == back
     # 删除、标记未读、屏蔽发件人后也回到原列表
@@ -40,7 +40,7 @@ def test_back_param_must_be_message_list(client):
     mid = create_message(create_account())
     for bad in ("https://evil.example/", "//evil.example", "/accounts/", "/messages/blocked-senders"):
         detail_html = client.get(f"/messages/{mid}", params={"back": bad}).text
-        href = re.search(r'href="([^"]+)" title="返回列表"', detail_html).group(1)
+        href = re.search(r'href="([^"]+)" title="返回列表[^"]*"', detail_html).group(1)
         assert href.startswith("http://testserver/messages/?kind=") or href.startswith("/messages/?kind=")
         assert "evil" not in href and "accounts" not in href
 

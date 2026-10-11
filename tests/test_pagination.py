@@ -80,7 +80,8 @@ def test_cursor_decode_rejects_garbage():
 
 
 def _subjects(html: str) -> list[str]:
-    return re.findall(r"m\d{3}", html)
+    # 只取主题链接里的文字：整页搜索会误中随机 CSRF token 里的「m+三位数字」
+    return re.findall(r'class="rcm-subject-link[^"]*" href="[^"]*">(m\d{3})<', html)
 
 
 def test_list_endpoint_pages(client):
