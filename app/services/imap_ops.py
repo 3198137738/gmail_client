@@ -14,7 +14,13 @@ from ..config import DEFAULT_FOLDER
 from ..crypto import decrypt_password
 from ..database import session_scope
 from ..models import Account
-from .imap_client import IMAPSyncError, _account_lock, _imap_client, _release_account_lock
+from .imap_client import (
+    IMAPSyncError,
+    _account_lock,
+    _discover_trash_folder,
+    _imap_client,
+    _release_account_lock,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -113,11 +119,11 @@ def delete_imap_messages(
     *,
     lock_timeout: float = 30.0,
 ) -> dict:
-    """Best-effort permanent delete for one or more folder/UID groups.
+    """把邮件移到 Gmail 的「已删除邮件」（垃圾箱），与在 Gmail 中点「删除」一致。
 
-    For each selected folder we mark the target UIDs as ``\\Deleted`` and then
-    expunge them from that folder. Local callers should only remove DB rows for
-    groups whose ``error`` field is ``None`` in the returned payload.
+    Gmail 里对 INBOX 等文件夹打 ``\\Deleted`` 再 expunge 只是去掉该标签（等于归档），
+    邮件仍留在「所有邮件」中，所以要移动到带 ``\\Trash`` 标志的文件夹。
+    找不到垃圾箱、或邮件本来就在垃圾箱里时，才退回 ``\\Deleted`` + expunge（彻底删除）。
     """
     result: dict = {"ok": True, "folders": {}}
     if not folder_uid_pairs:
@@ -147,6 +153,7 @@ def delete_imap_messages(
 
     try:
         with _imap_client(email, password) as client:
+            trash = _discover_trash_folder(client)
             for folder, uids in folder_uid_pairs:
                 stat = {"deleted": 0, "error": None}
                 if not uids:
@@ -154,12 +161,10 @@ def delete_imap_messages(
                     continue
                 try:
                     client.select_folder(folder, readonly=False)
-                    client.delete_messages(uids)
-                    try:
-                        client.uid_expunge(uids)
-                    except IMAPClientError:
-                        # Fallback for servers without UIDPLUS support.
-                        client.expunge()
+                    if trash and folder != trash:
+                        _move_uids(client, uids, trash)
+                    else:
+                        _expunge_uids(client, uids)
                     stat["deleted"] = len(uids)
                 except IMAPClientError as exc:
                     stat["error"] = str(exc)
@@ -186,6 +191,24 @@ def delete_imap_messages(
         _release_account_lock(account_id, lock)
 
     return result
+
+
+def _expunge_uids(client, uids: list[int]) -> None:
+    client.delete_messages(uids)
+    try:
+        client.uid_expunge(uids)
+    except IMAPClientError:
+        # Fallback for servers without UIDPLUS support.
+        client.expunge()
+
+
+def _move_uids(client, uids: list[int], target: str) -> None:
+    if client.has_capability("MOVE"):
+        client.move(uids, target)
+    else:
+        client.copy(uids, target)
+        _expunge_uids(client, uids)
+
 
 def move_imap_messages(
     account_id: int,
@@ -223,12 +246,7 @@ def move_imap_messages(
     try:
         with _imap_client(email, password) as client:
             client.select_folder(folder, readonly=False)
-            if client.has_capability("MOVE"):
-                client.move(uids, target)
-            else:
-                client.copy(uids, target)
-                client.delete_messages(uids)
-                client.expunge()
+            _move_uids(client, uids, target)
         logger.info("Moved IMAP messages account=%s %s -> %s uids=%s", account_id, folder, target, uids)
         return {"ok": True, "moved": len(uids), "error": None}
     except (IMAPSyncError, IMAPClientError) as exc:

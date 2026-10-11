@@ -151,6 +151,11 @@ def _discover_sent_folder(client: IMAPClient) -> Optional[str]:
     return _discover_special_folder(client, "\\Sent")
 
 
+def _discover_trash_folder(client: IMAPClient) -> Optional[str]:
+    """Return the IMAP folder name carrying the ``\\Trash`` special-use flag（Gmail 的「已删除邮件」）."""
+    return _discover_special_folder(client, "\\Trash")
+
+
 def _discover_junk_folder(client: IMAPClient) -> Optional[str]:
     """Return the IMAP folder name carrying the ``\\Junk`` special-use flag（Gmail 的垃圾邮件）."""
     return _discover_special_folder(client, "\\Junk")

@@ -22,7 +22,7 @@
             </form>
             {% endif %}
             <form method="post" action="{{ url_for('messages.delete_one', message_id=message.id) }}"
-                  data-confirm="确定删除这封邮件吗？此操作会同步删除服务器上的对应邮件。">
+                  data-confirm="确定删除这封邮件吗？邮件会移到 Gmail 的「已删除邮件」，30 天后由 Gmail 自动清除。">
                 {{ csrf_input() }}
                 <input type="hidden" name="next" value="{{ back_url }}">
                 <button type="submit" class="gm-icon-btn" title="删除" aria-label="删除">{{ icon('delete') }}</button>

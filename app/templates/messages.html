@@ -131,7 +131,7 @@
                 <span class="gm-sel-count" aria-live="polite"></span>
                 <button type="submit" class="gm-icon-btn rcm-bulk-action" form="rcm-bulk-form"
                         formaction="{{ url_for('messages.batch_delete') }}" disabled
-                        data-confirm="确定删除选中的邮件吗？此操作会同步删除服务器上的对应邮件。"
+                        data-confirm="确定删除选中的邮件吗？邮件会移到 Gmail 的「已删除邮件」，30 天后由 Gmail 自动清除。"
                         title="删除" aria-label="删除">{{ icon('delete') }}</button>
                 <span class="gm-toolbar-sep"></span>
                 <button type="submit" class="gm-icon-btn rcm-bulk-action" form="rcm-bulk-form"
@@ -226,7 +226,7 @@
             </div>
             <div class="gm-row-actions">
                 <button type="button" class="gm-icon-btn gm-icon-btn-sm" data-row-action="{{ url_for('messages.batch_delete') }}"
-                        data-id="{{ m.id }}" data-confirm="确定删除这封邮件吗？此操作会同步删除服务器上的对应邮件。"
+                        data-id="{{ m.id }}" data-confirm="确定删除这封邮件吗？邮件会移到 Gmail 的「已删除邮件」，30 天后由 Gmail 自动清除。"
                         title="删除" aria-label="删除">{{ icon('delete') }}</button>
                 {% if m.is_read %}
                 <button type="button" class="gm-icon-btn gm-icon-btn-sm" data-row-action="{{ url_for('messages.batch_mark_unread') }}"
