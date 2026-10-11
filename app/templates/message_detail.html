@@ -17,6 +17,7 @@
             <form method="post" action="{{ url_for('messages.not_spam', message_id=message.id) }}"
                   data-confirm="{{ ('这不是垃圾邮件？\n将把该发件人的垃圾邮件全部移回收件箱，并信任 ' ~ (sender_email or '该发件人') ~ '：以后其邮件即使被 Gmail 判为垃圾邮件，也会自动移回收件箱。') }}">
                 {{ csrf_input() }}
+                <input type="hidden" name="next" value="{{ back_url }}">
                 <button type="submit" class="gm-icon-btn" title="不是垃圾邮件" aria-label="不是垃圾邮件">{{ icon('report_off') }}</button>
             </form>
             {% endif %}
@@ -40,6 +41,7 @@
                 <form method="post" action="{{ url_for('messages.block_sender', message_id=message.id) }}"
                       data-confirm="{{ ('永久屏蔽 ' ~ sender_email ~ '？\n后续同步将自动忽略该发件人，并隐藏当前账号已有同发件人邮件。') }}">
                     {{ csrf_input() }}
+                    <input type="hidden" name="next" value="{{ back_url }}">
                     <button type="submit" class="gm-icon-btn" title="屏蔽“{{ sender_label }}”" aria-label="屏蔽发件人">{{ icon('block') }}</button>
                 </form>
                 {% endif %}

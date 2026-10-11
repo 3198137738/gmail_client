@@ -80,6 +80,7 @@ def block_sender(
     sender_email = _normalize_sender_email(message.from_addr)
     if not sender_email:
         raise HTTPException(status_code=400, detail="Cannot parse sender email")
+    folder_kind = str(message.folder_kind or "inbox")
 
     exists = db.execute(
         select(BlockedSender.id).where(
@@ -116,9 +117,10 @@ def block_sender(
 
     if is_safe_redirect(next):
         return RedirectResponse(url=next, status_code=303)
+    # 未带 next 时回到原邮件所在文件夹，而不是固定回收件箱
     return _redirect_to_list(
         request,
-        kind="inbox",
+        kind=folder_kind,
         account_id=int(message.account_id),
         q="",
         page=1,

@@ -31,8 +31,8 @@ def test_back_button_returns_to_same_list_view(client):
         re.search(r'href="([^"]+)" title="返回列表"', detail_html).group(1)
     )
     assert back_href == back
-    # 删除、标记未读后也回到原列表
-    assert detail_html.count(f'name="next" value="{html.escape(back)}"') == 2
+    # 删除、标记未读、屏蔽发件人后也回到原列表
+    assert detail_html.count(f'name="next" value="{html.escape(back)}"') == 3
 
 
 def test_back_param_must_be_message_list(client):
@@ -57,3 +57,23 @@ def test_delete_returns_to_list_position(client):
     )
     assert resp.status_code == 303
     assert resp.headers["location"] == back
+
+
+def test_block_sender_returns_to_original_folder(client):
+    token = login(client)
+    acc = create_account()
+    mid = create_message(acc, from_addr="Spam <spam@bad.example>", folder_kind="junk")
+    back = f"/messages/?kind=junk&account_id={acc}&q=&page=1&page_size=25"
+    resp = client.post(
+        f"/messages/{mid}/block-sender",
+        data={"csrf_token": token, "next": back},
+        follow_redirects=False,
+    )
+    assert resp.headers["location"] == back
+
+    # 未带 next 时也按原邮件所在文件夹返回，而不是固定回收件箱
+    mid2 = create_message(acc, from_addr="Other <other@bad.example>", folder_kind="junk")
+    resp = client.post(
+        f"/messages/{mid2}/block-sender", data={"csrf_token": token}, follow_redirects=False
+    )
+    assert "kind=junk" in resp.headers["location"]
