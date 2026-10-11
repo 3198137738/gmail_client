@@ -9,12 +9,10 @@ services:
     env_file:
       - .env
 
-    # 目前 nginx 容器经服务器公网 IP 连到 8000 端口，所以端口暂时只能对外监听；
-    # 这意味着任何人都能绕过 nginx（和它的 HTTPS）直连 8000。更安全的做法：
-    #   把本服务加入 nginx 所在的 Docker 网络、nginx 改为 proxy_pass http://gmail-client:8000，
-    #   然后删掉下面的 ports（或改成 "127.0.0.1:8000:8000"），并把 FORWARDED_ALLOW_IPS 换成该网络的网段。
+    # 只监听本机：nginx 容器使用 host 网络，通过 proxy_pass http://127.0.0.1:8000 访问；
+    # 公网无法绕过 nginx（和它的 HTTPS、访问日志）直连 8000。
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
 
     volumes:
       - ./data:/app/data
@@ -28,12 +26,11 @@ services:
       TZ: Asia/Shanghai
       PYTHONUNBUFFERED: "1"
       # 可信代理：只有这些地址发来的 X-Forwarded-For 才会被当作真实客户端 IP。
-      # nginx 通过服务器公网地址 168.110.213.213 转发，必须列入，否则所有访客
-      # 都会被识别成这个 IP（登录失败封禁会波及所有人）。换服务器时记得修改。
-      # 不要再加入 Docker 私有网段（172.16.0.0/12 等）：绕过 nginx 直连 8000 端口的请求
-      # 可能经 docker-proxy 以网关地址（172.x）到达，一旦被信任，攻击者就能用伪造的
-      # X-Forwarded-For 每次换一个 IP，绕过登录失败封禁无限尝试密码。
-      FORWARDED_ALLOW_IPS: "127.0.0.1,::1,168.110.213.213"
+      # nginx 连 127.0.0.1:8000 时，请求经 docker-proxy 转发，应用看到的来源是本网络的
+      # 网关 172.19.0.1（网段在文件末尾固定），必须列入，否则所有访客都会被识别成同一个 IP
+      # （登录失败封禁会波及所有人）。端口只绑本机，外部无法以网关地址到达，信任它是安全的。
+      # 不要加入整个私有网段（172.16.0.0/12 等），只列这一个网关地址。
+      FORWARDED_ALLOW_IPS: "127.0.0.1,::1,172.19.0.1"
       # 会话 cookie 默认只走 HTTPS；只能用 http:// 访问时在 .env 设 SESSION_COOKIE_SECURE=false
       # 登录有效期（天）可用 SESSION_MAX_AGE_DAYS 调整，默认 7
 
@@ -49,3 +46,12 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+# 固定本项目网络的网段：可信代理里写的是网关地址 172.19.0.1，
+# 不固定的话 docker compose down 后重建网络可能换网段，访客 IP 就会全部识别错。
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.19.0.0/16
+          gateway: 172.19.0.1
