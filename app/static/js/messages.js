@@ -108,6 +108,218 @@
         restoreSelection();
         rowChecks.forEach(function (cb) { cb.addEventListener("change", updateBulkState); });
         updateBulkState();
+
+        document.querySelectorAll(".rcm-row").forEach(function (row) {
+            // 列表刷新后，仍在「可撤销」期内的邮件继续隐藏
+            if (swipeDeleted.has(rowId(row))) row.hidden = true;
+            bindSwipe(row);
+        });
+    }
+
+    // ---- 触屏左滑 / 右滑删除（与 Gmail App 一致） --------------------------
+    // 滑过一定距离或快速甩动即删除：先在界面上移除并提示「撤销」，
+    // 几秒后（或离开页面时）才真正提交删除请求。
+    var SWIPE_UNDO_MS = 5000;
+    var swipeDeleted = new Set();   // 已滑走、尚未提交到服务器的邮件 id
+    var swipeTimer = null;
+    var lastSwipeAt = 0;
+
+    function rowId(row) {
+        var cb = row.querySelector(".rcm-row-check");
+        return cb ? String(cb.value) : "";
+    }
+
+    function rowById(id) {
+        var cb = document.getElementById("rcm-check-" + id);
+        return cb ? cb.closest(".rcm-row") : null;
+    }
+
+    function deleteFormData(ids) {
+        var form = document.getElementById("gm-row-form");
+        if (!form) return null;
+        var data = new FormData(form);
+        data.delete("message_ids");
+        ids.forEach(function (id) { data.append("message_ids", id); });
+        return { url: form.getAttribute("data-delete-url"), data: data };
+    }
+
+    function commitSwipeDeletes(useBeacon) {
+        clearTimeout(swipeTimer);
+        swipeTimer = null;
+        var ids = Array.from(swipeDeleted);
+        if (!ids.length) return;
+        var req = deleteFormData(ids);
+        if (!req || !req.url) return;
+        if (useBeacon && navigator.sendBeacon) {
+            // 页面即将关闭 / 跳转，普通 fetch 可能被取消
+            if (navigator.sendBeacon(req.url, req.data)) swipeDeleted.clear();
+            return;
+        }
+        fetch(req.url, {
+            method: "POST",
+            body: req.data,
+            credentials: "same-origin",
+            redirect: "manual",
+            keepalive: true,
+        }).then(function (resp) {
+            if (!resp.ok && resp.type !== "opaqueredirect") throw new Error("bad status");
+            ids.forEach(function (id) {
+                swipeDeleted.delete(id);
+                var row = rowById(id);
+                if (row) row.remove();
+            });
+            // 刷新列表以补齐当前页、更新未读数
+            if (canAutoRefresh) refreshList(); else refreshSidebar();
+        }).catch(function () {
+            ids.forEach(function (id) { swipeDeleted.delete(id); restoreSwipedRow(rowById(id)); });
+            if (window.GM && window.GM.toast) window.GM.toast("删除失败，请稍后重试");
+        });
+    }
+
+    function restoreSwipedRow(row) {
+        if (!row) return;
+        row.hidden = false;
+        row.style.transition = "";
+        row.style.transform = "";
+        row.style.opacity = "";
+        row.style.height = "";
+        row.style.minHeight = "";
+        row.style.paddingTop = "";
+        row.style.paddingBottom = "";
+        row.style.overflow = "";
+    }
+
+    function undoSwipeDeletes() {
+        clearTimeout(swipeTimer);
+        swipeTimer = null;
+        swipeDeleted.forEach(function (id) { restoreSwipedRow(rowById(id)); });
+        swipeDeleted.clear();
+    }
+
+    function onRowSwiped(row) {
+        swipeDeleted.add(rowId(row));
+        clearTimeout(swipeTimer);
+        swipeTimer = setTimeout(function () { commitSwipeDeletes(false); }, SWIPE_UNDO_MS);
+        if (window.GM && window.GM.toast) {
+            window.GM.toast("已删除 " + swipeDeleted.size + " 封邮件", {
+                actionText: "撤销",
+                onAction: undoSwipeDeletes,
+                duration: SWIPE_UNDO_MS,
+            });
+        }
+    }
+
+    // 离开页面（打开邮件、切换文件夹、关闭标签页）时立即提交未完成的删除
+    window.addEventListener("pagehide", function () { commitSwipeDeletes(true); });
+
+    function bindSwipe(row) {
+        var startX = 0, startY = 0, startT = 0, dx = 0;
+        var tracking = false, swiping = false;
+        var bg = null;
+
+        function cleanup() {
+            row.classList.remove("is-swiping");
+            if (bg) { bg.remove(); bg = null; }
+        }
+
+        row.addEventListener("touchstart", function (ev) {
+            if (hasCheckedRows || ev.touches.length !== 1) { tracking = false; return; }
+            if (ev.target.closest("button, input, label, .dropdown-menu")) { tracking = false; return; }
+            var t = ev.touches[0];
+            startX = t.clientX;
+            startY = t.clientY;
+            startT = Date.now();
+            dx = 0;
+            tracking = true;
+            swiping = false;
+        }, { passive: true });
+
+        row.addEventListener("touchmove", function (ev) {
+            if (!tracking) return;
+            var t = ev.touches[0];
+            var mx = t.clientX - startX;
+            var my = t.clientY - startY;
+            if (!swiping) {
+                if (Math.abs(mx) < 10 && Math.abs(my) < 10) return;
+                // 先判断方向：竖向为主则交给页面滚动
+                if (Math.abs(my) >= Math.abs(mx)) { tracking = false; return; }
+                swiping = true;
+                row.classList.add("is-swiping");
+                row.style.transition = "none";
+                bg = document.createElement("div");
+                bg.className = "gm-swipe-bg";
+                bg.innerHTML = '<span class="ms" aria-hidden="true">delete</span>';
+                bg.style.top = row.offsetTop + "px";
+                bg.style.height = row.offsetHeight + "px";
+                row.parentNode.insertBefore(bg, row);
+            }
+            if (ev.cancelable) ev.preventDefault();
+            dx = mx;
+            row.style.transform = "translateX(" + dx + "px)";
+            bg.classList.toggle("is-right", dx < 0);
+            bg.classList.toggle("is-armed", Math.abs(dx) > row.offsetWidth * 0.35);
+        }, { passive: false });
+
+        function onEnd() {
+            if (!tracking) return;
+            tracking = false;
+            if (!swiping) return;
+            swiping = false;
+            lastSwipeAt = Date.now();
+            var width = row.offsetWidth;
+            var velocity = Math.abs(dx) / Math.max(1, Date.now() - startT);  // px/ms
+            var commit = Math.abs(dx) > width * 0.35 || (Math.abs(dx) > 48 && velocity > 0.6);
+            row.style.transition = "transform .2s ease-out, opacity .2s ease-out";
+            if (!commit) {
+                row.style.transform = "";
+                setTimeout(function () { row.style.transition = ""; cleanup(); }, 200);
+                return;
+            }
+            // 滑出屏幕后收起行高，再隐藏
+            row.style.transform = "translateX(" + (dx > 0 ? width : -width) + "px)";
+            row.style.opacity = "0";
+            var id = rowId(row);
+            setTimeout(function () {
+                if (!swipeDeleted.has(id)) { cleanup(); return; }  // 动画期间已撤销
+                var h = row.offsetHeight;
+                row.style.overflow = "hidden";
+                row.style.height = h + "px";
+                if (bg) {
+                    bg.style.transition = "height .2s ease-out";
+                    bg.style.height = h + "px";
+                }
+                // 强制回流，让高度动画从当前值开始
+                void row.offsetHeight;
+                row.style.transition = "height .2s ease-out, padding .2s ease-out, min-height .2s ease-out";
+                row.style.height = "0px";
+                row.style.minHeight = "0px";
+                row.style.paddingTop = "0px";
+                row.style.paddingBottom = "0px";
+                if (bg) bg.style.height = "0px";
+                setTimeout(function () {
+                    if (swipeDeleted.has(id)) row.hidden = true; else restoreSwipedRow(row);
+                    cleanup();
+                }, 200);
+            }, 200);
+            onRowSwiped(row);
+        }
+
+        row.addEventListener("touchend", onEnd);
+        row.addEventListener("touchcancel", function () {
+            if (!tracking) return;
+            tracking = false;
+            swiping = false;
+            row.style.transition = "";
+            row.style.transform = "";
+            cleanup();
+        });
+        // 滑动结束后浏览器可能补发一次 click，不要当成打开邮件
+        row.addEventListener("click", function (ev) {
+            if (Date.now() - lastSwipeAt < 400) {
+                ev.stopImmediatePropagation();
+                ev.preventDefault();
+            }
+        }, true);
     }
 
     initMessageList();

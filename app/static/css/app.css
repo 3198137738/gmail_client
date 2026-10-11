@@ -311,6 +311,15 @@ button { font-family: inherit; }
     font-size: 14px;
 }
 .gm-snackbar a { color: #a8c7fa; font-weight: 500; }
+.gm-snackbar-action {
+    margin: -8px -8px -8px auto;
+    padding: 8px;
+    border: 0;
+    background: none;
+    color: #a8c7fa;
+    font: inherit;
+    font-weight: 500;
+}
 
 /* ---- 顶栏 ------------------------------------------------------------ */
 .gm-header {
@@ -626,11 +635,31 @@ body.gm-nav-collapsed .gm-nav .gm-nav-labels { margin-top: 16px; }
 
 /* ---- 邮件列表：行 ---------------------------------------------------- */
 .gm-list {
+    position: relative;
     flex: 1 1 auto;
     min-height: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
 }
+/* 触屏左滑 / 右滑删除：滑动时邮件行下方露出红色底和删除图标 */
+.gm-row { touch-action: pan-y; }
+.gm-row[hidden] { display: none; }
+.gm-row.is-swiping { z-index: 3; }
+.gm-swipe-bg {
+    position: absolute;
+    left: 0;
+    right: 0;
+    z-index: 0;
+    display: flex;
+    align-items: center;
+    padding: 0 24px;
+    background: #d93025;
+    color: #fff;
+    pointer-events: none;
+}
+.gm-swipe-bg.is-right { justify-content: flex-end; }
+.gm-swipe-bg .ms { font-size: 24px; transition: transform .15s; }
+.gm-swipe-bg.is-armed .ms { transform: scale(1.2); }
 .gm-row {
     position: relative;
     display: flex;

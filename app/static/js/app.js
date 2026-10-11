@@ -107,10 +107,15 @@ document.addEventListener("click", function (ev) {
 });
 
 // 底部提示（Gmail snackbar）：window.GM.toast("邮件已发送", {href, linkText})
+// 也可以带一个按钮：window.GM.toast("已删除", {actionText: "撤销", onAction: fn})
 (function () {
     var el = document.getElementById("gm-snackbar");
     var timer = null;
     window.GM = window.GM || {};
+    function hide() {
+        clearTimeout(timer);
+        if (el) el.hidden = true;
+    }
     window.GM.toast = function (text, opts) {
         if (!el) return;
         opts = opts || {};
@@ -124,10 +129,22 @@ document.addEventListener("click", function (ev) {
             link.textContent = opts.linkText || "查看";
             el.appendChild(link);
         }
+        if (opts.actionText) {
+            var btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "gm-snackbar-action";
+            btn.textContent = opts.actionText;
+            btn.addEventListener("click", function () {
+                hide();
+                if (opts.onAction) opts.onAction();
+            });
+            el.appendChild(btn);
+        }
         el.hidden = false;
         clearTimeout(timer);
-        timer = setTimeout(function () { el.hidden = true; }, opts.duration || 6000);
+        timer = setTimeout(hide, opts.duration || 6000);
     };
+    window.GM.toastHide = hide;
 })();
 
 // 邮件正文 iframe 高度自适应（iframe 带 allow-same-origin，父页面可以读取其文档高度；

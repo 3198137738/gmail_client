@@ -42,8 +42,8 @@
         {{ csrf_input() }}
         {{ view_fields() }}
     </form>
-    {# 行内悬停按钮（删除 / 标为已读 / 未读）共用的表单，由 messages.js 填入邮件 id 后提交 #}
-    <form id="gm-row-form" method="post" class="d-none">
+    {# 行内悬停按钮（删除 / 标为已读 / 未读）共用的表单，由 messages.js 填入邮件 id 后提交；触屏滑动删除也用它的字段 #}
+    <form id="gm-row-form" method="post" class="d-none" data-delete-url="{{ url_for('messages.batch_delete') }}">
         {{ csrf_input() }}
         {{ view_fields() }}
         <input type="hidden" name="message_ids" id="gm-row-id" value="">
