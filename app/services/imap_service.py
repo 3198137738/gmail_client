@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from email.utils import parseaddr
@@ -162,11 +163,15 @@ def _parse_fetched_messages(
     folder_kind: str,
     fetched_items: list[tuple[int, dict]],
     blocked_senders: set[str],
+    failed_uids: Optional[set[int]] = None,
 ) -> list[dict]:
+    """解析下载到的邮件；传入 ``failed_uids`` 时，把没能解析的 UID 记进去。"""
     records: list[dict] = []
     for uid, data in fetched_items:
         raw = data.get(b"RFC822")
         if not raw:
+            if failed_uids is not None:
+                failed_uids.add(uid)
             continue
         try:
             parsed = parse_email(
@@ -177,6 +182,8 @@ def _parse_fetched_messages(
             )
         except Exception:
             logger.exception("parse_email failed for account=%s uid=%s", account_id, uid)
+            if failed_uids is not None:
+                failed_uids.add(uid)
             continue
 
         sender_email = _normalize_sender_email(parsed.from_addr)
@@ -314,14 +321,50 @@ def _plan_fetch_batches(
     return batches
 
 
+# 同一封邮件下载 / 解析 / 入库连续失败达到这个次数后放弃（记 error 日志），
+# 不再阻止同步进度前进；否则一封坏邮件会让后面每次同步都重试它。
+MAX_UID_ATTEMPTS = 5
+# (account_id, folder, uid) -> 连续失败次数（进程内，重启后重新计数）
+_uid_failures: dict[tuple[int, str, int], int] = {}
+_uid_failures_lock = threading.Lock()
+
+
+def _record_uid_outcome(
+    account_id: int, folder: str, attempted: list[int], failed: set[int]
+) -> list[int]:
+    """更新失败计数，返回仍需重试的失败 UID（已放弃的不含在内）。"""
+    retry: list[int] = []
+    with _uid_failures_lock:
+        for uid in attempted:
+            key = (account_id, folder, uid)
+            if uid not in failed:
+                _uid_failures.pop(key, None)
+                continue
+            count = _uid_failures.get(key, 0) + 1
+            if count >= MAX_UID_ATTEMPTS:
+                _uid_failures.pop(key, None)
+                logger.error(
+                    "Giving up on message after %s failed attempts account=%s folder=%s uid=%s",
+                    count, account_id, folder, uid,
+                )
+                continue
+            _uid_failures[key] = count
+            retry.append(uid)
+    return sorted(retry)
+
+
 @dataclass
 class IngestResult:
     saved: int = 0
     # 信任发件人被判为垃圾邮件、需要移回收件箱的 UID
     rescue_uids: list[int] = field(default_factory=list)
     newest_received: Optional[datetime] = None
-    # 有批次下载失败（网络等原因），这些邮件没有入库
-    failed: bool = False
+    # 下载、解析或入库失败、下次需要重试的 UID（升序）
+    failed_uids: list[int] = field(default_factory=list)
+
+    @property
+    def failed(self) -> bool:
+        return bool(self.failed_uids)
 
 
 def _ingest_uids(
@@ -336,7 +379,7 @@ def _ingest_uids(
     trusted_senders = _load_trusted_sender_emails(account_id) if folder_kind == "junk" else set()
     rescue_uids: list[int] = []
     saved = 0
-    failed = False
+    failed_uids: set[int] = set()
     # 本批新邮件中最新的 Gmail 接收时间（INTERNALDATE），用于计算「Gmail 收到 → 入库」延迟。
     newest_received: Optional[datetime] = None
     # 本地已有的邮件不必再下载正文
@@ -350,7 +393,7 @@ def _ingest_uids(
                 "IMAP fetch failed account=%s folder=%s uids=%s: %s",
                 account_id, folder, chunk, exc,
             )
-            failed = True
+            failed_uids.update(chunk)
             continue
 
         fetched_items = sorted(
@@ -369,6 +412,7 @@ def _ingest_uids(
             folder_kind=folder_kind,
             fetched_items=new_items,
             blocked_senders=blocked_senders,
+            failed_uids=failed_uids,
         )
         if trusted_senders:
             # 信任发件人的邮件被 Gmail 判为垃圾邮件时，不入库，改为移回收件箱，
@@ -404,17 +448,19 @@ def _ingest_uids(
                         "Failed to persist message account=%s folder=%s uid=%s",
                         account_id, folder, record["uid"],
                     )
+                    failed_uids.add(int(record["uid"]))
         except Exception:
             logger.exception(
                 "Failed to persist message batch account=%s folder=%s chunk=%s",
                 account_id, folder, chunk,
             )
+            failed_uids.update(int(record["uid"]) for record in records)
 
     return IngestResult(
         saved=saved,
         rescue_uids=rescue_uids,
         newest_received=newest_received,
-        failed=failed,
+        failed_uids=_record_uid_outcome(account_id, folder, to_fetch, failed_uids),
     )
 
 
@@ -475,11 +521,22 @@ def _sync_one_folder(
     saved = result.saved
     newest_received = result.newest_received
 
+    # 有邮件失败时，进度只推进到第一封失败邮件之前，下次同步从它开始重试；
+    # 否则这些邮件既不会被增量同步（UID <= last_uid），也不会被回填（UID > 本地最小 UID），永久丢失。
+    if result.failed_uids:
+        safe_uid = result.failed_uids[0] - 1
+        new_last_uid = safe_uid if safe_uid > last_uid else None
+        logger.warning(
+            "Sync incomplete account=%s folder=%s failed=%s; last_uid held at %s",
+            account_id, folder, result.failed_uids, max(last_uid, safe_uid),
+        )
+    else:
+        new_last_uid = max(uids)
     _update_sync_state(
         account_id,
         folder,
         uidvalidity=uidvalidity,
-        new_last_uid=max(uids),
+        new_last_uid=new_last_uid,
     )
     _move_rescued_to_inbox(account_id, folder, result.rescue_uids)
     elapsed = perf_counter() - started
