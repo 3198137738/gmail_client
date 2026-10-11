@@ -16,7 +16,6 @@ from sqlalchemy.orm import Session, defer, selectinload
 from ..auth import is_safe_redirect
 from ..database import get_db
 from ..models import Account, Attachment, BlockedSender, Message
-from ..services.background import submit_bg
 from ..services import pagination
 from ..services.pagination import Cursor
 from ..services.search import message_search_filter
@@ -26,7 +25,7 @@ from ..services.mail_body import (
     remote_images_allowed,
 )
 from ..services.imap_client import is_account_busy
-from ..services.imap_ops import delete_imap_messages, update_imap_flags
+from ..services import outbox
 from ..services.message_actions import (
     delete_local_messages as _delete_local_messages,
     toggle_messages_read_state as _toggle_messages_read_state,
@@ -202,15 +201,13 @@ def _group_messages_by_account_and_folder(
     return grouped
 
 
-def _schedule_remote_delete(messages: list[Message]) -> None:
-    """Delete on IMAP in background so UI doesn't block on network."""
+def _enqueue_remote_delete(db: Session, messages: list[Message]) -> list[int]:
+    """把远程删除写入 outbox（与本地删除同一事务提交），返回涉及的账号 id。"""
     grouped = _group_messages_by_account_and_folder(messages)
     for acc_id, folder_map in grouped.items():
-        pairs = [
-            (folder, [int(msg.uid) for msg in folder_messages])
-            for folder, folder_messages in folder_map.items()
-        ]
-        submit_bg(delete_imap_messages, acc_id, pairs)
+        for folder, folder_messages in folder_map.items():
+            outbox.enqueue(db, acc_id, folder, outbox.OP_DELETE, [int(m.uid) for m in folder_messages])
+    return list(grouped)
 
 
 SNIPPET_SOURCE_CHARS = 300
@@ -507,8 +504,9 @@ def batch_delete(
 ):
     account_id_int = _coerce_int(account_id)
     messages = _load_messages_by_ids(db, message_ids)
-    _schedule_remote_delete(messages)
+    touched = _enqueue_remote_delete(db, messages)
     deleted = _delete_local_messages(db, messages)
+    outbox.kick(touched)
     logger.info(
         "batch-delete kind=%s account_id=%s selected=%s deleted=%s mode=async_remote",
         kind, account_id_int, len(message_ids), deleted,
@@ -555,8 +553,9 @@ def delete_one(
     if message is None:
         raise HTTPException(status_code=404, detail="Message not found")
 
-    _schedule_remote_delete([message])
+    touched = _enqueue_remote_delete(db, [message])
     _delete_local_messages(db, [message])
+    outbox.kick(touched)
     logger.info("delete-one message_id=%s account_id=%s mode=async_remote", message_id, message.account_id)
 
     if is_safe_redirect(next):
@@ -667,8 +666,9 @@ def view_message(
         folder = message.folder
         uid = int(message.uid)
         message.is_read = True
+        outbox.enqueue(db, account_id, folder, outbox.OP_ADD_FLAGS, [uid], SEEN_FLAG.decode())
         db.commit()
-        submit_bg(update_imap_flags, account_id, [(folder, [uid])], add_flags=[SEEN_FLAG])
+        outbox.kick([account_id])
 
     file_attachments = [a for a in message.attachments if not a.is_inline]
     inline_attachments = [a for a in message.attachments if a.is_inline]

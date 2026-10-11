@@ -25,9 +25,9 @@ class FlakyMailbox(FakeMailbox):
         self.fail_uids: set[int] = set()
         self.broken_uids: set[int] = set()
 
-    def fetch(self, uids, items):
-        if items == ["RFC822.SIZE"]:
-            return {u: {b"RFC822.SIZE": 1000} for u in uids}
+    def fetch(self, uids, items, modifiers=None):
+        if items in (["RFC822.SIZE"], ["FLAGS"]):
+            return super().fetch(uids, items, modifiers)
         if self.fail_uids & set(uids):
             raise IMAPClientError("socket timeout")
         return {

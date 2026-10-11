@@ -101,3 +101,10 @@ def publish_new_mail(account_id: int, *, inbox: int = 0, sent: int = 0, junk: in
             "junk": int(junk),
         }
     )
+
+
+def publish_mail_changed(account_id: int, folder_kind: str) -> None:
+    """服务器上的已读状态或邮件删除同步到了本地，通知页面刷新列表 / 未读数（不算新邮件）。"""
+    event_bus.publish(
+        {"type": "mail_changed", "account_id": int(account_id), "kind": str(folder_kind)}
+    )

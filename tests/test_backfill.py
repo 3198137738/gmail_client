@@ -31,9 +31,32 @@ class FakeMailbox:
         self.uids = list(range(1, n + 1))
         self.uidvalidity = uidvalidity
         self.fail_fetch = False
+        self.seen: set[int] = set()          # 服务器上已读的 UID
+        self.modseq: int | None = None       # None 表示不支持 CONDSTORE
+        self.changed_since: dict[int, int] = {}  # uid -> 最后一次变化时的 modseq
 
     def select_folder(self, folder, readonly=True):
-        return {b"UIDVALIDITY": self.uidvalidity}
+        info = {b"UIDVALIDITY": self.uidvalidity, b"EXISTS": len(self.uids)}
+        if self.modseq is not None:
+            info[b"HIGHESTMODSEQ"] = self.modseq
+        return info
+
+    def has_capability(self, cap):
+        return cap == "CONDSTORE" and self.modseq is not None
+
+    def set_seen(self, uid: int, seen: bool = True):
+        """模拟在其他客户端修改已读状态。"""
+        (self.seen.add if seen else self.seen.discard)(uid)
+        if self.modseq is not None:
+            self.modseq += 1
+            self.changed_since[uid] = self.modseq
+
+    def _expand(self, uids):
+        if isinstance(uids, str):
+            lo, hi = uids.split(":")
+            hi = max(self.uids, default=0) if hi == "*" else int(hi)
+            return [u for u in self.uids if int(lo) <= u <= hi]
+        return list(uids)
 
     def search(self, criteria):
         if criteria == ["ALL"]:
@@ -41,15 +64,27 @@ class FakeMailbox:
         assert criteria[0] == "UID"
         lo, hi = criteria[1].split(":")
         lo = int(lo)
-        hi = max(self.uids) if hi == "*" else int(hi)
+        hi = max(self.uids, default=0) if hi == "*" else int(hi)
         return [u for u in self.uids if lo <= u <= hi]
 
-    def fetch(self, uids, items):
+    def _flags(self, uid):
+        return (b"\\Seen",) if uid in self.seen else ()
+
+    def fetch(self, uids, items, modifiers=None):
+        uids = self._expand(uids)
         if items == ["RFC822.SIZE"]:
             return {u: {b"RFC822.SIZE": 1000} for u in uids}
+        if items == ["FLAGS"]:
+            if modifiers:
+                since = int(modifiers[0].split()[1])
+                uids = [u for u in uids if self.changed_since.get(u, 0) > since]
+            return {u: {b"FLAGS": self._flags(u)} for u in uids if u in self.uids}
         if self.fail_fetch:
             raise IMAPClientError("connection reset")
-        return {u: {b"RFC822": _raw(u), b"FLAGS": (), b"INTERNALDATE": None} for u in uids}
+        return {
+            u: {b"RFC822": _raw(u), b"FLAGS": self._flags(u), b"INTERNALDATE": None}
+            for u in uids if u in self.uids
+        }
 
     def list_folders(self):
         return []

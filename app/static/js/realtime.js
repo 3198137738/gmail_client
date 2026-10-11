@@ -32,6 +32,9 @@
         try { data = JSON.parse(e.data); } catch (err) { return; }
         if (data && data.type === "new_mail") {
             window.dispatchEvent(new CustomEvent("rcm:newmail", { detail: data }));
+        } else if (data && data.type === "mail_changed") {
+            // 在手机 / Gmail 网页上读过、删除或归档的邮件已同步到本地
+            window.dispatchEvent(new CustomEvent("rcm:mailchanged", { detail: data }));
         }
     };
 

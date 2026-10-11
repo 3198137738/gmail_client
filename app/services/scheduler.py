@@ -25,6 +25,7 @@ from .background import submit_bg
 from .backup import safe_run_backup
 from .imap_backfill import schedule_all_backfills
 from .imap_service import safe_sync_account
+from .outbox import process_all_due
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,17 @@ def start_scheduler() -> BackgroundScheduler:
         "interval",
         minutes=SYNC_INTERVAL_MINUTES,
         id="sync-all-accounts",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    # 远程操作 outbox：每分钟执行到期的重试（首次在启动后立即执行，补上重启前没做完的）
+    sched.add_job(
+        process_all_due,
+        "interval",
+        minutes=1,
+        next_run_time=datetime.now(timezone.utc) + timedelta(seconds=5),
+        id="outbox",
         replace_existing=True,
         max_instances=1,
         coalesce=True,

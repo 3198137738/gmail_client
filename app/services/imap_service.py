@@ -44,14 +44,14 @@ import logging
 import shutil
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.utils import parseaddr
 from time import perf_counter
 from typing import Optional
 
 from imapclient import IMAPClient
 from imapclient.exceptions import IMAPClientError
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -66,6 +66,7 @@ from ..config import (
 from ..crypto import decrypt_password
 from ..database import session_scope
 from ..models import Account, Attachment, BlockedSender, Message, SyncState, TrustedSender
+from . import outbox
 from .background import submit_bg
 from .imap_client import (
     IMAPSyncError,
@@ -78,9 +79,8 @@ from .imap_client import (
     _release_account_lock,
     _try_acquire_for_sync,
 )
-from .imap_ops import move_imap_messages
 from .email_parser import _message_base_dir, parse_email
-from .events import publish_new_mail
+from .events import publish_mail_changed, publish_new_mail
 from .telegram_service import notify_new_mail
 from ..timeutil import utcnow
 
@@ -382,8 +382,13 @@ def _ingest_uids(
     failed_uids: set[int] = set()
     # 本批新邮件中最新的 Gmail 接收时间（INTERNALDATE），用于计算「Gmail 收到 → 入库」延迟。
     newest_received: Optional[datetime] = None
-    # 本地已有的邮件不必再下载正文
+    # 本地已有的邮件不必再下载正文；本地已删除 / 移走、远程操作还在 outbox 排队的
+    # 邮件也跳过，否则会被重新下载回来
     existing_before = _existing_uids(account_id, folder, uids)
+    with session_scope() as db:
+        existing_before |= outbox.pending_uids(
+            db, account_id, folder, ops=(outbox.OP_DELETE, outbox.OP_MOVE)
+        )
     to_fetch = [uid for uid in uids if uid not in existing_before]
     for chunk in _plan_fetch_batches(client, to_fetch):
         try:
@@ -470,7 +475,216 @@ def _move_rescued_to_inbox(account_id: int, folder: str, rescue_uids: list[int])
             "Trusted sender mail found in junk, moving to inbox account=%s uids=%s",
             account_id, rescue_uids,
         )
-        submit_bg(move_imap_messages, account_id, folder, rescue_uids)
+        with session_scope() as db:
+            outbox.enqueue(db, account_id, folder, outbox.OP_MOVE, rescue_uids, DEFAULT_FOLDER)
+        outbox.kick([account_id])
+
+
+# ---- 服务器 → 本地的反向同步：已读状态、删除 / 移走 --------------------------
+# 删除比对要 UID SEARCH 整个文件夹，按间隔节流：有变化（HIGHESTMODSEQ 变了）时
+# 至少隔 RECONCILE_MIN_INTERVAL 才比对一次，没有变化时每 RECONCILE_INTERVAL 兜底一次。
+RECONCILE_INTERVAL = timedelta(minutes=10)
+RECONCILE_MIN_INTERVAL = timedelta(seconds=30)
+_SQL_CHUNK = 500
+
+
+def _chunks(items: list[int], size: int = _SQL_CHUNK):
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
+
+
+def _delete_local_rows(account_id: int, folder: str, uids: Optional[set[int]] = None) -> int:
+    """删除本地某文件夹的邮件（``uids`` 为 None 时删除全部）及其附件目录。"""
+    with session_scope() as db:
+        rows = db.execute(
+            select(Message.id, Message.folder_kind, Message.uid).where(
+                Message.account_id == account_id, Message.folder == folder
+            )
+        ).all()
+        if uids is not None:
+            rows = [row for row in rows if int(row.uid) in uids]
+        ids = [int(row.id) for row in rows]
+        for chunk in _chunks(ids):
+            db.execute(delete(Attachment).where(Attachment.message_id.in_(chunk)))
+            db.execute(delete(Message).where(Message.id.in_(chunk)))
+    dirs = [str(_message_base_dir(account_id, row.folder_kind, int(row.uid))) for row in rows]
+    if dirs:
+        submit_bg(_remove_dirs, dirs)
+    return len(ids)
+
+
+def _remove_dirs(dirs: list[str]) -> None:
+    for path in dirs:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def _reset_folder(account_id: int, folder: str, uidvalidity: int) -> None:
+    """UIDVALIDITY 变化：旧 UID 全部失效，清空本地该文件夹并从头同步。
+
+    不能只把 last_uid 归零：旧行会让同号的新邮件被当成「已存在」而不入库，
+    outbox 里的旧 UID 操作会作用到服务器上另一封邮件，回填游标也会取错。
+    """
+    removed = _delete_local_rows(account_id, folder)
+    with session_scope() as db:
+        dropped = outbox.drop_folder_ops(db, account_id, folder)
+        state = _get_or_create_sync_state(db, account_id, folder)
+        state.uidvalidity = uidvalidity
+        state.last_uid = 0
+        state.backfill_before_uid = None
+        state.backfill_done = False
+        state.highestmodseq = None
+        state.reconciled_at = None
+    logger.warning(
+        "UIDVALIDITY changed account=%s folder=%s; cleared %s local messages, dropped %s pending ops",
+        account_id, folder, removed, dropped,
+    )
+
+
+def _highest_modseq(client: IMAPClient, folder: str, select_info: dict) -> Optional[int]:
+    value = select_info.get(b"HIGHESTMODSEQ")
+    if value is None:
+        try:
+            if not client.has_capability("CONDSTORE"):
+                return None
+            value = client.folder_status(folder, [b"HIGHESTMODSEQ"]).get(b"HIGHESTMODSEQ")
+        except IMAPClientError:
+            return None
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _apply_remote_flags(
+    client: IMAPClient, account_id: int, folder: str, last_uid: int, since: Optional[int]
+) -> int:
+    """把服务器上的已读状态同步到本地，返回改动的邮件数。
+
+    ``since`` 为上次的 HIGHESTMODSEQ 时只取之后变化过的邮件（CONDSTORE），
+    为 None 时取全部（服务器不支持 CONDSTORE 时的兜底）。
+    本地刚改过、还在 outbox 等待推送的邮件以本地为准，不被服务器旧状态覆盖。
+    """
+    modifiers = [f"CHANGEDSINCE {since}"] if since else None
+    fetched = client.fetch(f"1:{last_uid}", ["FLAGS"], modifiers=modifiers)
+    seen: list[int] = []
+    unseen: list[int] = []
+    for uid, data in fetched.items():
+        uid = int(uid)
+        if uid > last_uid:
+            continue
+        (seen if _is_seen(data.get(b"FLAGS")) else unseen).append(uid)
+    if not seen and not unseen:
+        return 0
+    changed = 0
+    with session_scope() as db:
+        skip = outbox.pending_uids(
+            db, account_id, folder, ops=(outbox.OP_ADD_FLAGS, outbox.OP_REMOVE_FLAGS)
+        )
+        for value, uids in ((True, seen), (False, unseen)):
+            for chunk in _chunks(sorted(set(uids) - skip)):
+                changed += db.execute(
+                    update(Message)
+                    .where(
+                        Message.account_id == account_id,
+                        Message.folder == folder,
+                        Message.uid.in_(chunk),
+                        Message.is_read.is_not(value),
+                    )
+                    .values(is_read=value)
+                ).rowcount or 0
+    return changed
+
+
+def _reconcile_deletions(
+    client: IMAPClient, account_id: int, folder: str, last_uid: int, select_info: dict
+) -> int:
+    """删除本地有、服务器上已不存在的邮件（在手机 / Gmail 网页上删除或归档的），返回删除数。"""
+    remote = {int(u) for u in client.search(["ALL"])}
+    if not remote and int(select_info.get(b"EXISTS") or 0) > 0:
+        logger.warning("Empty UID SEARCH on non-empty folder account=%s folder=%s; skip", account_id, folder)
+        return 0
+    with session_scope() as db:
+        local = set(
+            db.execute(
+                select(Message.uid).where(
+                    Message.account_id == account_id,
+                    Message.folder == folder,
+                    Message.uid <= last_uid,
+                )
+            ).scalars()
+        )
+    missing = local - remote
+    if not missing:
+        return 0
+    return _delete_local_rows(account_id, folder, missing)
+
+
+def _sync_remote_changes(
+    client: IMAPClient,
+    account_id: int,
+    folder: str,
+    select_info: dict,
+    *,
+    last_uid: int,
+    prev_modseq: Optional[int],
+    reconciled_at: Optional[datetime],
+) -> tuple[int, int]:
+    """同步服务器上发生的已读 / 删除变化，返回 ``(改动已读状态数, 删除数)``。出错只记日志。"""
+    if last_uid <= 0:
+        # 首次同步：本地还没有邮件，只记下基准（在下载之前取，之后的变化都不会漏）
+        try:
+            modseq = _highest_modseq(client, folder, select_info)
+        except IMAPClientError:
+            modseq = None
+        with session_scope() as db:
+            state = _get_or_create_sync_state(db, account_id, folder)
+            state.highestmodseq = modseq
+            state.reconciled_at = utcnow()
+        return 0, 0
+    modseq = _highest_modseq(client, folder, select_info)
+    has_mail = int(select_info.get(b"EXISTS") or 0) > 0
+    now = utcnow()
+    elapsed = (now - reconciled_at) if reconciled_at else None
+    reconcile = (
+        elapsed is None
+        or elapsed >= RECONCILE_INTERVAL
+        or (modseq != prev_modseq and elapsed >= RECONCILE_MIN_INTERVAL)
+    )
+
+    changed_flags = 0
+    flags_ok = True
+    if has_mail and (
+        (modseq is not None and prev_modseq is not None and modseq != prev_modseq)
+        # 服务器不支持 CONDSTORE：随删除比对一起全量核对已读状态
+        or (modseq is None and reconcile)
+    ):
+        try:
+            since = prev_modseq if modseq is not None else None
+            changed_flags = _apply_remote_flags(client, account_id, folder, last_uid, since)
+        except IMAPClientError as exc:
+            flags_ok = False  # 不保存新的 modseq，下次从旧基准重新拉取
+            logger.warning("Remote flag sync failed account=%s folder=%s: %s", account_id, folder, exc)
+
+    removed = 0
+    if reconcile:
+        try:
+            removed = _reconcile_deletions(client, account_id, folder, last_uid, select_info)
+        except IMAPClientError as exc:
+            reconcile = False
+            logger.warning("Deletion reconcile failed account=%s folder=%s: %s", account_id, folder, exc)
+
+    with session_scope() as db:
+        state = _get_or_create_sync_state(db, account_id, folder)
+        if flags_ok:
+            state.highestmodseq = modseq
+        if reconcile:
+            state.reconciled_at = now
+    if changed_flags or removed:
+        logger.info(
+            "Remote changes applied account=%s folder=%s flags=%s removed=%s",
+            account_id, folder, changed_flags, removed,
+        )
+    return changed_flags, removed
 
 
 def _sync_one_folder(
@@ -485,6 +699,8 @@ def _sync_one_folder(
         state = _get_or_create_sync_state(db, account_id, folder)
         last_uid = int(state.last_uid or 0)
         prev_uidvalidity = state.uidvalidity
+        prev_modseq = state.highestmodseq
+        reconciled_at = state.reconciled_at
 
     try:
         select_info = client.select_folder(folder, readonly=True)
@@ -493,11 +709,17 @@ def _sync_one_folder(
 
     uidvalidity = int(select_info.get(b"UIDVALIDITY") or 0)
     if prev_uidvalidity and uidvalidity and prev_uidvalidity != uidvalidity:
-        logger.warning(
-            "UIDVALIDITY changed account=%s folder=%s; resetting",
-            account_id, folder,
-        )
+        _reset_folder(account_id, folder, uidvalidity)
         last_uid = 0
+        prev_modseq = None
+        reconciled_at = None
+
+    changed_flags, removed = _sync_remote_changes(
+        client, account_id, folder, select_info,
+        last_uid=last_uid, prev_modseq=prev_modseq, reconciled_at=reconciled_at,
+    )
+    if changed_flags or removed:
+        publish_mail_changed(account_id, folder_kind)
 
     if last_uid > 0:
         try:

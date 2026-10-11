@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
     ForeignKey,
@@ -48,6 +49,9 @@ class Account(Base):
     )
     trusted_senders = relationship(
         "TrustedSender", back_populates="account", cascade="all, delete-orphan"
+    )
+    pending_ops = relationship(
+        "PendingOp", back_populates="account", cascade="all, delete-orphan"
     )
 
 
@@ -136,6 +140,10 @@ class SyncState(Base):
     backfill_done: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="0", nullable=False
     )
+    # CONDSTORE：上次同步时文件夹的 HIGHESTMODSEQ，用于只拉取之后变化过的已读状态
+    highestmodseq: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    # 上次与服务器比对「哪些邮件已被删除 / 移走」的时间
+    reconciled_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     account = relationship("Account", back_populates="sync_states")
 
@@ -214,4 +222,37 @@ class TrustedSender(Base):
 
     __table_args__ = (
         UniqueConstraint("account_id", "sender_email", name="uq_trusted_sender_account_email"),
+    )
+
+
+class PendingOp(Base):
+    """待推送到 Gmail 的远程操作（outbox）。
+
+    本地修改（删除、标记已读等）与对应的远程操作在同一个事务里写入，由后台按指数退避
+    重试直到成功，进程重启也不会丢失；UIDVALIDITY 变化（UID 失效）时丢弃。
+    """
+
+    __tablename__ = "pending_ops"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    folder: Mapped[str] = mapped_column(String(255), nullable=False)
+    # 入队时该文件夹的 UIDVALIDITY；执行时不一致说明 UID 已失效
+    uidvalidity: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # delete / add_flags / remove_flags / move
+    op: Mapped[str] = mapped_column(String(32), nullable=False)
+    uids: Mapped[str] = mapped_column(Text, nullable=False)  # 逗号分隔
+    # add_flags / remove_flags：标记名；move：目标文件夹
+    arg: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
+
+    account = relationship("Account", back_populates="pending_ops")
+
+    __table_args__ = (
+        Index("ix_pending_ops_account_due", "account_id", "next_attempt_at"),
     )

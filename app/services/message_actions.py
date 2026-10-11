@@ -1,8 +1,8 @@
 """Shared message mutation logic (mark read/unread, delete).
 
 Extracted so both the web routes and the Telegram bot can reuse the exact same
-behaviour: local DB update plus best-effort IMAP propagation (``\\Seen`` flag or
-permanent delete + attachment cleanup).
+behaviour: local DB update plus IMAP propagation through the persistent outbox
+(``\\Seen`` flag or move-to-trash + attachment cleanup), retried until it succeeds.
 """
 from __future__ import annotations
 
@@ -17,8 +17,9 @@ from sqlalchemy.orm import Session, selectinload
 from ..config import ATTACHMENTS_DIR
 from ..database import session_scope
 from ..models import Message, TrustedSender
+from . import outbox
 from .background import submit_bg
-from .imap_ops import delete_imap_messages, move_imap_messages, update_imap_flags
+from .imap_ops import move_imap_messages
 from .imap_service import _normalize_sender_email
 
 logger = logging.getLogger(__name__)
@@ -95,14 +96,12 @@ def toggle_messages_read_state(
     for message in changed:
         message.is_read = is_read
         grouped[int(message.account_id)][message.folder].append(int(message.uid))
-    db.commit()
-
+    op = outbox.OP_ADD_FLAGS if is_read else outbox.OP_REMOVE_FLAGS
     for account_id, folder_uids in grouped.items():
-        pairs = [(folder, uids) for folder, uids in folder_uids.items()]
-        if is_read:
-            submit_bg(update_imap_flags, account_id, pairs, add_flags=[SEEN_FLAG])
-        else:
-            submit_bg(update_imap_flags, account_id, pairs, remove_flags=[SEEN_FLAG])
+        for folder, uids in folder_uids.items():
+            outbox.enqueue(db, account_id, folder, op, uids, SEEN_FLAG.decode())
+    db.commit()
+    outbox.kick(grouped)
     return len(changed)
 
 
@@ -197,7 +196,7 @@ def mark_read_by_id(message_id: int) -> tuple[bool, str]:
 
 
 def delete_by_id(message_id: int) -> tuple[bool, str]:
-    """Delete one message on the server and locally. Returns ``(ok, subject_or_error)``."""
+    """删除一封邮件：本地立即删除，远程删除写入 outbox。Returns ``(ok, subject_or_error)``."""
     try:
         with session_scope() as db:
             message = db.execute(
@@ -208,23 +207,10 @@ def delete_by_id(message_id: int) -> tuple[bool, str]:
             if message is None:
                 return False, "邮件不存在或已删除"
             account_id = int(message.account_id)
-            folder = message.folder
-            uid = int(message.uid)
             subject = (message.subject or "(无主题)").strip()
-
-        result = delete_imap_messages(account_id, [(folder, [uid])])
-        folder_stat = result.get("folders", {}).get(folder, {})
-        if folder_stat.get("error") is not None:
-            return False, f"IMAP 删除失败：{folder_stat.get('error')}"
-
-        with session_scope() as db:
-            message = db.execute(
-                select(Message)
-                .options(selectinload(Message.attachments))
-                .where(Message.id == message_id)
-            ).scalar_one_or_none()
-            if message is not None:
-                delete_local_messages(db, [message])
+            outbox.enqueue(db, account_id, message.folder, outbox.OP_DELETE, [int(message.uid)])
+            delete_local_messages(db, [message])
+        outbox.kick([account_id])
         return True, subject
     except Exception as exc:
         logger.exception("delete_by_id failed id=%s", message_id)

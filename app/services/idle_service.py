@@ -62,14 +62,15 @@ _NO_FOLDER_RECHECK_SEC = 600
 
 
 def _has_new_mail(responses) -> bool:
-    """True when an IDLE response batch signals newly arrived messages."""
+    """IDLE 推送里有需要同步的变化（新邮件、删除、标记变化）时返回 True。"""
     for item in responses or ():
         if not item:
             continue
         token = item[1] if len(item) > 1 else None
         if isinstance(token, bytes):
             token = token.upper()
-            if token in (b"EXISTS", b"RECENT"):
+            # EXISTS/RECENT：新邮件；EXPUNGE：邮件被删除或移走；FETCH：已读等标记变化
+            if token in (b"EXISTS", b"RECENT", b"EXPUNGE", b"FETCH"):
                 return True
     return False
 

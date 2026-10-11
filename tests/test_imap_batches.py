@@ -28,6 +28,9 @@ class FakeClient:
     def select_folder(self, folder, readonly=True):
         return {b"UIDVALIDITY": 1}
 
+    def has_capability(self, cap):
+        return False
+
     def search(self, criteria):
         return list(self.sizes)
 

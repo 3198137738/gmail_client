@@ -499,6 +499,12 @@
     window.addEventListener("rcm:newmail", function (e) {
         if (e.detail) onNewMail(e.detail);
     });
+    // 服务器上的已读 / 删除变化：不会把列表往下挤，直接原地刷新列表和未读数
+    window.addEventListener("rcm:mailchanged", function (e) {
+        var detail = e.detail || {};
+        if (ctx.accountId && detail.account_id !== ctx.accountId) return;
+        refreshList();
+    });
     window.addEventListener("rcm:sseopen", function (e) {
         // On reconnect we may have missed events while offline; quietly catch
         // up (skip the very first connection, the page is already fresh).
