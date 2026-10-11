@@ -1,3 +1,6 @@
 # Shell/scripts must use LF so Linux containers can exec them
 *.sh text eol=lf
 docker-entrypoint.sh text eol=lf
+
+# 第三方库按字节原样保存：换行符一旦被转换，文件哈希就和 SRI integrity 对不上
+app/static/vendor/** -text

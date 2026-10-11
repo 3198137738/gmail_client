@@ -89,14 +89,15 @@ app = FastAPI(
 
 # 主页面的 CSP。邮件正文在 sandbox iframe 中渲染，有自己更严格的 CSP
 # （见 services/mail_body.py），这里不会覆盖已存在的 CSP 头。
-_CDN = "https://cdn.jsdelivr.net"
+# 所有脚本、样式、字体都由本站提供（Bootstrap 在 static/vendor），不信任任何外部 CDN：
+# 放行 CDN 域名等于允许执行该 CDN 上任何人发布的脚本。
 _PAGE_CSP = "; ".join(
     [
         "default-src 'self'",
         # 不允许内联脚本：页面脚本都在 static/js，即使出现 XSS 注入的脚本也无法执行
-        f"script-src 'self' {_CDN}",
-        f"style-src 'self' 'unsafe-inline' {_CDN}",
-        f"font-src 'self' data: {_CDN}",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline'",
+        "font-src 'self' data:",
         "img-src 'self' data: blob: https:",
         "connect-src 'self'",
         "frame-src 'self'",

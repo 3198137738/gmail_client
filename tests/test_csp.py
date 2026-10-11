@@ -12,6 +12,38 @@ INLINE_SCRIPT_RE = re.compile(r"<script(?![^>]*(?:\ssrc=|type=\"application/json
 INLINE_HANDLER_RE = re.compile(r"<[^>]+\son[a-z]+\s*=", re.I)
 
 
+def test_csp_trusts_no_external_origins(client):
+    csp = client.get("/login").headers["content-security-policy"]
+    for directive in ("script-src", "style-src", "font-src"):
+        part = next(p for p in csp.split(";") if p.strip().startswith(directive))
+        assert "http" not in part, part
+
+
+@pytest.mark.parametrize("path", ["/login", "/messages/"])
+def test_pages_load_no_external_scripts_or_styles(client, path):
+    if path != "/login":
+        login(client)
+    html = client.get(path).text
+    # url_for 生成的是本站绝对地址（测试中为 testserver），其他主机一律不允许
+    hosts = re.findall(r"<(?:script|link)[^>]+(?:src|href)=\"https?://([^/\"]+)", html)
+    assert hosts and set(hosts) == {"testserver"}, hosts
+
+
+def test_vendor_files_match_sri():
+    """本地 Bootstrap 文件必须与模板里的 integrity 一致（被篡改时测试失败）。"""
+    import base64
+    import hashlib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent / "app"
+    base = (root / "templates" / "base.html").read_text(encoding="utf-8")
+    pairs = re.findall(r"path='(vendor/[^']+)'\) }}\"\s+integrity=\"sha384-([^\"]+)\"", base)
+    assert len(pairs) == 2
+    for rel, expected in pairs:
+        digest = hashlib.sha384((root / "static" / rel).read_bytes()).digest()
+        assert base64.b64encode(digest).decode() == expected, rel
+
+
 def test_csp_forbids_inline_scripts(client):
     resp = client.get("/login")
     csp = resp.headers["content-security-policy"]
