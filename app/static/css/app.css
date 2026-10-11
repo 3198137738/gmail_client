@@ -47,7 +47,7 @@
     font-weight: 400;
     /* 图标字体未加载完时不显示文字（否则会闪现 "inbox" 之类的图标名） */
     font-display: block;
-    src: url("../fonts/material-symbols-outlined.woff2") format("woff2");
+    src: url("../fonts/material-symbols-304dd868d6.woff2") format("woff2");
 }
 
 /* ---- 设计变量（Gmail Material 3 浅色主题） ---------------------------- */

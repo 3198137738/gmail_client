@@ -169,7 +169,31 @@ app.add_middleware(
 # 最外层：先确定协议，后面的中间件和路由生成的链接才是 https
 app.add_middleware(ForwardedProtoMiddleware)
 
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+class CachedStaticFiles(StaticFiles):
+    """静态资源的缓存策略。
+
+    - 带 ``?v=<内容哈希>`` 的地址（app.css / app.js 等）和文件名本身带版本的目录
+      （``fonts/``：图标字体子集以内容哈希命名；``vendor/``：目录名带版本号）
+      内容永不改变，可以长期缓存：一年 + immutable，浏览器连协商请求都不发。
+    - 其余（logo、favicon 等不带版本的地址）缓存 1 小时。
+    """
+
+    _IMMUTABLE = "public, max-age=31536000, immutable"
+    _SHORT = "public, max-age=3600"
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        if response.status_code in (200, 304):
+            rel = path.replace("\\", "/")
+            versioned = b"v=" in (scope.get("query_string") or b"")
+            if versioned or rel.startswith(("fonts/", "vendor/")):
+                response.headers["Cache-Control"] = self._IMMUTABLE
+            else:
+                response.headers["Cache-Control"] = self._SHORT
+        return response
+
+
+app.mount("/static", CachedStaticFiles(directory=str(STATIC_DIR)), name="static")
 
 app.include_router(auth_routes.router)
 app.include_router(accounts_routes.router)

@@ -22,7 +22,7 @@
     <title>{% block title %}邮件{% endblock %} - Roundcube</title>
     <link rel="icon" type="image/svg+xml" href="{{ url_for('static', path='img/favicon.svg') }}">
     {# Bootstrap 5.3.3 本地托管（不依赖外部 CDN）；integrity 为官方发布的 SRI 值，文件被改动时浏览器拒绝加载 #}
-    <link rel="stylesheet" href="{{ url_for('static', path='vendor/bootstrap/bootstrap.min.css') }}"
+    <link rel="stylesheet" href="{{ url_for('static', path='vendor/bootstrap-5.3.3/bootstrap.min.css') }}"
           integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH">
     <link rel="stylesheet" href="{{ url_for('static', path='css/app.css') }}?v={{ static_version }}">
 </head>
@@ -104,7 +104,7 @@
 
 <div class="gm-snackbar" id="gm-snackbar" role="status" aria-live="polite" hidden></div>
 
-<script src="{{ url_for('static', path='vendor/bootstrap/bootstrap.bundle.min.js') }}"
+<script src="{{ url_for('static', path='vendor/bootstrap-5.3.3/bootstrap.bundle.min.js') }}"
         integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"></script>
 <script src="{{ url_for('static', path='js/app.js') }}?v={{ static_version }}"></script>
 {% if realtime_enabled and not bare %}
