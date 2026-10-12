@@ -57,7 +57,7 @@ const rowClassName = (row) => (row.warn ? "is-warn" : "");
 </script>
 
 <template>
-  <div class="gm-card gm-settings-page">
+  <div class="gm-panel gm-settings-page">
     <SettingsHeader />
     <div class="gm-settings">
       <p class="gm-settings-hint gm-audit-hint">
@@ -84,7 +84,7 @@ const rowClassName = (row) => (row.warn ? "is-warn" : "");
 </template>
 
 <style scoped>
-.gm-settings-page { overflow-y: auto; }
+.gm-settings-page { overflow-y: auto; background: var(--gm-bg); }
 .gm-audit-hint { margin: 16px 0 12px; }
 .gm-audit-pager { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
 :deep(.is-warn td) { background: #fef7e0 !important; }

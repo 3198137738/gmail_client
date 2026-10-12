@@ -60,7 +60,7 @@ async function submit() {
       </NFormItem>
       <div class="gm-auth-meta">当前访问 IP：{{ store.session?.client_ip }}</div>
       <div class="gm-auth-actions">
-        <NButton type="primary" attr-type="submit" :loading="loading" :disabled="blocked || !password">下一步</NButton>
+        <NButton type="primary" block attr-type="submit" :loading="loading" :disabled="blocked || !password">登录</NButton>
       </div>
     </NForm>
   </AuthCard>

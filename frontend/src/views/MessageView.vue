@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { NButton, NCheckbox, NCheckboxGroup, NDropdown, NIcon, NPopover, NSpin, NAlert } from "naive-ui";
 import {
   ArrowBackOutlined,
+  CloseOutlined,
   ArrowDropDownOutlined,
   AttachFileOutlined,
   BlockOutlined,
@@ -33,7 +34,18 @@ import { isMobile, refreshNav } from "../composables/common";
 import { usePageShortcuts } from "../composables/shortcuts";
 import { avatarColor, fullDate, initial, listDate, longDate, dateTime } from "../format";
 
+const props = defineProps({
+  // 电脑端分栏阅读：显示在列表右侧，「返回」变为关闭阅读窗格
+  split: { type: Boolean, default: false },
+});
+
 const route = useRoute();
+
+// 邮件状态变了（已读、删除、星标等）：刷新导航未读数，分栏阅读时也刷新左侧列表
+function changed() {
+  refreshNav();
+  store.listVersion += 1;
+}
 const router = useRouter();
 
 const FOLDER_NAMES = { inbox: "收件箱", sent: "已发送", junk: "垃圾邮件" };
@@ -64,7 +76,7 @@ async function load() {
     const backAccount = new URLSearchParams(data.back_url.split("?")[1] || "").get("account_id");
     store.view.accountId = backAccount ? Number(backAccount) : null;
     document.title = `${data.subject || "(无主题)"} - Roundcube`;
-    refreshNav();   // 打开邮件会把它标为已读
+    changed();   // 打开邮件会把它标为已读
   } catch (err) {
     msg.value = null;
     error.value = err.message;
@@ -92,14 +104,14 @@ async function remove() {
   if (!(await confirm(DELETE_CONFIRM, { danger: true, positiveText: "删除" }))) return;
   if (await run(post(`/api/messages/${msg.value.id}/delete`))) {
     toast("已删除邮件");
-    refreshNav();
+    changed();
     goBack();
   }
 }
 
 async function markUnread() {
   if (await run(post(`/api/messages/${msg.value.id}/mark-unread`))) {
-    refreshNav();
+    changed();
     goBack();
   }
 }
@@ -107,7 +119,8 @@ async function markUnread() {
 async function toggleStar() {
   const value = !msg.value.is_starred;
   msg.value.is_starred = value;
-  if (!(await run(post(`/api/messages/${msg.value.id}/star`, { starred: value })))) msg.value.is_starred = !value;
+  if (await run(post(`/api/messages/${msg.value.id}/star`, { starred: value }))) changed();
+  else msg.value.is_starred = !value;
 }
 
 async function notSpam() {
@@ -119,7 +132,7 @@ async function notSpam() {
   const result = await run(post(`/api/messages/${msg.value.id}/not-spam`));
   if (result) {
     toast(result.message || "已移回收件箱");
-    refreshNav();
+    changed();
     goBack();
   }
 }
@@ -134,7 +147,7 @@ async function blockSender() {
   const result = await run(post(`/api/messages/${msg.value.id}/block-sender`));
   if (result) {
     toast(`已屏蔽 ${email}${result.hidden ? `，隐藏了 ${result.hidden} 封邮件` : ""}`);
-    refreshNav();
+    changed();
     goBack();
   }
 }
@@ -200,10 +213,10 @@ usePageShortcuts({
 </script>
 
 <template>
-  <div class="gm-card gm-detail">
+  <div class="gm-panel gm-detail">
     <div class="gm-toolbar gm-detail-toolbar no-print">
       <div class="gm-toolbar-start">
-        <IconBtn :icon="ArrowBackOutlined" title="返回列表（u）" @click="goBack" />
+        <IconBtn :icon="split ? CloseOutlined : ArrowBackOutlined" :title="split ? '关闭（u）' : '返回列表（u）'" @click="goBack" />
         <template v-if="msg">
           <span class="gm-toolbar-gap" />
           <IconBtn v-if="msg.folder_kind === 'junk'" :icon="ReportOffOutlined" title="不是垃圾邮件" @click="notSpam" />
@@ -331,13 +344,13 @@ usePageShortcuts({
         </article>
 
         <div class="gm-reply-row no-print">
-          <NButton round @click="reply(lastMsg)">
+          <NButton @click="reply(lastMsg)">
             <template #icon><NIcon :component="ReplyOutlined" /></template>回复
           </NButton>
-          <NButton round @click="reply(lastMsg, 'all')">
+          <NButton @click="reply(lastMsg, 'all')">
             <template #icon><NIcon :component="ReplyAllOutlined" /></template>回复全部
           </NButton>
-          <NButton round @click="reply(lastMsg, 'forward')">
+          <NButton @click="reply(lastMsg, 'forward')">
             <template #icon><NIcon :component="ForwardOutlined" /></template>转发
           </NButton>
         </div>
@@ -347,25 +360,30 @@ usePageShortcuts({
 </template>
 
 <style scoped>
-.gm-detail { display: flex; flex-direction: column; overflow: hidden; }
 .gm-detail-scroll { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
 .gm-detail-loading { display: flex; justify-content: center; padding: 64px 0; }
-.gm-toolbar-gap { width: 16px; }
-.gm-thread { padding: 4px 24px 32px 72px; max-width: 1200px; }
-.gm-subject-row { display: flex; align-items: flex-start; gap: 8px; margin: 12px 0 16px -56px; padding-left: 56px; }
-.gm-subject { flex: 1; margin: 0; font: 400 22px/1.4 var(--gm-font); color: var(--gm-text); word-break: break-word; }
-.gm-subject-text { margin-right: 12px; }
-.gm-subject .gm-chip { font-size: 12px; vertical-align: 3px; }
-.gm-thread-total { color: var(--gm-text-3); font-size: 14px; margin-right: 12px; }
+.gm-toolbar-gap { width: 8px; }
+.gm-thread { padding: 16px 24px 32px; max-width: 1100px; }
+.gm-subject-row { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 16px; }
+.gm-subject { flex: 1; margin: 0; font-size: 20px; font-weight: 600; line-height: 1.4; color: var(--gm-text); word-break: break-word; }
+.gm-subject-text { margin-right: 10px; }
+.gm-subject .gm-chip { vertical-align: 3px; }
+.gm-thread-total { color: var(--gm-text-3); font-size: 14px; font-weight: 400; margin-right: 10px; }
 .gm-subject-actions { display: flex; flex: none; }
 
-.gm-msg { margin-left: -56px; border-bottom: 1px solid var(--gm-divider); }
-.gm-msg:last-of-type { border-bottom: 0; }
-.gm-msg-head { display: flex; align-items: flex-start; gap: 16px; padding: 12px 0 8px; }
+.gm-msg {
+    border: 1px solid var(--gm-border);
+    border-radius: var(--gm-radius);
+    margin-bottom: 12px;
+    background: var(--gm-surface);
+}
+.gm-msg-head { display: flex; align-items: flex-start; gap: 12px; padding: 12px 16px; }
 .gm-msg.is-threaded .gm-msg-head { cursor: pointer; }
+.gm-msg.is-threaded:not(.is-expanded) { background: var(--gm-surface-2); }
+.gm-msg.is-expanded .gm-msg-head { border-bottom: 1px solid var(--gm-divider); }
 .gm-msg-from { flex: 1; min-width: 0; }
 .gm-msg-from-line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px; }
-.gm-msg-name { font-weight: 700; font-size: 14px; color: var(--gm-text); }
+.gm-msg-name { font-weight: 600; color: var(--gm-text); }
 .gm-msg-email { font-size: 12px; color: var(--gm-text-3); }
 .gm-msg-snippet { color: var(--gm-text-3); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
 .gm-msg-to-btn {
@@ -379,16 +397,16 @@ usePageShortcuts({
     cursor: pointer;
     max-width: 100%;
 }
-.gm-msg-to-btn:hover { color: var(--gm-text); }
+.gm-msg-to-btn:hover { color: var(--gm-primary); }
 .gm-msg-details { font-size: 13px; border-collapse: collapse; max-width: 520px; }
 .gm-msg-details th { color: var(--gm-text-3); font-weight: 400; text-align: right; padding: 2px 8px 2px 0; white-space: nowrap; vertical-align: top; }
 .gm-msg-details td { padding: 2px 0; word-break: break-all; }
-.gm-msg-meta { display: flex; align-items: center; gap: 2px; flex: none; color: var(--gm-text-2); font-size: 12px; }
+.gm-msg-meta { display: flex; align-items: center; gap: 2px; flex: none; color: var(--gm-text-3); font-size: 12px; }
 .gm-msg-date { white-space: nowrap; padding: 0 4px; }
 .gm-msg-clip { color: var(--gm-text-3); }
-.gm-msg-content { padding: 0 0 16px 56px; }
+.gm-msg-content { padding: 12px 16px 16px; }
 .gm-images-banner { margin-bottom: 12px; }
-.gm-reply-row { display: flex; flex-wrap: wrap; gap: 12px; padding: 16px 0 0; }
+.gm-reply-row { display: flex; flex-wrap: wrap; gap: 12px; padding-top: 8px; }
 
 .gm-label-menu { min-width: 200px; max-height: 360px; overflow-y: auto; }
 .gm-label-menu-title { font-size: 12px; color: var(--gm-text-3); padding: 0 0 6px; }
@@ -396,14 +414,9 @@ usePageShortcuts({
 .gm-label-menu-actions { display: flex; justify-content: flex-end; border-top: 1px solid var(--gm-divider); margin-top: 6px; padding-top: 6px; }
 
 @media (max-width: 768px) {
-    .gm-detail { border-radius: 0; overflow: visible; }
-    .gm-detail-scroll { overflow: visible; }
-    .gm-thread { padding: 4px 16px 32px; }
-    .gm-subject-row { margin-left: 0; padding-left: 0; }
-    .gm-msg { margin-left: 0; }
-    .gm-msg-head { gap: 12px; }
-    .gm-msg-content { padding-left: 0; }
-    .gm-toolbar { position: sticky; top: 0; z-index: 4; background: #fff; }
+    .gm-thread { padding: 12px 12px 32px; }
+    .gm-msg-head { padding: 10px 12px; gap: 10px; }
+    .gm-msg-content { padding: 10px 12px 12px; }
     .gm-pager-info { display: none; }
 }
 

@@ -568,57 +568,73 @@ const fullScreen = computed(() => isMobile.value || winState.value === "max");
     flex-direction: column;
     width: 560px;
     height: min(620px, calc(100vh - 80px));
-    background: #fff;
-    border-radius: 16px 16px 0 0;
-    box-shadow: 0 8px 10px 1px rgba(0, 0, 0, .14), 0 3px 14px 2px rgba(0, 0, 0, .12), 0 5px 5px -3px rgba(0, 0, 0, .2);
+    background: var(--gm-surface);
+    border: 1px solid var(--gm-border);
+    border-bottom: 0;
+    border-radius: var(--gm-radius) var(--gm-radius) 0 0;
+    box-shadow: var(--gm-shadow-3);
     overflow: hidden;
 }
-.gm-compose.is-min { width: 280px; height: auto; }
+.gm-compose.is-min { width: 300px; height: auto; }
 .gm-compose.is-max {
     right: 50%;
     bottom: 50%;
     transform: translate(50%, 50%);
     width: min(1100px, calc(100vw - 96px));
     height: calc(100vh - 96px);
-    border-radius: 16px;
+    border-bottom: 1px solid var(--gm-border);
+    border-radius: var(--gm-radius);
 }
 .gm-compose.is-mobile {
     inset: 0;
     transform: none;
     width: 100%;
     height: 100%;
+    border: 0;
     border-radius: 0;
 }
-.gm-compose-backdrop { position: fixed; inset: 0; z-index: 999; background: rgba(0, 0, 0, .5); }
+.gm-compose-backdrop { position: fixed; inset: 0; z-index: 999; background: rgba(0, 0, 0, .45); }
 
 .gm-compose-head {
     display: flex;
     align-items: center;
     gap: 8px;
-    height: 40px;
+    height: 44px;
     padding: 0 8px 0 16px;
-    background: #f2f6fc;
+    background: var(--gm-surface-2);
+    border-bottom: 1px solid var(--gm-divider);
     flex: none;
 }
-.gm-compose.is-min .gm-compose-head { cursor: pointer; }
-.gm-compose-title { flex: 1; min-width: 0; font: 500 14px var(--gm-font); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gm-compose.is-min .gm-compose-head { cursor: pointer; border-bottom: 0; }
+.gm-compose-title { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gm-compose-head-actions { display: flex; gap: 2px; }
 
 .gm-compose-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 16px; }
 .gm-compose-loading { margin: auto; }
-.gm-compose-empty { padding: 32px 0; color: var(--gm-text-2); text-align: center; }
+.gm-compose-empty { padding: 32px 0; color: var(--gm-text-3); text-align: center; }
 .gm-compose-error { margin-top: 8px; }
 
-.gm-field { display: flex; align-items: center; gap: 8px; min-height: 40px; border-bottom: 1px solid var(--gm-divider); }
+.gm-field { display: flex; align-items: center; gap: 8px; min-height: 42px; border-bottom: 1px solid var(--gm-divider); }
 .gm-field-label { color: var(--gm-text-3); flex: none; min-width: 42px; }
 .gm-from { flex: 1; }
 .gm-field-extras { display: flex; gap: 8px; flex: none; }
-.gm-link-btn { border: 0; background: none; color: var(--gm-text-2); cursor: pointer; padding: 4px; font: inherit; }
-.gm-link-btn:hover { text-decoration: underline; }
-.gm-subject-input { flex: 1; border: 0; outline: 0; font: inherit; padding: 8px 0; background: transparent; }
+.gm-link-btn { border: 0; background: none; color: var(--gm-text-3); cursor: pointer; padding: 4px; font: inherit; }
+.gm-link-btn:hover { color: var(--gm-primary); }
+.gm-subject-input { flex: 1; border: 0; outline: 0; font: inherit; color: var(--gm-text); padding: 8px 0; background: transparent; }
+.gm-subject-input::placeholder { color: var(--gm-text-4); }
 
 .gm-compose-content { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
-.gm-plain { flex: 1; min-height: 160px; border: 0; outline: 0; resize: none; padding: 8px 0; font: 14px/1.5 Arial, sans-serif; }
+.gm-plain {
+    flex: 1;
+    min-height: 160px;
+    border: 0;
+    outline: 0;
+    resize: none;
+    padding: 8px 0;
+    font: 14px/1.6 var(--gm-font);
+    color: var(--gm-text);
+    background: transparent;
+}
 .gm-attachments { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; }
 .gm-attachment {
     display: flex;
@@ -626,18 +642,19 @@ const fullScreen = computed(() => isMobile.value || winState.value === "max");
     gap: 8px;
     max-width: 440px;
     padding: 6px 8px;
-    border-radius: 4px;
-    background: #f5f5f5;
+    border: 1px solid var(--gm-border);
+    border-radius: var(--gm-radius);
+    background: var(--gm-surface-2);
     font-size: 13px;
 }
 .gm-attachment-name { flex: 1; min-width: 0; color: var(--gm-primary); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gm-attachment-meta { color: var(--gm-text-3); }
-.gm-attachment-remove { display: flex; border: 0; background: none; padding: 2px; cursor: pointer; color: var(--gm-text-2); border-radius: 50%; }
-.gm-attachment-remove:hover { background: var(--gm-hover); }
-.gm-size-warning { display: flex; align-items: center; gap: 6px; color: #b06000; font-size: 13px; padding: 4px 0 8px; }
+.gm-attachment-remove { display: flex; border: 0; background: none; padding: 2px; cursor: pointer; color: var(--gm-text-3); border-radius: 50%; }
+.gm-attachment-remove:hover { background: var(--gm-hover); color: var(--gm-error); }
+.gm-size-warning { display: flex; align-items: center; gap: 6px; color: var(--gm-warning); font-size: 13px; padding: 4px 0 8px; }
 
-.gm-compose-foot { display: flex; align-items: center; gap: 2px; padding: 12px 0; flex: none; }
-.gm-send-btn { --n-padding: 0 24px !important; margin-right: 8px; }
+.gm-compose-foot { display: flex; align-items: center; gap: 2px; padding: 10px 0; border-top: 1px solid var(--gm-divider); flex: none; }
+.gm-send-btn { margin-right: 8px; }
 .gm-foot-spacer { flex: 1; }
 .gm-draft-status { color: var(--gm-text-3); font-size: 12px; margin-right: 4px; white-space: nowrap; }
 .gm-more-menu { display: flex; flex-direction: column; gap: 6px; min-width: 180px; }
@@ -652,10 +669,12 @@ const fullScreen = computed(() => isMobile.value || winState.value === "max");
     align-items: center;
     justify-content: center;
     gap: 8px;
-    background: rgba(194, 231, 255, .92);
+    background: var(--gm-primary-soft);
+    backdrop-filter: blur(2px);
     border: 2px dashed var(--gm-primary);
-    color: #001d35;
-    font: 500 16px var(--gm-font);
+    color: var(--gm-primary);
+    font-size: 16px;
+    font-weight: 600;
     pointer-events: none;
 }
 </style>

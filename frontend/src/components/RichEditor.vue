@@ -172,10 +172,10 @@ defineExpose({
     outline: 0;
     overflow-y: auto;
     font: 14px/1.5 Arial, sans-serif;
-    color: #222;
+    color: var(--gm-text);
     word-break: break-word;
 }
-.gm-editor :deep(blockquote) { margin: 0 0 0 .8ex; border-left: 1px solid #ccc; padding-left: 1ex; }
+.gm-editor :deep(blockquote) { margin: 0 0 0 .8ex; border-left: 2px solid var(--gm-border); padding-left: 1ex; }
 .gm-format-bar {
     display: flex;
     align-items: center;
@@ -183,9 +183,9 @@ defineExpose({
     gap: 2px;
     padding: 4px;
     margin: 4px 0;
-    border-radius: 8px;
-    box-shadow: var(--gm-shadow-1);
-    background: #fff;
+    border-radius: var(--gm-radius);
+    border: 1px solid var(--gm-border);
+    background: var(--gm-surface);
 }
 .gm-fmt-btn {
     position: relative;
@@ -201,7 +201,7 @@ defineExpose({
     cursor: pointer;
 }
 .gm-fmt-btn:hover { background: var(--gm-hover); }
-.gm-fmt-btn.is-active { background: var(--gm-nav-active); color: #001d35; }
+.gm-fmt-btn.is-active { background: var(--gm-primary-soft); color: var(--gm-primary); }
 .gm-fmt-color input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
-.gm-fmt-sep { width: 1px; height: 20px; background: var(--gm-outline-variant); margin: 0 4px; }
+.gm-fmt-sep { width: 1px; height: 20px; background: var(--gm-border); margin: 0 4px; }
 </style>

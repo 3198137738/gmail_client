@@ -3,7 +3,7 @@ import { NButton, NResult } from "naive-ui";
 </script>
 
 <template>
-  <div class="gm-card gm-notfound">
+  <div class="gm-panel gm-notfound">
     <NResult status="404" title="找不到您要访问的页面" description="链接可能有误，或者页面已被移除。">
       <template #footer>
         <RouterLink to="/messages/" custom v-slot="{ navigate }">

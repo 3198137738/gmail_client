@@ -91,7 +91,7 @@ const TARGET_NAMES = { telegram: "Telegram", webdav: "WebDAV" };
 </script>
 
 <template>
-  <div class="gm-card gm-settings-page">
+  <div class="gm-panel gm-settings-page">
     <SettingsHeader />
     <div class="gm-settings">
       <NSpin v-if="!data" class="gm-settings-loading" />
@@ -247,7 +247,7 @@ const TARGET_NAMES = { telegram: "Telegram", webdav: "WebDAV" };
 </template>
 
 <style scoped>
-.gm-settings-page { overflow-y: auto; }
+.gm-settings-page { overflow-y: auto; background: var(--gm-bg); }
 .gm-settings-loading { display: flex; justify-content: center; padding: 48px 0; }
 .gm-settings-status { margin-bottom: 8px; }
 .gm-tags { display: flex; flex-wrap: wrap; gap: 6px; }

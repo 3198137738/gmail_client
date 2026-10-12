@@ -1,11 +1,10 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
-import { useRoute, useRouter } from "vue-router";
-import { NButton, NCheckbox, NDropdown, NIcon, NSpin, NTag } from "naive-ui";
+import { useRouter } from "vue-router";
+import { NButton, NButtonGroup, NCheckbox, NDropdown, NIcon, NRadioButton, NRadioGroup, NSpin } from "naive-ui";
 import {
   ArrowDropDownOutlined,
   ArrowUpwardOutlined,
-  CheckOutlined,
   ChevronLeftOutlined,
   ChevronRightOutlined,
   CloseOutlined,
@@ -26,7 +25,15 @@ import { usePageShortcuts } from "../composables/shortcuts";
 import { onRealtime } from "../realtime";
 import { syncAccount, syncAll } from "../actions";
 
-const route = useRoute();
+const props = defineProps({
+  // 列表的筛选条件（地址栏参数）：分栏阅读时取自详情页的 back 参数
+  listQuery: { type: Object, required: true },
+  // 分栏阅读时右侧打开的邮件
+  activeId: { type: Number, default: null },
+  // 紧凑的两行布局（分栏阅读、手机端）
+  compact: { type: Boolean, default: false },
+});
+
 const router = useRouter();
 
 const data = ref(null);
@@ -42,7 +49,7 @@ const swipeHidden = reactive(new Set());
 const DELETE_CONFIRM = "确定删除选中的邮件吗？邮件会移到 Gmail 的「已删除邮件」，30 天后由 Gmail 自动清除。";
 
 // ---- 当前视图（地址栏参数） ----
-const query = computed(() => route.query);
+const query = computed(() => props.listQuery);
 const kind = computed(() => data.value?.kind || String(query.value.kind || "inbox"));
 const page = computed(() => data.value?.page || 1);
 const hasQuery = computed(() => !!(query.value.q || "").trim());
@@ -101,7 +108,7 @@ const silentRefresh = makeRefresher(() => load({ silent: true }));
 
 function updateTitle() {
   const d = data.value;
-  if (!d) return;
+  if (!d || props.activeId) return;   // 分栏阅读时标题由详情页设置
   const unread = d.kind === "inbox" ? store.nav?.unread_inbox : 0;
   const acc = navAccount(d.account_id);
   document.title = `${d.kind_label}${unread ? ` (${unread})` : ""}${acc ? ` - ${acc.email}` : ""} - Roundcube`;
@@ -109,9 +116,8 @@ function updateTitle() {
 watch(() => store.nav, updateTitle);
 
 watch(
-  () => route.fullPath,
+  () => JSON.stringify(props.listQuery),
   async () => {
-    if (route.name !== "list") return;
     selected.clear();
     focusIndex.value = -1;
     newMailCount.value = 0;
@@ -121,12 +127,15 @@ watch(
   { immediate: true },
 );
 
-// ---- 打开邮件；记住滚动位置，返回时恢复 ----
+// 分栏阅读时详情页里改了邮件（删除、星标、已读等）：刷新列表
+watch(() => store.listVersion, () => silentRefresh());
+
+// ---- 打开邮件；记住滚动位置，返回时恢复（手机端打开邮件会离开列表） ----
 function scrollKey() {
-  return `gm:scroll:${route.fullPath}`;
+  return `gm:scroll:${JSON.stringify(props.listQuery)}`;
 }
 function scrollTarget() {
-  return isMobile.value ? document.scrollingElement : listEl.value;
+  return listEl.value;
 }
 function saveScroll() {
   try {
@@ -397,10 +406,9 @@ const emptyText = computed(() => {
 </script>
 
 <template>
-  <div class="gm-card gm-list-card" :class="{ 'has-selection': selectionMode }">
+  <div class="gm-panel gm-list-panel" :class="{ 'is-compact': compact }">
     <div class="gm-toolbar">
       <div class="gm-toolbar-start">
-        <span v-if="!isMobile" class="gm-toolbar-kind">{{ data?.kind_label }}</span>
         <div class="gm-select">
           <NCheckbox
             :checked="allChecked"
@@ -415,39 +423,49 @@ const emptyText = computed(() => {
         </div>
 
         <template v-if="selectionMode">
-          <IconBtn :icon="CloseOutlined" title="取消选择" @click="selected.clear()" />
-          <span class="gm-sel-count">{{ selected.size }}</span>
-          <IconBtn :icon="DeleteOutlined" title="删除" @click="act('delete', [...selected])" />
-          <span class="gm-toolbar-sep" />
-          <IconBtn :icon="DraftsOutlined" title="标记为已读" @click="act('read', [...selected])" />
-          <IconBtn :icon="MarkEmailUnreadOutlined" title="标记为未读" @click="act('unread', [...selected])" />
+          <span class="gm-sel-count">已选 {{ selected.size }} 封</span>
+          <NButtonGroup size="small">
+            <NButton @click="act('read', [...selected])">
+              <template #icon><NIcon :component="DraftsOutlined" /></template>
+              <template v-if="!compact">标为已读</template>
+            </NButton>
+            <NButton @click="act('unread', [...selected])">
+              <template #icon><NIcon :component="MarkEmailUnreadOutlined" /></template>
+              <template v-if="!compact">标为未读</template>
+            </NButton>
+            <NButton type="error" ghost @click="act('delete', [...selected])">
+              <template #icon><NIcon :component="DeleteOutlined" /></template>
+              <template v-if="!compact">删除</template>
+            </NButton>
+          </NButtonGroup>
+          <IconBtn :icon="CloseOutlined" title="取消选择" size="small" @click="selected.clear()" />
         </template>
         <template v-else>
-          <IconBtn :icon="RefreshOutlined" title="刷新" @click="refresh" />
+          <span v-if="!compact" class="gm-toolbar-title">{{ data?.kind_label }}</span>
+          <NRadioGroup :value="data?.unread_only ? 'unread' : 'all'" size="small" @update:value="toggleUnreadOnly">
+            <NRadioButton value="all">全部</NRadioButton>
+            <NRadioButton value="unread">未读</NRadioButton>
+          </NRadioGroup>
+          <IconBtn :icon="RefreshOutlined" title="刷新（同步）" size="small" @click="refresh" />
           <NDropdown trigger="click" :options="moreOptions" @select="onMore">
-            <IconBtn :icon="MoreVertOutlined" title="更多" />
+            <IconBtn :icon="MoreVertOutlined" title="更多" size="small" />
           </NDropdown>
+          <span v-if="data?.any_busy" class="gm-busy" title="正在同步"><NSpin :size="14" />同步中</span>
         </template>
-
-        <NTag
-          class="gm-filter-chip"
-          :class="{ 'is-active': data?.unread_only }"
-          round
-          :bordered="true"
-          :checkable="false"
-          :title="data?.unread_only ? '显示全部邮件' : '只显示未读邮件'"
-          @click="toggleUnreadOnly"
-        >
-          <template v-if="data?.unread_only" #icon><NIcon :component="CheckOutlined" /></template>
-          仅看未读
-        </NTag>
-        <span v-if="data?.any_busy" class="gm-busy" title="正在同步"><NSpin :size="14" />正在同步…</span>
       </div>
 
       <div class="gm-toolbar-end">
-        <span v-if="data?.total" class="gm-pager-info">第 {{ data.first_index }}-{{ data.last_index }} 封，共 {{ data.total }} 封</span>
-        <IconBtn :icon="ChevronLeftOutlined" title="较新" :disabled="!data || data.page <= 1" @click="goNewer" />
-        <IconBtn :icon="ChevronRightOutlined" title="较旧" :disabled="!data || data.page >= data.pages" @click="goOlder" />
+        <span v-if="data?.total" class="gm-pager-info">
+          {{ data.first_index }}-{{ data.last_index }} / {{ data.total }}
+        </span>
+        <NButtonGroup size="small">
+          <NButton :disabled="!data || data.page <= 1" title="较新" @click="goNewer">
+            <template #icon><NIcon :component="ChevronLeftOutlined" /></template>
+          </NButton>
+          <NButton :disabled="!data || data.page >= data.pages" title="较旧" @click="goOlder">
+            <template #icon><NIcon :component="ChevronRightOutlined" /></template>
+          </NButton>
+        </NButtonGroup>
       </div>
     </div>
 
@@ -458,7 +476,7 @@ const emptyText = computed(() => {
       垃圾邮件文件夹中的邮件来自 Gmail 的垃圾邮件判断，确认无误的邮件可以打开后点「这不是垃圾邮件」。
     </div>
 
-    <div ref="listEl" class="gm-list" role="list">
+    <div ref="listEl" class="gm-list gm-panel-body" role="list">
       <NSpin v-if="loading && !data" class="gm-list-loading" />
       <div v-else-if="error" class="gm-empty">
         <div class="gm-empty-title">加载失败</div>
@@ -471,8 +489,10 @@ const emptyText = computed(() => {
           :key="m.id"
           :item="m"
           :selected="selected.has(m.id)"
+          :active="m.id === activeId"
           :focused="i === focusIndex"
           :selection-mode="selectionMode"
+          :compact="compact"
           :show-folder="kind === 'all'"
           :account="showAccountChip ? navAccount(m.account_id) : null"
           @open="(ev) => openMessage(m, ev)"
@@ -494,26 +514,17 @@ const emptyText = computed(() => {
       <NIcon :component="ArrowUpwardOutlined" /> {{ newMailCount }} 封新邮件
     </button>
 
-    <NButton v-if="isMobile" class="gm-fab" @click="openCompose()">
-      <template #icon><NIcon :component="EditOutlined" :size="22" /></template>
-      写邮件
+    <NButton v-if="isMobile" type="primary" circle size="large" class="gm-fab" title="写邮件" @click="openCompose()">
+      <template #icon><NIcon :component="EditOutlined" /></template>
     </NButton>
   </div>
 </template>
 
 <style scoped>
-.gm-list-card { display: flex; flex-direction: column; overflow: hidden; position: relative; }
-.gm-toolbar-kind { display: none; }
-.gm-select { display: flex; align-items: center; padding-left: 6px; }
-.gm-sel-count { font-weight: 500; padding: 0 8px 0 2px; min-width: 16px; }
-.gm-filter-chip { margin-left: 8px; cursor: pointer; --n-height: 30px !important; }
-.gm-filter-chip.is-active {
-    --n-color: var(--gm-nav-active) !important;
-    --n-border: 1px solid var(--gm-nav-active) !important;
-    --n-text-color: #001d35 !important;
-}
-.gm-busy { display: inline-flex; align-items: center; gap: 6px; color: var(--gm-text-3); font-size: 12px; margin-left: 12px; }
-.gm-list { flex: 1 1 auto; overflow-y: auto; min-height: 0; border-top: 1px solid var(--gm-divider); }
+.gm-list-panel { position: relative; }
+.gm-select { display: flex; align-items: center; }
+.gm-sel-count { font-size: 13px; color: var(--gm-text-2); }
+.gm-busy { display: inline-flex; align-items: center; gap: 6px; color: var(--gm-text-3); font-size: 12px; }
 .gm-list-loading { display: flex; justify-content: center; padding: 64px 0; }
 .gm-newmail-banner {
     position: absolute;
@@ -524,42 +535,22 @@ const emptyText = computed(() => {
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 8px 16px;
+    padding: 6px 14px;
     border: 0;
-    border-radius: 18px;
+    border-radius: 16px;
     background: var(--gm-primary);
     color: #fff;
-    font: 500 14px var(--gm-font);
+    font-size: 13px;
     box-shadow: var(--gm-shadow-2);
     cursor: pointer;
 }
 .gm-fab {
     position: fixed;
-    right: 16px;
+    right: 20px;
     bottom: 24px;
     z-index: 10;
-    --n-height: 56px !important;
-    --n-border-radius: 16px !important;
-    --n-color: var(--gm-compose) !important;
-    --n-color-hover: #b3dcf7 !important;
-    --n-color-pressed: #a5d2f0 !important;
-    --n-color-focus: var(--gm-compose) !important;
-    --n-text-color: #001d35 !important;
-    --n-text-color-hover: #001d35 !important;
-    --n-text-color-pressed: #001d35 !important;
-    --n-text-color-focus: #001d35 !important;
-    --n-border: none !important;
-    --n-border-hover: none !important;
-    --n-border-pressed: none !important;
-    --n-border-focus: none !important;
-    box-shadow: var(--gm-shadow-3);
-}
-
-@media (max-width: 768px) {
-    .gm-list-card { border-radius: 0; overflow: visible; }
-    .gm-list { overflow: visible; border-top: 0; }
-    .gm-toolbar { position: sticky; top: 0; z-index: 4; background: #fff; }
-    .gm-pager-info { display: none; }
-    .gm-newmail-banner { position: fixed; top: 72px; }
+    width: 56px !important;
+    height: 56px !important;
+    box-shadow: var(--gm-shadow-2);
 }
 </style>

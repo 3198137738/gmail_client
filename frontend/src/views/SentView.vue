@@ -34,7 +34,7 @@ async function remove(item) {
 </script>
 
 <template>
-  <div class="gm-card gm-page">
+  <div class="gm-panel">
     <div class="gm-toolbar">
       <div class="gm-toolbar-start"><span class="gm-toolbar-title">发件记录</span></div>
       <div class="gm-toolbar-end">
@@ -81,11 +81,6 @@ async function remove(item) {
 </template>
 
 <style scoped>
-.gm-page { display: flex; flex-direction: column; overflow: hidden; }
-.gm-page-list { flex: 1; overflow-y: auto; min-height: 0; border-top: 1px solid var(--gm-divider); }
+.gm-page-list { flex: 1; overflow-y: auto; min-height: 0; }
 .gm-page-loading { display: flex; justify-content: center; padding: 64px 0; }
-@media (max-width: 768px) {
-    .gm-page { border-radius: 0; overflow: visible; }
-    .gm-page-list { overflow: visible; }
-}
 </style>

@@ -1,26 +1,31 @@
 <script setup>
-// 登录 / 两步验证页的卡片（Google 账号登录页样式）
+// 登录 / 两步验证页：居中的卡片
+import { NCard } from "naive-ui";
+import { store, setThemeMode } from "../store";
+
 defineProps({
   title: { type: String, required: true },
   subtitle: { type: String, default: "" },
 });
+
+const NEXT_THEME = { light: "dark", dark: "auto", auto: "light" };
+const THEME_TEXT = { light: "浅色", dark: "深色", auto: "跟随系统" };
 </script>
 
 <template>
   <main class="gm-auth">
-    <div class="gm-auth-card">
-      <div class="gm-auth-intro">
-        <img class="gm-auth-logo" src="/img/logo.svg" alt="" width="48" height="36" />
-        <h1 class="gm-auth-title">{{ title }}</h1>
-        <p class="gm-auth-sub">{{ subtitle }}</p>
-      </div>
-      <div class="gm-auth-form">
-        <slot />
-      </div>
+    <div class="gm-auth-brand">
+      <img src="/img/logo.svg" alt="" width="36" height="27" />
+      <span>Roundcube</span>
     </div>
+    <NCard class="gm-auth-card" :bordered="true" size="large">
+      <h1 class="gm-auth-title">{{ title }}</h1>
+      <p class="gm-auth-sub">{{ subtitle }}</p>
+      <slot />
+    </NCard>
     <footer class="gm-auth-footer">
-      <span>简体中文</span>
       <span>Roundcube 邮件客户端</span>
+      <a href="#" @click.prevent="setThemeMode(NEXT_THEME[store.themeMode])">外观：{{ THEME_TEXT[store.themeMode] }}</a>
     </footer>
   </main>
 </template>
@@ -32,36 +37,19 @@ defineProps({
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: 24px 16px;
-    background: var(--gm-bg);
+    gap: 20px;
+    padding: 32px 16px;
+    background:
+        radial-gradient(circle at 20% 10%, var(--gm-primary-soft), transparent 40%),
+        radial-gradient(circle at 85% 90%, var(--gm-primary-soft), transparent 40%),
+        var(--gm-bg);
 }
-.gm-auth-card {
-    width: min(1040px, 100%);
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 24px 48px;
-    background: #fff;
-    border-radius: 28px;
-    padding: 36px 40px 32px;
-}
-.gm-auth-title { font: 400 36px/1.3 var(--gm-font); margin: 16px 0 8px; }
-.gm-auth-sub { color: var(--gm-text-2); font-size: 16px; margin: 0; line-height: 1.5; }
-.gm-auth-form { padding-top: 32px; }
-.gm-auth-form :deep(.gm-auth-alert) { margin-bottom: 16px; }
-.gm-auth-form :deep(.gm-auth-meta) { color: var(--gm-text-3); font-size: 13px; margin-bottom: 24px; }
-.gm-auth-form :deep(.gm-auth-actions) { display: flex; justify-content: flex-end; gap: 8px; }
-.gm-auth-footer {
-    width: min(1040px, 100%);
-    display: flex;
-    justify-content: space-between;
-    padding: 16px 8px;
-    color: var(--gm-text-2);
-    font-size: 12px;
-}
-
-@media (max-width: 840px) {
-    .gm-auth { justify-content: flex-start; padding-top: 48px; }
-    .gm-auth-card { grid-template-columns: 1fr; padding: 24px; gap: 0; }
-    .gm-auth-title { font-size: 28px; }
-}
+.gm-auth-brand { display: flex; align-items: center; gap: 10px; font-size: 22px; font-weight: 600; }
+.gm-auth-card { width: min(420px, 100%); box-shadow: var(--gm-shadow-2); }
+.gm-auth-title { font-size: 22px; font-weight: 600; margin: 0 0 6px; }
+.gm-auth-sub { color: var(--gm-text-3); margin: 0 0 24px; line-height: 1.6; }
+.gm-auth-card :deep(.gm-auth-alert) { margin-bottom: 16px; }
+.gm-auth-card :deep(.gm-auth-meta) { color: var(--gm-text-3); font-size: 12px; margin-bottom: 20px; }
+.gm-auth-card :deep(.gm-auth-actions) { display: flex; justify-content: flex-end; gap: 8px; }
+.gm-auth-footer { display: flex; gap: 24px; color: var(--gm-text-3); font-size: 12px; }
 </style>

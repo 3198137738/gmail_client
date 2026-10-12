@@ -44,8 +44,8 @@ function onLink() {
     min-width: 288px;
     max-width: min(560px, calc(100vw - 32px));
     padding: 6px 8px 6px 16px;
-    border-radius: 4px;
-    background: #303030;
+    border-radius: var(--gm-radius);
+    background: #303033;
     color: #f2f2f2;
     box-shadow: var(--gm-shadow-3);
     font-size: 14px;
@@ -54,13 +54,13 @@ function onLink() {
 .gm-snackbar-btn {
     border: 0;
     background: none;
-    color: #a8c7fa;
+    color: #63e2b7;
     font: 500 14px var(--gm-font);
     padding: 8px 12px;
     border-radius: 4px;
     cursor: pointer;
 }
-.gm-snackbar-btn:hover { background: rgba(168, 199, 250, .12); }
+.gm-snackbar-btn:hover { background: rgba(99, 226, 183, .12); }
 .gm-snackbar-close {
     border: 0;
     background: none;

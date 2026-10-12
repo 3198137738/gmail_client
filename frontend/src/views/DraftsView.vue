@@ -29,7 +29,7 @@ watch(() => store.nav?.drafts, load);
 </script>
 
 <template>
-  <div class="gm-card gm-page">
+  <div class="gm-panel">
     <div class="gm-toolbar">
       <div class="gm-toolbar-start"><span class="gm-toolbar-title">草稿</span></div>
       <div class="gm-toolbar-end">
@@ -71,12 +71,7 @@ watch(() => store.nav?.drafts, load);
 </template>
 
 <style scoped>
-.gm-page { display: flex; flex-direction: column; overflow: hidden; }
-.gm-page-list { flex: 1; overflow-y: auto; min-height: 0; border-top: 1px solid var(--gm-divider); }
+.gm-page-list { flex: 1; overflow-y: auto; min-height: 0; }
 .gm-page-loading { display: flex; justify-content: center; padding: 64px 0; }
 .gm-draft-label { color: var(--gm-error); }
-@media (max-width: 768px) {
-    .gm-page { border-radius: 0; overflow: visible; }
-    .gm-page-list { overflow: visible; }
-}
 </style>

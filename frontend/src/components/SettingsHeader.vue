@@ -32,8 +32,8 @@ function go(name) {
 </template>
 
 <style scoped>
-.gm-settings-head { padding: 16px 24px 0; }
-.gm-settings-title { font: 400 22px/1.4 var(--gm-font); margin: 0 0 8px; }
+.gm-settings-head { padding: 16px 24px 0; background: var(--gm-surface); border-bottom: 1px solid var(--gm-divider); }
+.gm-settings-title { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
 @media (max-width: 768px) {
     .gm-settings-head { padding: 12px 16px 0; }
 }

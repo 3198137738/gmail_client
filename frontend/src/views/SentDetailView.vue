@@ -44,7 +44,7 @@ async function remove() {
 </script>
 
 <template>
-  <div class="gm-card gm-detail">
+  <div class="gm-panel gm-detail">
     <div class="gm-toolbar no-print">
       <div class="gm-toolbar-start">
         <IconBtn :icon="ArrowBackOutlined" title="返回发件记录" @click="back" />
@@ -110,16 +110,16 @@ async function remove() {
 </template>
 
 <style scoped>
-.gm-detail { display: flex; flex-direction: column; overflow: hidden; }
+
 .gm-detail-scroll { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
 .gm-detail-loading { display: flex; justify-content: center; padding: 64px 0; }
-.gm-thread { padding: 4px 24px 32px 72px; max-width: 1200px; }
+.gm-thread { padding: 16px 24px 32px; max-width: 1100px; }
 .gm-subject-row { display: flex; align-items: flex-start; gap: 8px; margin: 12px 0 16px; }
-.gm-subject { flex: 1; margin: 0; font: 400 22px/1.4 var(--gm-font); word-break: break-word; }
+.gm-subject { flex: 1; margin: 0; font-size: 20px; font-weight: 600; line-height: 1.4; word-break: break-word; }
 .gm-subject-text { margin-right: 12px; }
 .gm-subject .gm-chip { vertical-align: 3px; }
 .gm-msg-alert { margin-bottom: 12px; }
-.gm-msg-head { display: flex; align-items: flex-start; gap: 16px; margin-left: -56px; padding: 8px 0; }
+.gm-msg-head { display: flex; align-items: flex-start; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--gm-divider); margin-bottom: 12px; }
 .gm-msg-from { flex: 1; min-width: 0; }
 .gm-msg-name { font-weight: 700; margin-right: 4px; }
 .gm-msg-email { font-size: 12px; color: var(--gm-text-3); }
@@ -130,9 +130,7 @@ async function remove() {
 .gm-msg-date { font-size: 12px; color: var(--gm-text-2); white-space: nowrap; }
 .gm-images-banner { margin-bottom: 12px; }
 @media (max-width: 768px) {
-    .gm-detail { border-radius: 0; overflow: visible; }
-    .gm-detail-scroll { overflow: visible; }
     .gm-thread { padding: 4px 16px 32px; }
-    .gm-msg-head { margin-left: 0; gap: 12px; }
+
 }
 </style>

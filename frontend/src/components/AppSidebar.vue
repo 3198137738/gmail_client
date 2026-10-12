@@ -6,6 +6,9 @@ import { useRoute, useRouter } from "vue-router";
 import { NButton, NIcon, NMenu } from "naive-ui";
 import {
   AddOutlined,
+  BrightnessAutoOutlined,
+  DarkModeOutlined,
+  LightModeOutlined,
   BlockOutlined,
   DraftsOutlined,
   EditOutlined,
@@ -22,7 +25,7 @@ import {
   StarBorderOutlined,
   SyncOutlined,
 } from "@vicons/material";
-import { openCompose, store } from "../store";
+import { openCompose, setThemeMode, store } from "../store";
 import { logout, syncAll } from "../actions";
 
 const props = defineProps({
@@ -153,13 +156,29 @@ function compose() {
   openCompose();
 }
 
-const mobileOptions = [
-  { key: "settings", label: "设置", icon: icon(SettingsOutlined) },
-  { key: "sync", label: "同步所有账号", icon: icon(SyncOutlined) },
+const THEMES = [
+  { mode: "light", label: "浅色", icon: LightModeOutlined },
+  { mode: "dark", label: "深色", icon: DarkModeOutlined },
+  { mode: "auto", label: "跟随系统", icon: BrightnessAutoOutlined },
 ];
 
+const mobileOptions = computed(() => [
+  { key: "settings", label: "设置", icon: icon(SettingsOutlined) },
+  { key: "sync", label: "同步所有账号", icon: icon(SyncOutlined) },
+  {
+    key: "theme",
+    label: `外观：${THEMES.find((t) => t.mode === store.themeMode).label}`,
+    icon: icon(THEMES.find((t) => t.mode === store.themeMode).icon),
+    children: THEMES.map((t) => ({ key: `theme-${t.mode}`, label: t.label, icon: icon(t.icon) })),
+  },
+]);
+
 function onMobile(key) {
-  store.drawerOpen = false;
+  if (!key.startsWith("theme-")) store.drawerOpen = false;
+  if (key.startsWith("theme-")) {
+    setThemeMode(key.slice(6));
+    return;
+  }
   if (key === "settings") router.push("/accounts/");
   else if (key === "sync") syncAll();
   else if (key === "logout") logout();
@@ -167,8 +186,8 @@ function onMobile(key) {
 
 const mobileMenu = computed(() =>
   store.session?.auth_enabled
-    ? [...mobileOptions, { key: "logout", label: "退出登录", icon: icon(LogOutOutlined) }]
-    : mobileOptions,
+    ? [...mobileOptions.value, { key: "logout", label: "退出登录", icon: icon(LogOutOutlined) }]
+    : mobileOptions.value,
 );
 </script>
 
@@ -179,8 +198,8 @@ const mobileMenu = computed(() =>
       <span>Roundcube</span>
     </div>
     <div class="gm-nav-compose">
-      <NButton class="gm-compose-btn" :circle="collapsed" title="写邮件（c）" @click="compose">
-        <template #icon><NIcon :component="EditOutlined" :size="22" /></template>
+      <NButton type="primary" :block="!collapsed" :circle="collapsed" title="写邮件（c）" @click="compose">
+        <template #icon><NIcon :component="EditOutlined" /></template>
         <template v-if="!collapsed">写邮件</template>
       </NButton>
     </div>
@@ -239,73 +258,40 @@ const mobileMenu = computed(() =>
 </template>
 
 <style scoped>
-.gm-nav {
-    width: var(--gm-nav-w);
-    flex: none;
-    overflow-y: auto;
-    overflow-x: hidden;
-    padding: 0 8px 16px 0;
-    scrollbar-width: thin;
-    transition: width .2s;
-}
-.gm-nav.is-collapsed { width: var(--gm-nav-w-collapsed); padding-right: 0; }
-.gm-nav.is-mobile { width: 100%; padding-top: 8px; }
+.gm-nav { padding-bottom: 16px; }
 .gm-nav-brand {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 8px 24px 12px;
-    color: var(--gm-text-2);
-    font: 400 20px/1 var(--gm-font);
+    gap: 10px;
+    padding: 16px 20px 8px;
+    font-size: 17px;
+    font-weight: 600;
 }
-.gm-nav-compose { padding: 8px 0 16px 8px; }
-.gm-nav.is-collapsed .gm-nav-compose { padding-left: 8px; }
-.gm-compose-btn {
-    --n-height: 56px !important;
-    --n-color: var(--gm-compose) !important;
-    --n-color-hover: #b3dcf7 !important;
-    --n-color-pressed: #a5d2f0 !important;
-    --n-color-focus: var(--gm-compose) !important;
-    --n-text-color: #001d35 !important;
-    --n-text-color-hover: #001d35 !important;
-    --n-text-color-pressed: #001d35 !important;
-    --n-text-color-focus: #001d35 !important;
-    --n-border: none !important;
-    --n-border-hover: none !important;
-    --n-border-pressed: none !important;
-    --n-border-focus: none !important;
-    --n-border-radius: 16px !important;
-    --n-font-size: 14px !important;
-    --n-padding: 0 24px 0 18px !important;
-    --n-icon-margin: 12px !important;
-    font-weight: 500;
-}
-.gm-compose-btn:hover { box-shadow: var(--gm-shadow-2); }
-.gm-nav.is-collapsed .gm-compose-btn { --n-width: 56px !important; --n-padding: 0 !important; }
-
-.gm-nav :deep(.n-menu-item-content) { padding-right: 12px !important; }
-.gm-nav :deep(.n-menu-item-content::before) { left: 0 !important; right: 0 !important; border-radius: 0 16px 16px 0; }
-.gm-nav.is-collapsed :deep(.n-menu-item-content::before) { left: 12px !important; right: 12px !important; border-radius: 16px; }
+.gm-nav-compose { padding: 16px 16px 8px; }
+.gm-nav.is-collapsed .gm-nav-compose { padding: 16px 0 8px; display: flex; justify-content: center; }
 .gm-nav :deep(.gm-nav-label) { display: flex; align-items: center; gap: 8px; width: 100%; }
 .gm-nav :deep(.gm-nav-text) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.gm-nav :deep(.gm-nav-count) { font-size: 12px; font-weight: 700; }
-.gm-nav :deep(.n-menu-item-content--selected .gm-nav-count) { font-weight: 700; }
-
+.gm-nav :deep(.gm-nav-count) {
+    min-width: 20px;
+    padding: 0 6px;
+    border-radius: 10px;
+    background: var(--gm-primary-soft);
+    color: var(--gm-primary);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 18px;
+    text-align: center;
+}
 .gm-nav-heading {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 16px 12px 4px 26px;
-    font: 500 16px/1.5 var(--gm-font);
-    color: var(--gm-text);
+    padding: 16px 12px 4px 24px;
+    font-size: 12px;
+    color: var(--gm-text-3);
 }
-.gm-nav-add {
-    display: flex;
-    padding: 6px;
-    border-radius: 50%;
-    color: var(--gm-text-2);
-}
-.gm-nav-add:hover { background: var(--gm-hover); }
-.gm-nav-empty { padding: 4px 26px; color: var(--gm-text-3); font-size: 13px; }
+.gm-nav-add { display: flex; padding: 2px; border-radius: var(--gm-radius); color: var(--gm-text-3); }
+.gm-nav-add:hover { background: var(--gm-hover); color: var(--gm-primary); }
+.gm-nav-empty { padding: 4px 24px; color: var(--gm-text-3); font-size: 13px; }
 .gm-nav-divider { height: 1px; background: var(--gm-divider); margin: 12px 0; }
 </style>

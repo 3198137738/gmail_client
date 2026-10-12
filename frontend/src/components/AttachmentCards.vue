@@ -64,7 +64,7 @@ const ICONS = {
 
 <style scoped>
 .gm-msg-atts { margin: 16px 0 8px; padding-top: 16px; border-top: 1px solid var(--gm-divider); }
-.gm-msg-atts-title { font: 500 14px var(--gm-font); color: var(--gm-text-2); margin-bottom: 12px; }
+.gm-msg-atts-title { font-size: 13px; font-weight: 600; color: var(--gm-text-2); margin-bottom: 12px; }
 .gm-att-cards { display: flex; flex-wrap: wrap; gap: 12px; }
 .gm-att-card {
     position: relative;
@@ -72,16 +72,16 @@ const ICONS = {
     flex-direction: column;
     width: 180px;
     height: 120px;
-    border: 1px solid var(--gm-outline-variant);
-    border-radius: 8px;
+    border: 1px solid var(--gm-border);
+    border-radius: var(--gm-radius);
     overflow: hidden;
     color: var(--gm-text);
     text-decoration: none !important;
-    background: #f8fafd;
+    background: var(--gm-surface-2);
 }
 .gm-att-card-preview { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .gm-att-card-preview img { width: 100%; height: 100%; object-fit: cover; }
-.gm-att-card-bar { display: flex; flex-direction: column; padding: 6px 10px; background: #fff; border-top: 1px solid var(--gm-divider); }
+.gm-att-card-bar { display: flex; flex-direction: column; padding: 6px 10px; background: var(--gm-surface); border-top: 1px solid var(--gm-divider); }
 .gm-att-card-name { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gm-att-card-size { font-size: 12px; color: var(--gm-text-3); }
 .gm-att-card-hover {

@@ -29,6 +29,5 @@ npm run build           # 构建到 app/static/dist，之后直接访问后端�
 | `src/views/` | 页面：登录、邮件列表、邮件详情、草稿、发件记录、设置 |
 | `src/components/` | 顶栏、侧栏、写邮件窗口、正文 iframe、附件卡片等 |
 | `src/composables/shortcuts.js` | 键盘快捷键（与 Gmail 一致，按 `?` 查看） |
-| `src/assets/fonts/` | 本地托管的 Google Sans / Roboto（SIL OFL 1.1） |
 
 图标使用 `@vicons/material`（Material Icons 的 SVG 组件，按需打包）。

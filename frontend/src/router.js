@@ -3,6 +3,8 @@ import { createRouter, createWebHistory } from "vue-router";
 import { refreshSession, setUnauthorizedHandler } from "./api";
 import { openCompose, store } from "./store";
 import AppLayout from "./components/AppLayout.vue";
+// 列表页和详情页用同一个组件实例（分栏阅读），必须是同一个组件对象
+import MailSplit from "./views/MailSplit.vue";
 
 // 只允许站内相对路径，防止登录后被跳转到外部网站
 export function safeNext(value, fallback = "/messages/") {
@@ -20,14 +22,14 @@ const routes = [
     component: AppLayout,
     children: [
       { path: "", redirect: "/messages/" },
-      { path: "messages/", name: "list", component: () => import("./views/MailListView.vue") },
+      { path: "messages/", name: "list", component: MailSplit },
       {
         path: "messages/blocked-senders",
         name: "blocked",
         component: () => import("./views/settings/BlockedSettings.vue"),
         meta: { title: "设置 - 过滤器和屏蔽的地址", settings: "blocked", section: "blocked" },
       },
-      { path: "messages/:id(\\d+)", name: "message", component: () => import("./views/MessageView.vue") },
+      { path: "messages/:id(\\d+)", name: "message", component: MailSplit },
       {
         // 旧版的整页写邮件地址：在当前界面打开写邮件窗口
         path: "compose/",

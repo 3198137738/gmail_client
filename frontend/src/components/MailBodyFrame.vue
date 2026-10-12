@@ -42,17 +42,18 @@ onBeforeUnmount(() => observer?.disconnect());
 </script>
 
 <template>
-  <iframe
-    v-if="loadedSrc"
-    ref="frame"
-    class="gm-body-frame"
-    :src="loadedSrc"
-    :style="{ height: height + 'px' }"
-    sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
-    referrerpolicy="no-referrer"
-    title="邮件正文"
-    @load="onLoad"
-  />
+  <div v-if="loadedSrc" class="gm-body-wrap">
+    <iframe
+      ref="frame"
+      class="gm-body-frame"
+      :src="loadedSrc"
+      :style="{ height: height + 'px' }"
+      sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+      referrerpolicy="no-referrer"
+      title="邮件正文"
+      @load="onLoad"
+    />
+  </div>
 </template>
 
 <style scoped>

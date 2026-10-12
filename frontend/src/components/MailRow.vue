@@ -1,6 +1,7 @@
 <script setup>
-// 邮件列表中的一行（Gmail 样式）：头像 / 复选框、星标、发件人、标签、主题 - 摘要、附件、日期，
-// 悬停时显示删除 / 标为已读等按钮；触屏上左右滑动删除。
+// 邮件列表中的一行。宽屏是表格式的一行：复选框、未读标记、头像、发件人、标签、主题 — 摘要、日期、星标，
+// 悬停时显示删除 / 标为已读等按钮；紧凑模式（分栏阅读、手机端）是两行的卡片，点头像选中。
+// 触屏上左右滑动删除。
 import { computed, ref } from "vue";
 import { NCheckbox, NIcon } from "naive-ui";
 import {
@@ -22,6 +23,10 @@ import { attachmentKind, avatarColor, fullDate, initial, listDate } from "../for
 const props = defineProps({
   item: { type: Object, required: true },
   selected: { type: Boolean, default: false },
+  // 分栏阅读时右侧正在显示的邮件
+  active: { type: Boolean, default: false },
+  // 紧凑的两行布局（分栏阅读、手机端）
+  compact: { type: Boolean, default: false },
   focused: { type: Boolean, default: false },
   selectionMode: { type: Boolean, default: false },
   showFolder: { type: Boolean, default: false },
@@ -134,7 +139,13 @@ const rowStyle = computed(() =>
     <div
       ref="rowEl"
       class="gm-row"
-      :class="{ 'is-unread': unread, 'is-selected': selected, 'is-focused': focused, 'has-atts': atts.length }"
+      :class="{
+        'is-unread': unread,
+        'is-selected': selected,
+        'is-active': active,
+        'is-focused': focused,
+        'is-compact': compact,
+      }"
       :style="rowStyle"
       role="listitem"
       @click="onClick"
@@ -143,30 +154,25 @@ const rowStyle = computed(() =>
       @touchend="onTouchEnd"
       @touchcancel="tracking = false; swiping = false; dx = 0"
     >
-      <div class="gm-row-check" @click.stop="emit('toggle-select')">
-        <span class="gm-avatar gm-row-avatar" :style="{ background: avatarColor(peer) }" aria-hidden="true">{{ initial(peer) }}</span>
+      <!-- 宽屏：复选框列；紧凑模式：点头像选中 -->
+      <div v-if="!compact" class="gm-row-check" @click.stop>
         <NCheckbox
-          class="gm-row-checkbox"
           :checked="selected"
           :aria-label="`选择邮件 ${item.subject || '(无主题)'}`"
-          @click.stop
           @update:checked="emit('toggle-select')"
         />
       </div>
-      <button
-        type="button"
-        class="gm-row-star"
-        :class="{ 'is-starred': item.is_starred }"
-        :aria-pressed="item.is_starred"
-        :title="item.is_starred ? '已加星标' : '未加星标'"
-        aria-label="星标"
-        @click.stop="emit('star')"
-      >
-        <NIcon :component="item.is_starred ? StarFilled : StarBorderOutlined" :size="20" />
-      </button>
+      <span class="gm-row-dot" :title="unread ? '未读' : ''" />
+      <span
+        class="gm-avatar gm-row-avatar"
+        :style="{ background: selected ? 'var(--gm-primary)' : avatarColor(peer) }"
+        aria-hidden="true"
+        @click.stop="emit('toggle-select')"
+      >{{ selected ? "✓" : initial(peer) }}</span>
+
       <div class="gm-row-sender" :title="item.peer_full">
         <template v-if="item.folder_kind === 'sent'">收件人：</template>{{ peer }}
-        <span v-if="item.thread_count > 1" class="gm-thread-count">{{ item.thread_count }}</span>
+        <span v-if="item.thread_count > 1" class="gm-thread-count">({{ item.thread_count }})</span>
       </div>
       <div class="gm-row-main">
         <div class="gm-row-line">
@@ -185,31 +191,42 @@ const rowStyle = computed(() =>
             :title="account.email"
           >{{ account.name }}</span>
           <span class="gm-row-subject">{{ item.subject || "(无主题)" }}</span>
-          <span v-if="item.snippet" class="gm-row-snippet"><span class="gm-row-dash"> - </span>{{ item.snippet }}</span>
+          <span v-if="item.snippet" class="gm-row-snippet"><span class="gm-row-dash"> — </span>{{ item.snippet }}</span>
         </div>
         <div v-if="atts.length" class="gm-row-atts">
           <span v-for="(a, i) in atts.slice(0, 3)" :key="i" class="gm-att-chip" :title="a.name">
-            <NIcon :component="ATT_ICONS[attachmentKind(a.mime_type)][0]" :color="ATT_ICONS[attachmentKind(a.mime_type)][1]" :size="16" />
+            <NIcon :component="ATT_ICONS[attachmentKind(a.mime_type)][0]" :color="ATT_ICONS[attachmentKind(a.mime_type)][1]" :size="14" />
             <span class="gm-att-chip-name">{{ a.name }}</span>
           </span>
           <span v-if="atts.length > 3" class="gm-att-more">+{{ atts.length - 3 }}</span>
         </div>
       </div>
       <div class="gm-row-end">
-        <NIcon v-if="item.has_attachments && !atts.length" :component="AttachFileOutlined" :size="16" class="gm-row-clip" />
+        <NIcon v-if="item.has_attachments" :component="AttachFileOutlined" :size="15" class="gm-row-clip" />
         <span class="gm-row-date" :title="fullDate(item.date)">{{ listDate(item.date) }}</span>
       </div>
-      <div class="gm-row-actions" @click.stop>
-        <IconBtn :icon="DeleteOutlined" title="删除" size="small" :icon-size="18" @click="emit('action', 'delete')" />
+      <button
+        type="button"
+        class="gm-row-star"
+        :class="{ 'is-starred': item.is_starred }"
+        :aria-pressed="item.is_starred"
+        :title="item.is_starred ? '已加星标' : '未加星标'"
+        aria-label="星标"
+        @click.stop="emit('star')"
+      >
+        <NIcon :component="item.is_starred ? StarFilled : StarBorderOutlined" :size="18" />
+      </button>
+      <div v-if="!compact" class="gm-row-actions" @click.stop>
+        <IconBtn :icon="DeleteOutlined" title="删除" size="small" :icon-size="17" @click="emit('action', 'delete')" />
         <IconBtn
           v-if="unread"
           :icon="DraftsOutlined"
           title="标记为已读"
           size="small"
-          :icon-size="18"
+          :icon-size="17"
           @click="emit('action', 'read')"
         />
-        <IconBtn v-else :icon="MarkEmailUnreadOutlined" title="标记为未读" size="small" :icon-size="18" @click="emit('action', 'unread')" />
+        <IconBtn v-else :icon="MarkEmailUnreadOutlined" title="标记为未读" size="small" :icon-size="17" @click="emit('action', 'unread')" />
       </div>
     </div>
   </div>
@@ -217,27 +234,28 @@ const rowStyle = computed(() =>
 
 <style scoped>
 .gm-row-wrap { position: relative; }
+
+/* ---- 宽屏：表格式一行 ---- */
 .gm-row {
     position: relative;
     display: grid;
-    grid-template-columns: auto auto minmax(120px, 200px) 1fr auto;
+    grid-template-columns: 22px 8px 28px minmax(120px, 190px) 1fr auto 28px;
+    grid-template-areas: "check dot avatar sender main end star";
     align-items: center;
-    column-gap: 4px;
-    min-height: 40px;
-    padding: 0 16px 0 8px;
-    background: var(--gm-row-read);
+    column-gap: 10px;
+    min-height: 48px;
+    padding: 6px 12px 6px 16px;
+    background: var(--gm-surface);
     border-bottom: 1px solid var(--gm-divider);
     cursor: pointer;
-    font-size: 14px;
-    color: var(--gm-text);
+    color: var(--gm-text-2);
+    transition: background-color .15s;
 }
-.gm-row.is-unread { background: #fff; }
-.gm-row.is-unread .gm-row-sender,
-.gm-row.is-unread .gm-row-subject,
-.gm-row.is-unread .gm-row-date { font-weight: 700; color: var(--gm-text); }
-.gm-row:hover { box-shadow: inset 1px 0 0 #dadce0, inset -1px 0 0 #dadce0, 0 1px 2px 0 rgba(60, 64, 67, .3), 0 1px 3px 1px rgba(60, 64, 67, .15); z-index: 1; }
-.gm-row.is-selected { background: var(--gm-row-selected); }
-.gm-row.is-focused::before {
+.gm-row:hover { background: var(--gm-hover); }
+.gm-row.is-selected { background: var(--gm-primary-soft); }
+.gm-row.is-active { background: var(--gm-selected); }
+.gm-row.is-active::after,
+.gm-row.is-focused::after {
     content: "";
     position: absolute;
     left: 0;
@@ -246,72 +264,88 @@ const rowStyle = computed(() =>
     width: 3px;
     background: var(--gm-primary);
 }
-
-.gm-row-check { position: relative; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; }
-.gm-row-avatar { display: none; }
-.gm-row-checkbox { --n-size: 18px !important; }
-.gm-row-star {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    border: 0;
-    border-radius: 50%;
-    background: none;
-    color: #747775;
-    cursor: pointer;
-    padding: 0;
-}
-.gm-row-star:hover { background: var(--gm-hover); color: var(--gm-text); }
-.gm-row-star.is-starred { color: var(--gm-star); }
-
-.gm-row-sender {
-    padding: 0 12px 0 4px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    color: var(--gm-text-2);
-}
+.gm-row-check { grid-area: check; display: flex; }
+.gm-row-dot { grid-area: dot; width: 8px; height: 8px; border-radius: 50%; }
+.gm-row.is-unread .gm-row-dot { background: var(--gm-primary); }
+.gm-row-avatar { grid-area: avatar; width: 28px; height: 28px; font-size: 12px; transition: background-color .15s; }
+.gm-row-sender { grid-area: sender; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gm-row.is-unread .gm-row-sender,
+.gm-row.is-unread .gm-row-subject { font-weight: 600; color: var(--gm-text); }
 .gm-thread-count { color: var(--gm-text-3); font-weight: 400; font-size: 12px; margin-left: 4px; }
-.gm-row-main { min-width: 0; }
+.gm-row-main { grid-area: main; min-width: 0; }
 .gm-row-line { display: flex; align-items: center; min-width: 0; white-space: nowrap; overflow: hidden; }
 .gm-row-subject { flex: none; max-width: 70%; overflow: hidden; text-overflow: ellipsis; color: var(--gm-text-2); }
 .gm-row-snippet { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--gm-text-3); }
-.gm-row-atts { display: flex; gap: 8px; padding: 4px 0 8px; }
+.gm-row-atts { display: flex; gap: 6px; padding-top: 6px; }
 .gm-att-chip {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    max-width: 200px;
-    height: 32px;
-    padding: 0 12px 0 8px;
-    border: 1px solid var(--gm-outline-variant);
-    border-radius: 16px;
-    background: #fff;
-    font-size: 13px;
+    gap: 4px;
+    max-width: 180px;
+    height: 24px;
+    padding: 0 8px;
+    border: 1px solid var(--gm-border);
+    border-radius: var(--gm-radius);
+    font-size: 12px;
     color: var(--gm-text-2);
 }
 .gm-att-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gm-att-more { align-self: center; color: var(--gm-text-3); font-size: 13px; }
-.gm-row-end { display: flex; align-items: center; gap: 6px; padding-left: 12px; justify-self: end; }
-.gm-row-date { font-size: 12px; color: var(--gm-text-2); white-space: nowrap; min-width: 56px; text-align: right; }
+.gm-att-more { align-self: center; color: var(--gm-text-3); font-size: 12px; }
+.gm-row-end { grid-area: end; display: flex; align-items: center; gap: 6px; justify-self: end; }
+.gm-row-date { font-size: 12px; color: var(--gm-text-3); white-space: nowrap; min-width: 52px; text-align: right; }
+.gm-row.is-unread .gm-row-date { color: var(--gm-text); font-weight: 600; }
 .gm-row-clip { color: var(--gm-text-3); }
+.gm-row-star {
+    grid-area: star;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--gm-text-4);
+    cursor: pointer;
+    padding: 0;
+}
+.gm-row-star:hover { color: var(--gm-star); background: var(--gm-hover); }
+.gm-row-star.is-starred { color: var(--gm-star); }
 .gm-row-actions {
     position: absolute;
-    right: 8px;
+    right: 48px;
     top: 50%;
     transform: translateY(-50%);
     display: none;
     gap: 2px;
-    background: inherit;
-    padding-left: 8px;
+    padding: 2px 4px;
+    border-radius: var(--gm-radius);
+    background: var(--gm-popover);
+    box-shadow: var(--gm-shadow-1);
 }
-.gm-row.has-atts .gm-row-actions { top: 20px; }
 @media (hover: hover) {
-    .gm-row:hover .gm-row-actions { display: flex; }
-    .gm-row:hover .gm-row-end { visibility: hidden; }
+    .gm-row:not(.is-compact):hover .gm-row-actions { display: flex; }
 }
+
+/* ---- 紧凑模式：两行卡片（分栏阅读、手机端） ---- */
+.gm-row.is-compact {
+    grid-template-columns: 8px 36px 1fr auto;
+    grid-template-areas:
+        "dot avatar sender end"
+        "dot avatar main star";
+    row-gap: 2px;
+    align-items: start;
+    padding: 10px 12px 10px 8px;
+}
+.gm-row.is-compact .gm-row-dot { align-self: center; }
+.gm-row.is-compact .gm-row-avatar { width: 36px; height: 36px; font-size: 15px; align-self: center; }
+.gm-row.is-compact .gm-row-line { flex-direction: column; align-items: flex-start; white-space: normal; }
+.gm-row.is-compact .gm-row-subject { max-width: 100%; white-space: nowrap; }
+.gm-row.is-compact .gm-row-snippet { width: 100%; white-space: nowrap; font-size: 13px; }
+.gm-row.is-compact .gm-row-dash { display: none; }
+.gm-row.is-compact .gm-row-star { justify-self: end; align-self: end; }
+.gm-row.is-compact .gm-chip,
+.gm-row.is-compact .gm-row-atts { display: none; }
 
 .gm-swipe-bg {
     position: absolute;
@@ -319,42 +353,10 @@ const rowStyle = computed(() =>
     display: flex;
     align-items: center;
     padding: 0 24px;
-    background: #c4c7c5;
+    background: var(--gm-text-4);
     color: #fff;
     transition: background .15s;
 }
 .gm-swipe-bg.is-right { justify-content: flex-end; }
-.gm-swipe-bg.is-armed { background: #d93025; }
-
-/* 手机端：Gmail App 样式，两行布局（发件人 + 日期 / 主题 + 摘要），左侧头像点击选中 */
-@media (max-width: 768px) {
-    .gm-row {
-        grid-template-columns: auto 1fr auto;
-        grid-template-areas:
-            "check sender end"
-            "check main star";
-        padding: 10px 12px 10px 8px;
-        background: #fff;
-        border-bottom: 0;
-        row-gap: 2px;
-    }
-    .gm-row:hover { box-shadow: none; }
-    .gm-row-check { grid-area: check; width: 48px; height: 48px; align-self: start; }
-    .gm-row-avatar { display: inline-flex; width: 40px; height: 40px; font-size: 18px; }
-    .gm-row-checkbox { display: none; }
-    .gm-row.is-selected .gm-row-avatar { background: var(--gm-primary) !important; }
-    .gm-row.is-selected .gm-row-avatar::after { content: "✓"; position: absolute; font-size: 20px; }
-    .gm-row.is-selected .gm-row-avatar { color: transparent; position: relative; }
-    .gm-row.is-selected .gm-row-avatar::after { color: #fff; }
-    .gm-row-star { grid-area: star; justify-self: end; }
-    .gm-row-sender { grid-area: sender; padding: 0 0 0 4px; font-size: 16px; }
-    .gm-row-main { grid-area: main; padding-left: 4px; }
-    .gm-row-line { flex-direction: column; align-items: flex-start; white-space: normal; }
-    .gm-row-subject { max-width: 100%; white-space: nowrap; }
-    .gm-row-snippet { width: 100%; white-space: nowrap; }
-    .gm-row-dash { display: none; }
-    .gm-row-end { grid-area: end; }
-    .gm-row-actions { display: none !important; }
-    .gm-chip { display: none; }
-}
+.gm-swipe-bg.is-armed { background: var(--gm-error); }
 </style>

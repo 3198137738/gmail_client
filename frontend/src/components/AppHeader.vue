@@ -1,9 +1,11 @@
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, h, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { NIcon, NInput } from "naive-ui";
+import { NAvatar, NBadge, NButton, NDropdown, NIcon, NInput, NTooltip } from "naive-ui";
 import {
-  CloseOutlined,
+  BrightnessAutoOutlined,
+  DarkModeOutlined,
+  LightModeOutlined,
   LogOutOutlined,
   MenuOutlined,
   SearchOutlined,
@@ -11,7 +13,7 @@ import {
   SyncOutlined,
 } from "@vicons/material";
 import IconBtn from "./IconBtn.vue";
-import { navAccount, setNavCollapsed, store } from "../store";
+import { navAccount, setThemeMode, store } from "../store";
 import { isMobile } from "../composables/common";
 import { syncAll, logout } from "../actions";
 import { initial } from "../format";
@@ -37,16 +39,6 @@ function submitSearch() {
   router.push({ path: "/messages/", query });
 }
 
-function clearSearch() {
-  search.value = "";
-  submitSearch();
-}
-
-function toggleMenu() {
-  if (isMobile.value) store.drawerOpen = !store.drawerOpen;
-  else setNavCollapsed(!store.navCollapsed);
-}
-
 const me = computed(() => {
   const nav = store.nav;
   if (!nav) return null;
@@ -55,110 +47,95 @@ const me = computed(() => {
 
 const authEnabled = computed(() => store.session?.auth_enabled);
 const realtimeEnabled = computed(() => store.session?.config?.realtime_enabled);
+const realtimeType = computed(
+  () => ({ connected: "success", connecting: "warning", offline: "error" })[store.realtime] || "default",
+);
+
+const THEME_ICONS = { light: LightModeOutlined, dark: DarkModeOutlined, auto: BrightnessAutoOutlined };
+const themeOptions = [
+  { key: "light", label: "浅色", icon: () => h(NIcon, { component: LightModeOutlined }) },
+  { key: "dark", label: "深色", icon: () => h(NIcon, { component: DarkModeOutlined }) },
+  { key: "auto", label: "跟随系统", icon: () => h(NIcon, { component: BrightnessAutoOutlined }) },
+];
 </script>
 
 <template>
-  <header class="gm-header">
-    <div class="gm-header-start">
-      <IconBtn :icon="MenuOutlined" title="主菜单" size="large" :icon-size="24" @click="toggleMenu" />
-      <RouterLink v-if="!isMobile" class="gm-brand" to="/messages/" title="收件箱">
-        <img src="/img/logo.svg" alt="" width="40" height="30" />
-        <span>Roundcube</span>
-      </RouterLink>
-    </div>
+  <div class="gm-header-inner">
+    <IconBtn v-if="isMobile" :icon="MenuOutlined" title="主菜单" @click="store.drawerOpen = true" />
+    <RouterLink v-else class="gm-brand" to="/messages/" title="收件箱">
+      <img src="/img/logo.svg" alt="" width="28" height="21" />
+      <span>Roundcube</span>
+    </RouterLink>
 
     <form class="gm-search" role="search" @submit.prevent="submitSearch">
       <NInput
         v-model:value="search"
-        round
-        size="large"
-        placeholder="搜索邮件"
-        class="gm-search-input"
+        placeholder="搜索邮件（发件人、主题、正文）"
+        clearable
         :input-props="{ 'aria-label': '搜索邮件', autocomplete: 'off', 'data-search': '' }"
+        @clear="search = ''; submitSearch()"
         @keydown.esc="($event.target).blur()"
       >
-        <template #prefix>
-          <NIcon :component="SearchOutlined" :size="22" class="gm-search-icon" @click="submitSearch" />
-        </template>
-        <template #suffix>
-          <NIcon
-            v-if="search"
-            :component="CloseOutlined"
-            :size="20"
-            class="gm-search-icon"
-            title="清除搜索"
-            @click="clearSearch"
-          />
-        </template>
+        <template #prefix><NIcon :component="SearchOutlined" /></template>
       </NInput>
     </form>
 
     <div class="gm-header-end">
-      <span
-        v-if="realtimeEnabled && !isMobile"
-        class="gm-rt"
-        :data-state="store.realtime"
-        :title="store.realtimeTitle"
-        role="status"
-      >
-        <span class="gm-rt-dot" />
-      </span>
+      <NTooltip v-if="realtimeEnabled && !isMobile">
+        <template #trigger>
+          <NBadge dot :type="realtimeType" :processing="store.realtime === 'connecting'" class="gm-rt">
+            <span class="gm-rt-label">实时</span>
+          </NBadge>
+        </template>
+        {{ store.realtimeTitle || "实时推送" }}
+      </NTooltip>
       <template v-if="!isMobile">
-        <IconBtn :icon="SyncOutlined" title="同步所有账号" size="large" :icon-size="22" @click="syncAll" />
+        <IconBtn :icon="SyncOutlined" title="同步所有账号" @click="syncAll" />
+        <NDropdown trigger="click" :options="themeOptions" :value="store.themeMode" @select="setThemeMode">
+          <IconBtn :icon="THEME_ICONS[store.themeMode]" title="外观" />
+        </NDropdown>
         <RouterLink to="/accounts/" custom v-slot="{ navigate }">
-          <IconBtn :icon="SettingsOutlined" title="设置" size="large" :icon-size="22" @click="navigate" />
+          <IconBtn :icon="SettingsOutlined" title="设置" @click="navigate" />
         </RouterLink>
-        <IconBtn v-if="authEnabled" :icon="LogOutOutlined" title="退出登录" size="large" :icon-size="22" @click="logout" />
+        <IconBtn v-if="authEnabled" :icon="LogOutOutlined" title="退出登录" @click="logout" />
       </template>
-      <RouterLink class="gm-avatar-btn" to="/accounts/" :title="me ? `Roundcube 账号\n${me.email}` : '添加账号'">
-        <span class="gm-avatar" :style="{ background: me ? me.color : '#5f6368' }">{{ initial(me ? me.name : "我") }}</span>
+      <RouterLink class="gm-me" to="/accounts/" :title="me ? me.email : '添加账号'">
+        <NAvatar round :size="30" :style="{ background: me ? me.color : undefined }">{{ initial(me ? me.name : "我") }}</NAvatar>
+        <span v-if="me && !isMobile" class="gm-me-email">{{ me.email }}</span>
       </RouterLink>
     </div>
-  </header>
+  </div>
 </template>
 
 <style scoped>
-.gm-header {
-    height: var(--gm-header-h);
+.gm-header-inner {
+    height: 100%;
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 8px 12px 8px 8px;
-    flex: none;
+    gap: 12px;
+    padding: 0 16px;
 }
-.gm-header-start { display: flex; align-items: center; gap: 4px; width: calc(var(--gm-nav-w) - 16px); flex: none; }
 .gm-brand {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 0 8px;
-    color: var(--gm-text-2);
-    font: 400 22px/1 var(--gm-font);
-    text-decoration: none !important;
+    gap: 10px;
+    width: 200px;
+    flex: none;
+    color: var(--gm-text);
+    font-size: 18px;
+    font-weight: 600;
 }
-.gm-search { flex: 1 1 auto; max-width: 720px; min-width: 0; }
-.gm-search-input {
-    --n-color: var(--gm-search) !important;
-    --n-color-focus: #fff !important;
-    --n-border: 1px solid transparent !important;
-    --n-border-hover: 1px solid transparent !important;
-    --n-height: 48px !important;
-}
-.gm-search-input:focus-within { box-shadow: var(--gm-shadow-1); border-radius: 24px; }
-.gm-search-icon { cursor: pointer; color: var(--gm-text-2); margin: 0 4px; }
-.gm-header-end { display: flex; align-items: center; gap: 2px; margin-left: auto; }
-.gm-avatar-btn { display: flex; padding: 4px; margin-left: 4px; border-radius: 50%; }
-.gm-avatar-btn:hover { background: var(--gm-hover); }
-
-.gm-rt { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; }
-.gm-rt-dot { width: 8px; height: 8px; border-radius: 50%; background: #9aa0a6; }
-.gm-rt[data-state="connected"] .gm-rt-dot { background: #1e8e3e; }
-.gm-rt[data-state="connecting"] .gm-rt-dot { background: #f9ab00; animation: gm-pulse 1.2s infinite; }
-.gm-rt[data-state="offline"] .gm-rt-dot { background: #d93025; }
-@keyframes gm-pulse { 50% { opacity: .35; } }
+.gm-brand:hover { color: var(--gm-text); }
+.gm-search { flex: 0 1 480px; min-width: 0; }
+.gm-header-end { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+.gm-rt { margin-right: 8px; }
+.gm-rt-label { font-size: 12px; color: var(--gm-text-3); padding-right: 4px; }
+.gm-me { display: flex; align-items: center; gap: 8px; margin-left: 8px; color: var(--gm-text-2); }
+.gm-me:hover { color: var(--gm-text); }
+.gm-me-email { font-size: 13px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 @media (max-width: 768px) {
-    .gm-header { padding: 8px; gap: 4px; }
-    .gm-header-start { width: auto; }
+    .gm-header-inner { padding: 0 8px; gap: 8px; }
+    .gm-search { flex: 1 1 auto; }
 }
 </style>

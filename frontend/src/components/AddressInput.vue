@@ -194,7 +194,7 @@ defineExpose({
     z-index: 20;
     width: min(440px, 100%);
     padding: 8px 0;
-    background: #fff;
+    background: var(--gm-popover);
     border-radius: 8px;
     box-shadow: var(--gm-shadow-3);
 }

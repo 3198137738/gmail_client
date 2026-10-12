@@ -46,13 +46,13 @@ const emit = defineEmits(["open", "delete"]);
     border-bottom: 1px solid var(--gm-divider);
     cursor: pointer;
 }
-.gm-srow:hover { box-shadow: 0 1px 2px 0 rgba(60, 64, 67, .3), 0 1px 3px 1px rgba(60, 64, 67, .15); z-index: 1; }
-.gm-srow-sender { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+.gm-srow:hover { background: var(--gm-hover); }
+.gm-srow-sender { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
 .gm-srow-main { display: flex; align-items: center; min-width: 0; white-space: nowrap; overflow: hidden; }
 .gm-srow-subject { flex: none; max-width: 70%; overflow: hidden; text-overflow: ellipsis; }
 .gm-srow-snippet { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--gm-text-3); }
 .gm-srow-date { font-size: 12px; color: var(--gm-text-2); white-space: nowrap; }
-.gm-srow-actions { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); display: none; background: #fff; }
+.gm-srow-actions { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); display: none; background: var(--gm-popover); box-shadow: var(--gm-shadow-1); border-radius: var(--gm-radius); }
 @media (hover: hover) {
     .gm-srow:hover .gm-srow-actions { display: flex; }
     .gm-srow:hover .gm-srow-date { visibility: hidden; }

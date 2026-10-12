@@ -67,7 +67,7 @@ async function untrust(row) {
 </script>
 
 <template>
-  <div class="gm-card gm-settings-page">
+  <div class="gm-panel gm-settings-page">
     <SettingsHeader />
     <div class="gm-settings">
       <form class="gm-settings-filter" @submit.prevent="search">
@@ -126,7 +126,7 @@ async function untrust(row) {
 </template>
 
 <style scoped>
-.gm-settings-page { overflow-y: auto; }
+.gm-settings-page { overflow-y: auto; background: var(--gm-bg); }
 .gm-settings-loading { display: flex; justify-content: center; padding: 48px 0; }
 .gm-settings-filter { display: flex; flex-wrap: wrap; gap: 8px; padding: 16px 0 4px; max-width: 640px; }
 .gm-filter-account { width: 200px; }

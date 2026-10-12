@@ -26,14 +26,14 @@ import { SHORTCUT_HELP } from "../composables/shortcuts";
 
 <style scoped>
 .gm-kbd-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px 32px; }
-.gm-kbd-grid h3 { margin: 0 0 8px; font: 500 14px var(--gm-font); color: var(--gm-text-2); }
+.gm-kbd-grid h3 { margin: 0 0 8px; font-size: 14px; font-weight: 600; color: var(--gm-text-2); }
 .gm-kbd-row { display: flex; align-items: center; gap: 12px; padding: 4px 0; }
 .gm-kbd-row kbd {
     min-width: 88px;
     font: 500 12px ui-monospace, Consolas, monospace;
     color: var(--gm-text);
-    background: #f1f3f4;
-    border: 1px solid var(--gm-outline-variant);
+    background: var(--gm-code);
+    border: 1px solid var(--gm-border);
     border-radius: 4px;
     padding: 2px 6px;
 }
