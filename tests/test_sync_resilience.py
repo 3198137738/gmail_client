@@ -21,8 +21,10 @@ from tests.test_backfill import FakeMailbox, _count, _state, no_notify  # noqa: 
 @pytest.fixture(autouse=True)
 def _reset_failures():
     imap_service._uid_failures.clear()
+    imap_service._uid_transient.clear()
     yield
     imap_service._uid_failures.clear()
+    imap_service._uid_transient.clear()
 
 
 class ThrottledMailbox(FakeMailbox):
@@ -35,6 +37,8 @@ class ThrottledMailbox(FakeMailbox):
         self.rfc822_calls: list[list[int]] = []
 
     def fetch(self, uids, items, modifiers=None):
+        if "BODY.PEEK[HEADER]" in items and self.throttle_error is not None:
+            raise self.throttle_error           # 限流时任何内容都取不到（包括探测）
         if "RFC822" in items:
             uids = self._expand(uids)
             self.rfc822_calls.append(list(uids))
@@ -185,3 +189,38 @@ def test_uidvalidity_reset_removes_old_dirs_before_redownload(no_notify):
     imap_service._reset_folder(acc, "INBOX", 99)
     assert not old_dir.exists()      # 当场删除，不留给后台（no_notify 让后台任务不执行）
     assert _count(acc) == 0
+
+
+class PoisonMailbox(FakeMailbox):
+    """下载某封邮件时连接总是被断开（服务器本身正常）。"""
+
+    def __init__(self, n: int, poison: int):
+        super().__init__(n)
+        self.poison = poison
+
+    def fetch(self, uids, items, modifiers=None):
+        if "RFC822" in items and self.poison in self._expand(uids):
+            raise IMAPClientAbortError("socket error: EOF")
+        return super().fetch(uids, items, modifiers)
+
+
+def test_poison_message_cannot_block_sync_forever(no_notify):
+    acc = create_account()
+    box = PoisonMailbox(5, poison=7)
+    _sync_one_folder(box, acc, "INBOX", "inbox")
+
+    box.uids.extend([6, 7, 8, 9])
+    rounds = 0
+    while _state(acc).last_uid < 9:
+        rounds += 1
+        assert rounds <= 20, "坏邮件一直卡住同步进度"
+        _sync_one_folder(box, acc, "INBOX", "inbox")
+    assert _count(acc) == 8                     # 只放弃了 7，其余都已入库
+    assert imap_service._uid_failures == {} and imap_service._uid_transient == {}
+
+
+def test_plain_words_in_error_are_not_treated_as_throttling():
+    assert not imap_service._is_transient_imap_error(IMAPClientError("Message exceeds size limit"))
+    assert not imap_service._is_transient_imap_error(IMAPClientError("Temporary failure reading message"))
+    assert imap_service._is_transient_imap_error(IMAPClientError("[UNAVAILABLE] Temporary System Error"))
+    assert imap_service._is_transient_imap_error(IMAPClientError("[LIMIT] too many"))

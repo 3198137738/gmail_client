@@ -318,11 +318,12 @@ def normalize_ip(value: str | None) -> str | None:
 
 
 def global_failures_exceeded(ip_value: str) -> bool:
-    """全局限速：近期所有来源的密码错误次数已达上限，且该 IP 以前没登录成功过。"""
+    """全局限速：近期所有来源的密码 / 验证码错误次数已达上限，且该 IP 以前没登录成功过。"""
     from .services import audit
 
     since = utcnow() - timedelta(minutes=WEB_AUTH_GLOBAL_WINDOW_MINUTES)
-    if audit.count_events("login_failed", since=since) < WEB_AUTH_GLOBAL_MAX_FAILURES:
+    failures = audit.count_events(("login_failed", "login_2fa_failed"), since=since)
+    if failures < WEB_AUTH_GLOBAL_MAX_FAILURES:
         return False
     key = throttle_key(ip_value)
     return not any(throttle_key(ip) == key for ip in audit.login_success_ips())

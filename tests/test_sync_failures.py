@@ -13,8 +13,10 @@ from tests.test_backfill import FakeMailbox, _count, _raw, _state, no_notify  # 
 @pytest.fixture(autouse=True)
 def _reset_failures():
     imap_service._uid_failures.clear()
+    imap_service._uid_transient.clear()
     yield
     imap_service._uid_failures.clear()
+    imap_service._uid_transient.clear()
 
 
 class FlakyMailbox(FakeMailbox):

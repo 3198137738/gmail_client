@@ -84,29 +84,43 @@ def _wrong(secret):
     return "000000" if totp.code_at(secret, totp.current_step()) != "000000" else "111111"
 
 
-def test_wrong_codes_do_not_block_ip(client, secret):
-    """验证码输错不计入失败次数、不封禁 IP。"""
+def test_wrong_codes_block_ip_and_survive_new_password_step(client, secret):
+    """验证码输错计入该 IP 的失败次数（服务端计数）：重新输入密码不能清零，达到上限即封禁。"""
     import app.auth as auth_module
 
-    for _ in range(WEB_AUTH_MAX_FAILURES + 2):
-        _password_step(client)
-        _code_step(client, _wrong(secret))
-    assert not auth_module.get_login_throttle_status("198.51.100.99").is_blocked
-    # 之后输入正确的验证码仍能登录
+    for i in range(WEB_AUTH_MAX_FAILURES - 1):
+        _password_step(client)                    # 每次都重新走密码步骤（相当于拿到新的 cookie）
+        assert _code_step(client, _wrong(secret)).headers["location"].endswith("/login/2fa")
     _password_step(client)
+    resp = _code_step(client, _wrong(secret))
+    assert "/login/2fa" not in resp.headers["location"]          # 退回登录页
+    assert auth_module.get_login_throttle_status("198.51.100.99").is_blocked
+
+    # 已封禁：密码和验证码都正确也不能登录
+    resp = _password_step(client)
+    assert "/login/2fa" not in resp.headers["location"]
+    assert client.get("/messages/", follow_redirects=False).status_code == 303
+
+
+def test_replayed_cookie_does_not_reset_code_attempts(client, secret):
+    import app.auth as auth_module
+
+    _password_step(client)
+    pending_cookie = client.cookies.get("gmail_client_session")
+    for _ in range(WEB_AUTH_MAX_FAILURES):
+        client.cookies.set("gmail_client_session", pending_cookie, domain="testserver.local")  # 重放刚过密码时的 cookie
+        _code_step(client, _wrong(secret))
+    assert auth_module.get_login_throttle_status("198.51.100.99").is_blocked
+
+
+def test_correct_code_clears_failures(client, secret):
+    import app.auth as auth_module
+
+    _password_step(client)
+    _code_step(client, _wrong(secret))
     resp = _code_step(client, totp.code_at(secret, totp.current_step()))
     assert resp.headers["location"] == "/messages/"
-
-
-def test_too_many_wrong_codes_return_to_password_step(client, secret):
-    _password_step(client)
-    for _ in range(auth_routes.TWO_FACTOR_MAX_ATTEMPTS - 1):
-        assert _code_step(client, _wrong(secret)).headers["location"].endswith("/login/2fa")
-    resp = _code_step(client, _wrong(secret))
-    assert "/login/2fa" not in resp.headers["location"]          # 退回密码步骤
-    assert client.get("/login/2fa", follow_redirects=False).headers["location"].endswith("/login")
-    import app.auth as auth_module
-    assert not auth_module.get_login_throttle_status("198.51.100.99").is_blocked
+    assert auth_module.get_login_throttle_status("198.51.100.99").failed_attempts == 0
 
 
 def test_2fa_page_without_password_step_redirects(client, secret):
@@ -133,8 +147,10 @@ def test_setup_enable_and_disable_from_settings(client, monkeypatch):
         assert two_factor.is_enabled()
         assert "已开启" in client.get("/accounts/security").text
 
-        # 关闭需要当前验证码（上一个时间步已用过，用下一个窗口的码）
+        # 关闭需要当前验证码（上一个时间步已用过，用下一个窗口的码）；输错计入该 IP 的失败次数
         client.post("/accounts/security/disable", data={"code": "000000", "csrf_token": token})
+        import app.auth as auth_module
+        assert auth_module.get_login_throttle_status("unknown").failed_attempts in (0, 1)
         assert two_factor.is_enabled() or totp.code_at(key, totp.current_step() + 1) == "000000"
         client.post("/accounts/security/disable",
                     data={"code": totp.code_at(key, totp.current_step() + 1), "csrf_token": token})
@@ -146,3 +162,25 @@ def test_setup_enable_and_disable_from_settings(client, monkeypatch):
 def test_emergency_reset_ignores_secret(monkeypatch, secret):
     monkeypatch.setattr(two_factor, "WEB_AUTH_2FA_RESET", True)
     assert not two_factor.is_enabled()
+
+
+def test_disable_is_throttled_per_ip(client, monkeypatch):
+    """拿到未退出会话的人不能靠反复猜验证码关掉两步验证。"""
+    import app.auth as auth_module
+
+    token = login(client)
+    key = totp.generate_secret()
+    two_factor.enable(key)
+    try:
+        wrong = "000000" if totp.code_at(key, totp.current_step()) != "000000" else "111111"
+        for _ in range(WEB_AUTH_MAX_FAILURES):
+            client.post("/accounts/security/disable", data={"code": wrong, "csrf_token": token})
+        assert auth_module.get_login_throttle_status("unknown").is_blocked
+        # 封禁期间正确的验证码也不能关闭
+        client.post("/accounts/security/disable",
+                    data={"code": totp.code_at(key, totp.current_step()), "csrf_token": token})
+        assert two_factor.is_enabled()
+    finally:
+        two_factor.disable()
+        with session_scope() as db:
+            db.execute(delete(LoginThrottle))

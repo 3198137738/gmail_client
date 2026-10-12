@@ -9,6 +9,7 @@ from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..auth import (
+    LoginThrottleStatus,
     clear_auth,
     clear_failed_logins,
     get_client_ip,
@@ -141,6 +142,15 @@ def login_submit(
     return RedirectResponse(url=next_url, status_code=303)
 
 
+def register_two_factor_failure(ip_address: str, detail: str = "登录") -> LoginThrottleStatus:
+    """验证码输错：计入该 IP 的失败次数（达到上限即封禁）并写审计日志（计入全局限速）。"""
+    throttle = register_failed_login(ip_address)
+    audit.record("login_2fa_failed", f"{detail}，第 {throttle.failed_attempts} 次", ip=ip_address)
+    if throttle.is_blocked:
+        audit.on_ip_blocked(ip_address, throttle.is_permanent_blocked)
+    return throttle
+
+
 def _complete_login(request: Request, ip_address: str) -> None:
     clear_failed_logins(ip_address)
     mark_authenticated(request)   # 会清空会话（含两步验证的待验证状态）
@@ -152,10 +162,6 @@ TWO_FACTOR_PENDING_KEY = "2fa_pending_at"
 TWO_FACTOR_NEXT_KEY = "2fa_next"
 # 密码通过后必须在这段时间内输入验证码，否则重新输入密码
 TWO_FACTOR_PENDING_SEC = 300
-TWO_FACTOR_ATTEMPTS_KEY = "2fa_attempts"
-# 验证码输错不封禁 IP；同一次登录连续输错这么多次后退回密码步骤（不是封禁，重新输密码即可），
-# 防止已知密码的人在一次登录中无限猜测 6 位验证码
-TWO_FACTOR_MAX_ATTEMPTS = 10
 
 
 def _two_factor_pending(request: Request) -> bool:
@@ -182,16 +188,14 @@ def login_2fa_submit(request: Request, code: str = Form("")):
         request.session.clear()
         return _redirect_to_login(request, next_url=next_url, error="该 IP 已被封禁")
     if not two_factor.verify_and_consume(code):
-        # 验证码输错不计入失败次数、不封禁 IP
-        attempts = int(request.session.get(TWO_FACTOR_ATTEMPTS_KEY) or 0) + 1
-        audit.record("login_2fa_failed", f"本次登录第 {attempts} 次", ip=ip_address)
-        if attempts >= TWO_FACTOR_MAX_ATTEMPTS:
+        # 验证码输错与密码输错一样计入该 IP（IPv6 按 /64）的失败次数，也计入全局限速。
+        # 计数在服务端：重放旧 cookie、重新输入密码都不能清零，无法靠反复尝试猜出 6 位验证码。
+        throttle = register_two_factor_failure(ip_address)
+        if throttle.is_blocked:
             request.session.clear()
-            return _redirect_to_login(
-                request, next_url=next_url, error="验证码错误次数过多"
-            )
-        request.session[TWO_FACTOR_ATTEMPTS_KEY] = attempts
-        set_auth_error(request, "验证码不正确")
+            error = "该 IP 已被永久封禁" if throttle.is_permanent_blocked else "验证码错误次数过多，该 IP 已被临时封禁"
+            return _redirect_to_login(request, next_url=next_url, error=error)
+        set_auth_error(request, f"验证码不正确，还可尝试 {throttle.remaining_attempts} 次")
         return RedirectResponse(url=request.url_for("auth.login_2fa_form"), status_code=303)
     _complete_login(request, ip_address)
     return RedirectResponse(url=next_url, status_code=303)

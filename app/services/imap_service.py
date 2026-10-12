@@ -438,7 +438,20 @@ def _plan_fetch_batches(
 MAX_UID_ATTEMPTS = 5
 # (account_id, folder, uid) -> 连续失败次数（进程内，重启后重新计数）
 _uid_failures: dict[tuple[int, str, int], int] = {}
+# 同一封邮件连续这么多轮在下载时遇到临时错误（限流 / 断线）后视为「嫌疑」：
+# 下一轮先下载其他邮件，嫌疑邮件放到最后逐封单独下载，以区分「服务器限流」和「这封邮件本身有问题」。
+SUSPECT_AFTER_TRANSIENT = 2
+# (account_id, folder, uid) -> 下载时连续遇到临时错误的次数
+_uid_transient: dict[tuple[int, str, int], int] = {}
 _uid_failures_lock = threading.Lock()
+
+
+def _transient_suspects(account_id: int, folder: str, uids: list[int]) -> set[int]:
+    with _uid_failures_lock:
+        return {
+            uid for uid in uids
+            if _uid_transient.get((account_id, folder, uid), 0) >= SUSPECT_AFTER_TRANSIENT
+        }
 
 
 def _record_uid_outcome(
@@ -447,25 +460,32 @@ def _record_uid_outcome(
     attempted: list[int],
     failed: set[int],
     transient: frozenset[int] | set[int] = frozenset(),
+    transient_hit: frozenset[int] | set[int] = frozenset(),
 ) -> list[int]:
     """更新失败计数，返回仍需重试的失败 UID（已放弃的不含在内）。
 
     ``transient`` 中的 UID 因限流或连接中断没能下载，与邮件本身无关：
     下次照常重试，但不计入失败次数，否则限流持续一段时间后这些邮件会被放弃、永久丢失。
+    其中 ``transient_hit`` 是真正发出了下载请求、遇到临时错误的那一批，
+    累计次数用于识别「每次都让下载出错」的嫌疑邮件（见 :data:`SUSPECT_AFTER_TRANSIENT`）。
     """
     retry: list[int] = []
     with _uid_failures_lock:
         for uid in attempted:
             key = (account_id, folder, uid)
             if uid in transient:
+                if uid in transient_hit:
+                    _uid_transient[key] = _uid_transient.get(key, 0) + 1
                 retry.append(uid)
                 continue
             if uid not in failed:
                 _uid_failures.pop(key, None)
+                _uid_transient.pop(key, None)
                 continue
             count = _uid_failures.get(key, 0) + 1
             if count >= MAX_UID_ATTEMPTS:
                 _uid_failures.pop(key, None)
+                _uid_transient.pop(key, None)
                 logger.error(
                     "Giving up on message after %s failed attempts account=%s folder=%s uid=%s",
                     count, account_id, folder, uid,
@@ -476,17 +496,43 @@ def _record_uid_outcome(
     return sorted(retry)
 
 
-# Gmail 限流、超出每日下载限额、服务暂时不可用时返回的错误（如
+# Gmail 限流、超出每日下载限额、服务暂时不可用时返回的响应码（RFC 5530 / Gmail 扩展），如
 # "[OVERQUOTA] Account exceeded command or bandwidth limits"、"[THROTTLED]"、
-# "[UNAVAILABLE] Temporary System Error"），与具体邮件无关，过一段时间会自行恢复。
-_TRANSIENT_ERROR_MARKERS = ("THROTTLED", "OVERQUOTA", "UNAVAILABLE", "LIMIT", "TOO MANY", "TRY AGAIN", "TEMPORAR")
+# "[UNAVAILABLE] Temporary System Error"，与具体邮件无关，过一段时间会自行恢复。
+# 只认带方括号的响应码，不按正文里的普通单词判断，避免把邮件本身的错误当成限流。
+_TRANSIENT_ERROR_CODES = ("[THROTTLED]", "[OVERQUOTA]", "[UNAVAILABLE]", "[LIMIT]")
 
 
 def _is_transient_imap_error(exc: IMAPClientError) -> bool:
     if isinstance(exc, IMAPClientAbortError):
         return True  # 连接已断开
     text = str(exc).upper()
-    return any(marker in text for marker in _TRANSIENT_ERROR_MARKERS)
+    return any(code in text for code in _TRANSIENT_ERROR_CODES)
+
+
+def _server_serving_mail(client: IMAPClient, account_id: int, folder: str, exclude: set[int]) -> bool:
+    """探测服务器此刻能否正常返回邮件内容：取本地已有的一封邮件的头部（不会标为已读）。
+
+    用于判断嫌疑邮件下载失败时，是服务器在限流，还是这封邮件本身有问题。
+    """
+    with session_scope() as db:
+        probe_uid = db.execute(
+            select(Message.uid)
+            .where(
+                Message.account_id == account_id,
+                Message.folder == folder,
+                Message.uid.not_in(list(exclude)),
+            )
+            .order_by(Message.uid.desc())
+            .limit(1)
+        ).scalar()
+    if probe_uid is None:
+        return False
+    try:
+        client.fetch([int(probe_uid)], ["BODY.PEEK[HEADER]"])
+    except IMAPClientError:
+        return False
+    return True
 
 
 class _TransientFetchError(Exception):
@@ -563,18 +609,42 @@ def _ingest_uids(
     if _has_gmail_ext(client):
         fetch_items += ["X-GM-THRID", "X-GM-LABELS"]
     transient_uids: set[int] = set()
-    batches = _plan_fetch_batches(client, to_fetch)
+    transient_hit: set[int] = set()
+    # 嫌疑邮件放到最后、逐封单独下载（见 SUSPECT_AFTER_TRANSIENT）
+    suspects = _transient_suspects(account_id, folder, to_fetch)
+    batches = _plan_fetch_batches(client, [uid for uid in to_fetch if uid not in suspects])
+    batches += [[uid] for uid in sorted(suspects)]
+    fetched_any = False      # 本轮已有邮件成功下载：说明服务器没有在限流
+    convicted = False        # 本轮已认定过一封问题邮件（之后连接可能已断开，不再据此判断）
     for index, chunk in enumerate(batches):
+        if len(chunk) == 1 and chunk[0] in suspects and not fetched_any and not convicted:
+            # 本轮还没有邮件下载成功，无从对比：先探测服务器是否正常（必须在下载嫌疑邮件之前，
+            # 它可能直接让连接断开）
+            fetched_any = _server_serving_mail(client, account_id, folder, set(to_fetch))
         try:
             fetched = _fetch_batch(client, account_id, folder, chunk, fetch_items, failed_uids)
         except _TransientFetchError as exc:
+            if fetched_any and not convicted and len(chunk) == 1 and chunk[0] in suspects:
+                # 其他邮件都能下载，唯独这封单独下载仍然出错：问题在邮件本身，
+                # 按普通失败计数（满 MAX_UID_ATTEMPTS 次放弃），不能让它永远卡住同步进度
+                convicted = True
+                failed_uids.add(chunk[0])
+                logger.warning(
+                    "Message keeps failing while others succeed, counted as failure "
+                    "account=%s folder=%s uid=%s: %s",
+                    account_id, folder, chunk[0], exc,
+                )
+                continue
             # 限流或断线时后面的批次也会失败，停在这里，剩下的下次再取（不计失败次数）
+            transient_hit.update(chunk)
             transient_uids.update(uid for rest in batches[index:] for uid in rest)
             logger.warning(
                 "IMAP fetch interrupted account=%s folder=%s; %s messages deferred: %s",
                 account_id, folder, len(transient_uids), exc,
             )
             break
+        if fetched:
+            fetched_any = True
 
         fetched_items = sorted(
             ((int(uid), data) for uid, data in fetched.items()),
@@ -641,7 +711,7 @@ def _ingest_uids(
         rescue_uids=rescue_uids,
         newest_received=newest_received,
         failed_uids=_record_uid_outcome(
-            account_id, folder, to_fetch, failed_uids | transient_uids, transient_uids
+            account_id, folder, to_fetch, failed_uids | transient_uids, transient_uids, transient_hit
         ),
         interrupted=bool(transient_uids),
     )

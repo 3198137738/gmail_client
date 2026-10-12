@@ -440,9 +440,18 @@ def security_cancel(request: Request):
 def security_disable(request: Request, code: str = Form("")):
     """关闭两步验证需要输入当前验证码，防止他人用一个未退出的会话把它关掉。"""
     from ..services import two_factor
+    from .auth import register_two_factor_failure
 
+    # 与登录第二步一样计入该 IP 的失败次数：拿到一个未退出会话的人也不能靠反复猜验证码关掉两步验证
+    ip_address = web_auth.get_client_ip(request)
+    if web_auth.get_login_throttle_status(ip_address).is_blocked:
+        return _security_redirect(request, "验证码错误次数过多，请稍后再试", "error")
     if not two_factor.verify_and_consume(code):
-        return _security_redirect(request, "验证码不正确", "error")
+        throttle = register_two_factor_failure(ip_address, "关闭两步验证")
+        if throttle.is_blocked:
+            return _security_redirect(request, "验证码错误次数过多，请稍后再试", "error")
+        return _security_redirect(request, f"验证码不正确，还可尝试 {throttle.remaining_attempts} 次", "error")
+    web_auth.clear_failed_logins(ip_address)
     two_factor.disable()
     audit.record_request(request, "2fa_disabled")
     return _security_redirect(request, "两步验证已关闭")

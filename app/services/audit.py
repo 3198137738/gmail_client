@@ -127,10 +127,11 @@ def is_known_login_ip(ip: str) -> bool:
     return found is not None
 
 
-def count_events(event: str, *, since) -> int:
+def count_events(events: str | tuple[str, ...], *, since) -> int:
+    names = (events,) if isinstance(events, str) else tuple(events)
     with session_scope() as db:
         return int(db.execute(
-            select(func.count(AuditLog.id)).where(AuditLog.event == event, AuditLog.created_at >= since)
+            select(func.count(AuditLog.id)).where(AuditLog.event.in_(names), AuditLog.created_at >= since)
         ).scalar_one())
 
 
