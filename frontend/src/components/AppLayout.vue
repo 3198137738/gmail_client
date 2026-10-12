@@ -7,7 +7,7 @@ import AppHeader from "./AppHeader.vue";
 import AppSidebar from "./AppSidebar.vue";
 import ComposeWindow from "./ComposeWindow.vue";
 import ShortcutHelp from "./ShortcutHelp.vue";
-import { setNavCollapsed, store } from "../store";
+import { store } from "../store";
 import { isMobile, refreshNav } from "../composables/common";
 import { useGlobalShortcuts } from "../composables/shortcuts";
 import { onRealtime, startRealtime } from "../realtime";
@@ -50,9 +50,7 @@ useGlobalShortcuts();
         :collapsed-width="64"
         :width="232"
         :collapsed="store.navCollapsed"
-        show-trigger="bar"
         :native-scrollbar="false"
-        @update:collapsed="setNavCollapsed"
       >
         <AppSidebar :collapsed="store.navCollapsed" />
       </NLayoutSider>

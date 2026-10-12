@@ -13,7 +13,7 @@ import {
   SyncOutlined,
 } from "@vicons/material";
 import IconBtn from "./IconBtn.vue";
-import { navAccount, setThemeMode, store } from "../store";
+import { navAccount, setNavCollapsed, setThemeMode, store } from "../store";
 import { isMobile } from "../composables/common";
 import { syncAll, logout } from "../actions";
 import { initial } from "../format";
@@ -39,6 +39,12 @@ function submitSearch() {
   router.push({ path: "/messages/", query });
 }
 
+// 电脑端折叠 / 展开侧栏，手机端打开导航抽屉
+function toggleMenu() {
+  if (isMobile.value) store.drawerOpen = true;
+  else setNavCollapsed(!store.navCollapsed);
+}
+
 const me = computed(() => {
   const nav = store.nav;
   if (!nav) return null;
@@ -61,8 +67,8 @@ const themeOptions = [
 
 <template>
   <div class="gm-header-inner">
-    <IconBtn v-if="isMobile" :icon="MenuOutlined" title="主菜单" @click="store.drawerOpen = true" />
-    <RouterLink v-else class="gm-brand" to="/messages/" title="收件箱">
+    <IconBtn :icon="MenuOutlined" :title="isMobile ? '主菜单' : '折叠 / 展开侧栏'" @click="toggleMenu" />
+    <RouterLink v-if="!isMobile" class="gm-brand" to="/messages/" title="收件箱">
       <img src="/img/logo.svg" alt="" width="28" height="21" />
       <span>Roundcube</span>
     </RouterLink>
@@ -119,7 +125,7 @@ const themeOptions = [
     display: flex;
     align-items: center;
     gap: 10px;
-    width: 200px;
+    width: 160px;
     flex: none;
     color: var(--gm-text);
     font-size: 18px;
