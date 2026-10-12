@@ -1237,7 +1237,7 @@ body.gm-bare:not(.page-auth) { background: #fff; overflow: auto; }
 }
 .gm-settings-flash.is-success { background: #e6f4ea; color: var(--gm-success); }
 .gm-settings-flash.is-warning { background: #fef7e0; color: #7a4a00; }
-.gm-settings-flash.is-danger { background: var(--gm-error-bg); color: var(--gm-error); }
+.gm-settings-flash.is-danger, .gm-settings-flash.is-error { background: var(--gm-error-bg); color: var(--gm-error); }
 .gm-settings-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 16px 24px 0; }
 .gm-settings-filter .gm-input { width: auto; min-width: 200px; }
 
@@ -1334,6 +1334,8 @@ body.gm-bare:not(.page-auth) { background: #fff; overflow: auto; }
 .gm-addr-list { border-top: 1px solid #f1f3f4; }
 .gm-addr { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; padding: 10px 0; border-bottom: 1px solid #f1f3f4; }
 .gm-addr form { margin: 0 0 0 auto; }
+.gm-addr-actions { display: flex; align-items: center; gap: 16px; margin-left: auto; }
+.gm-addr-actions form { margin: 0; }
 .gm-addr-email { color: var(--gm-text); font-weight: 500; overflow-wrap: anywhere; }
 .gm-addr-meta { color: var(--gm-text-3); font-size: 12px; }
 

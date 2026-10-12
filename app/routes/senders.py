@@ -16,7 +16,9 @@ from sqlalchemy.orm import Session, selectinload
 from ..auth import is_safe_redirect
 from ..database import get_db
 from ..models import Account, BlockedSender, Message, TrustedSender
+from ..services import audit
 from ..services.background import submit_bg
+from ..services.imap_purge import describe_purge, purge_sender_messages
 from ..services.imap_restore import restore_sender_messages_since
 from ..services.message_actions import (
     delete_local_messages as _delete_local_messages,
@@ -34,6 +36,9 @@ from .messages import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/messages", tags=["senders"])
+
+# 屏蔽页的操作结果提示放会话里（不走 URL 参数，避免被构造成钓鱼链接）
+_BLOCKED_FLASH_KEY = "blocked_flash"
 
 
 @router.post("/{message_id}/not-spam", name="messages.not_spam")
@@ -157,6 +162,7 @@ def blocked_senders(
         trusted_stmt.order_by(TrustedSender.created_at.desc(), TrustedSender.id.desc())
     ).scalars().all()
 
+    flash = request.session.pop(_BLOCKED_FLASH_KEY, None)
     return templates.TemplateResponse(
         request,
         "blocked_senders.html",
@@ -166,7 +172,47 @@ def blocked_senders(
             "trusted_rows": trusted_rows,
             "current_account_id": account_id_int,
             "q": q,
+            "flash": flash[0] if flash else None,
+            "flash_level": flash[1] if flash else "success",
         },
+    )
+
+
+@router.post("/blocked-senders/{blocked_id}/purge", name="messages.purge_blocked_sender")
+def purge_blocked_sender(
+    request: Request,
+    blocked_id: int,
+    next: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    """「永久删除」：屏蔽保持不变，把该发件人在 Gmail 上的全部邮件彻底清除。"""
+    row = db.execute(
+        select(BlockedSender).options(selectinload(BlockedSender.account)).where(BlockedSender.id == blocked_id)
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Blocked sender not found")
+    account_id = int(row.account_id)
+    sender_email = row.sender_email
+    account_email = row.account.email if row.account else f"#{account_id}"
+    db.close()  # 释放连接；IMAP 操作可能要跑一会儿
+
+    result = purge_sender_messages(account_id, sender_email)
+    summary = describe_purge(result)
+    if result["folders"]:
+        # 已经动过 Gmail 里的邮件才记审计（连不上 / 账号忙时什么都没发生）
+        audit.record_request(request, "sender_purged", f"{sender_email}（{account_email}）：{summary}")
+    logger.info(
+        "purge-blocked-sender account_id=%s sender=%s trashed=%s purged=%s local=%s ok=%s error=%s",
+        account_id, sender_email, result["trashed"], result["purged"], result["local"],
+        result["ok"], result["error"],
+    )
+    level = "success" if result["ok"] else "danger"
+    request.session[_BLOCKED_FLASH_KEY] = [f"{sender_email}：{summary}", level]
+    if is_safe_redirect(next):
+        return RedirectResponse(url=next, status_code=303)
+    return RedirectResponse(
+        url=request.url_for("messages.blocked_senders").include_query_params(account_id=account_id),
+        status_code=303,
     )
 
 

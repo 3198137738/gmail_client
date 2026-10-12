@@ -37,6 +37,7 @@ EVENT_LABELS = {
     "mail_sent": "发送邮件",
     "mail_send_failed": "发送失败",
     "mail_deleted": "删除邮件",
+    "sender_purged": "永久删除发件人邮件",
     "sent_record_deleted": "删除发件记录",
     "account_added": "添加账号",
     "account_updated": "修改账号",

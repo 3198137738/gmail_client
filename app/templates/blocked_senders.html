@@ -8,6 +8,10 @@
 <div class="gm-settings">
     {% include "_settings_tabs.html" %}
 
+    {% if flash %}
+    <div class="gm-settings-flash is-{{ flash_level }}" role="status">{{ flash }}</div>
+    {% endif %}
+
     <form method="get" action="{{ url_for('messages.blocked_senders') }}" class="gm-settings-filter">
         <select class="gm-input gm-select-input" name="account_id" aria-label="账号">
             <option value="">全部账号</option>
@@ -22,7 +26,7 @@
     <section class="gm-settings-row">
         <div class="gm-settings-label">
             屏蔽的地址：
-            <div class="gm-settings-hint">同步时会忽略这些发件人的邮件。解除屏蔽后，会自动补回屏蔽期间被忽略的邮件。</div>
+            <div class="gm-settings-hint">同步时会忽略这些发件人的邮件，但邮件仍留在 Gmail 里；「永久删除」会把该发件人在 Gmail 中的全部邮件（含垃圾邮件、已删除邮件）彻底清除，屏蔽继续保留。解除屏蔽后，会自动补回屏蔽期间被忽略的邮件。</div>
         </div>
         <div class="gm-settings-content">
             <div class="gm-addr-list">
@@ -30,12 +34,20 @@
                 <div class="gm-addr">
                     <span class="gm-addr-email">{{ row.sender_email }}</span>
                     <span class="gm-addr-meta">{{ row.account.display_name or row.account.email }} · {{ row.created_at|utc_to_local|fmt_dt('%Y-%m-%d %H:%M') }}</span>
-                    <form method="post" action="{{ url_for('messages.unblock_sender', blocked_id=row.id) }}"
-                          data-confirm="确定解除对 {{ row.sender_email }} 的屏蔽吗？">
-                        {{ csrf_input() }}
-                        <input type="hidden" name="next" value="{{ back_here }}">
-                        <button type="submit" class="gm-link-btn">解除屏蔽</button>
-                    </form>
+                    <div class="gm-addr-actions">
+                        <form method="post" action="{{ url_for('messages.purge_blocked_sender', blocked_id=row.id) }}"
+                              data-confirm="确定永久删除 {{ row.sender_email }} 在 Gmail 中的全部邮件吗？包括所有邮件、垃圾邮件和已删除邮件，删除后无法恢复；屏蔽会继续保留。">
+                            {{ csrf_input() }}
+                            <input type="hidden" name="next" value="{{ back_here }}">
+                            <button type="submit" class="gm-link-btn is-danger" title="彻底删除该发件人在 Gmail 中的全部邮件（不解除屏蔽）">永久删除</button>
+                        </form>
+                        <form method="post" action="{{ url_for('messages.unblock_sender', blocked_id=row.id) }}"
+                              data-confirm="确定解除对 {{ row.sender_email }} 的屏蔽吗？">
+                            {{ csrf_input() }}
+                            <input type="hidden" name="next" value="{{ back_here }}">
+                            <button type="submit" class="gm-link-btn">解除屏蔽</button>
+                        </form>
+                    </div>
                 </div>
             {% else %}
                 <div class="gm-settings-empty">您目前没有屏蔽任何地址。</div>
