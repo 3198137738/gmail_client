@@ -43,6 +43,11 @@ OP_MOVE = "move"
 OP_ADD_LABEL = "add_label"
 OP_REMOVE_LABEL = "remove_label"
 _OPS = {OP_DELETE, OP_ADD_FLAGS, OP_REMOVE_FLAGS, OP_MOVE, OP_ADD_LABEL, OP_REMOVE_LABEL}
+# 作用于同一状态的操作（同一个标记 / 标签的加和减）：同一封邮件只有最后一次有意义
+_SUPERSEDE_FAMILIES = (
+    (OP_ADD_FLAGS, OP_REMOVE_FLAGS),
+    (OP_ADD_LABEL, OP_REMOVE_LABEL),
+)
 
 BASE_BACKOFF_SEC = 30
 MAX_BACKOFF_SEC = 3600
@@ -78,6 +83,7 @@ def enqueue(
     encoded = _encode_uids(uids)
     if not encoded:
         return
+    _supersede(db, account_id, folder, op, set(_decode_uids(encoded)), arg)
     uidvalidity = db.execute(
         select(SyncState.uidvalidity).where(
             SyncState.account_id == account_id, SyncState.folder == folder
@@ -94,6 +100,36 @@ def enqueue(
             next_attempt_at=utcnow(),
         )
     )
+
+
+def _supersede(
+    db: Session, account_id: int, folder: str, op: str, uids: set[int], arg: Optional[str]
+) -> None:
+    """从排队中的旧操作里去掉这些邮件：它们对同一状态的修改已被这次操作取代。
+
+    否则旧操作失败退避后再重试成功，会覆盖用户之后的操作（例如先标已读失败、
+    再标未读成功，30 秒后已读重试成功，最终变成已读）。
+    """
+    family = next((f for f in _SUPERSEDE_FAMILIES if op in f), None)
+    if family is None:
+        return
+    rows = db.execute(
+        select(PendingOp).where(
+            PendingOp.account_id == account_id,
+            PendingOp.folder == folder,
+            PendingOp.op.in_(family),
+            PendingOp.arg == arg,
+        )
+    ).scalars().all()
+    for row in rows:
+        old_uids = _decode_uids(row.uids)
+        remaining = [u for u in old_uids if u not in uids]
+        if len(remaining) == len(old_uids):
+            continue
+        if remaining:
+            row.uids = _encode_uids(remaining)
+        else:
+            db.delete(row)
 
 
 def kick(account_ids: Iterable[int]) -> None:

@@ -12,6 +12,8 @@ os.environ["REALTIME_ENABLED"] = "false"
 os.environ["TELEGRAM_BOT_TOKEN"] = ""
 os.environ["TELEGRAM_CHAT_ID"] = ""
 os.environ["SESSION_COOKIE_SECURE"] = "false"
+# 所有测试共用一个数据库，各测试的密码错误会累计；全局限速只在专门的测试里调低
+os.environ["WEB_AUTH_GLOBAL_MAX_FAILURES"] = "100000"
 
 import pytest  # noqa: E402
 

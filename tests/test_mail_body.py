@@ -42,7 +42,7 @@ def test_remote_images_load_automatically_by_default(client):
     resp = client.get(f"/messages/{mid}/body")
     csp = resp.headers["content-security-policy"]
     # 默认经图片代理加载：浏览器只访问本站，CSP 不放开外部图片
-    assert "img-src 'self' data:;" in csp
+    assert "img-src http://testserver/attachments/ http://testserver/mail-image data:;" in csp
     assert "/mail-image?u=" in resp.text and "t.example" not in resp.text
     assert "script-src" not in csp and "default-src 'none'" in csp  # 脚本仍然禁止
 
@@ -59,7 +59,7 @@ def test_remote_images_load_directly_when_proxy_disabled(client, monkeypatch):
     mid = create_message(acc, body_html='<p>hi</p><img src="https://t.example/p.gif">')
 
     resp = client.get(f"/messages/{mid}/body")
-    assert "img-src 'self' data: https: http:" in resp.headers["content-security-policy"]
+    assert "img-src http://testserver/attachments/ http://testserver/mail-image data: https: http:" in resp.headers["content-security-policy"]
     assert 'src="https://t.example/p.gif"' in resp.text
 
 
@@ -74,7 +74,7 @@ def test_body_document_blocks_remote_images_when_disabled(client, monkeypatch):
     resp = client.get(f"/messages/{mid}/body")
     assert resp.status_code == 200
     csp = resp.headers["content-security-policy"]
-    assert "img-src 'self' data:;" in csp
+    assert "img-src http://testserver/attachments/ http://testserver/mail-image data:;" in csp
     assert "script-src" not in csp and "default-src 'none'" in csp
     assert "<p>hi</p>" in resp.text
     assert "/mail-image" not in resp.text  # 被拦截时也不经代理加载
@@ -118,3 +118,32 @@ def test_sanitized_body_is_cached(monkeypatch):
     mail_body.safe_body_html(body, None)
     mail_body.safe_body_html(body, None)
     assert len(calls) == 1
+
+
+def test_body_csp_only_allows_attachment_and_proxy_paths(client):
+    login(client)
+    acc = create_account()
+    mid = create_message(acc, body_html='<img src="/messages/1"><div style="background:url(/accounts/oauth/start)">x</div>')
+    csp = client.get(f"/messages/{mid}/body").headers["content-security-policy"]
+    img_src = next(d for d in csp.split("; ") if d.startswith("img-src"))
+    assert "'self'" not in img_src     # 不能放开整个本站
+    assert "http://testserver/attachments/" in img_src and "http://testserver/mail-image" in img_src
+
+
+def test_pages_cannot_be_loaded_as_images(client):
+    """恶意邮件用 <img src="https://本站/messages/1"> 让浏览器带着 cookie 请求页面（例如标为已读）。"""
+    login(client)
+    acc = create_account()
+    mid = create_message(acc, is_read=False)
+    resp = client.get(f"/messages/{mid}", headers={"Sec-Fetch-Dest": "image"}, follow_redirects=False)
+    assert resp.status_code == 403
+    from app.database import session_scope
+    from app.models import Message
+
+    with session_scope() as db:
+        assert db.get(Message, mid).is_read is False
+
+    # 正常打开（导航）以及真正的图片路径不受影响
+    assert client.get(f"/messages/{mid}", headers={"Sec-Fetch-Dest": "document"}).status_code == 200
+    assert client.get("/static/img/logo.svg", headers={"Sec-Fetch-Dest": "image"}).status_code == 200
+    assert client.get("/attachments/1/inbox/1/inline/x.png", headers={"Sec-Fetch-Dest": "image"}).status_code == 404

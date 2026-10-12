@@ -1,6 +1,7 @@
 """Login/logout routes for the app-wide password gate."""
 from __future__ import annotations
 
+import logging
 import time
 from urllib.parse import urlencode
 
@@ -12,6 +13,7 @@ from ..auth import (
     clear_failed_logins,
     get_client_ip,
     get_login_throttle_status,
+    global_failures_exceeded,
     mark_authenticated,
     password_matches,
     pop_auth_error,
@@ -30,6 +32,7 @@ from ..config import (
 from ..services import audit, two_factor
 from ..templating import templates
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["auth"])
 
 
@@ -110,6 +113,11 @@ def login_submit(
     if throttle.is_blocked:
         error = "该 IP 已被永久封禁" if throttle.is_permanent_blocked else "该 IP 已被临时封禁"
         return _redirect_to_login(request, next_url=next_url, error=error)
+
+    if global_failures_exceeded(ip_address):
+        # 不检查密码，也不计入该 IP 的失败次数：攻击结束、时间窗口过去后自动恢复
+        logger.warning("Login from unfamiliar IP %s rejected: global failure limit reached", ip_address)
+        return _redirect_to_login(request, next_url=next_url, error="近期密码错误次数过多，暂时只允许以前登录过的网络登录")
 
     if not password_matches(password, WEB_AUTH_PASSWORD):
         throttle = register_failed_login(ip_address)

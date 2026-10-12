@@ -24,7 +24,7 @@
         <div class="gm-subject-row">
             <h2 class="gm-subject">
                 <span class="gm-subject-text">{{ message.subject or "(无主题)" }}</span>
-                {% if message.status == 'sent' %}
+                {% if message.status in ('sent', 'partial') %}
                 <span class="gm-label-chip gm-folder-chip">已发送</span>
                 {% else %}
                 <span class="gm-label-chip gm-folder-chip is-junk">发送失败</span>
@@ -35,7 +35,9 @@
             </div>
         </div>
 
-        {% if message.status != 'sent' and message.error %}
+        {% if message.status == 'partial' and message.error %}
+        <div class="gm-msg-alert">{{ icon('error', filled=True) }}<span>{{ message.error }}</span></div>
+        {% elif message.status != 'sent' and message.error %}
         <div class="gm-msg-alert">{{ icon('error', filled=True) }}<span>发送失败：{{ message.error }}</span></div>
         {% endif %}
 

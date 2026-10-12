@@ -66,6 +66,26 @@ _CLEANER = nh3.Cleaner(
     set_tag_attribute_values={"a": {"target": "_blank"}},
 )
 
+# 写邮件编辑器回填用：草稿、发送失败后重新显示的正文是用户自己编辑（或粘贴）的 HTML，
+# 回填前去掉脚本、事件属性、iframe 等。与收件清洗不同：保留 class（如回复引用的
+# gmail_quote），不改写链接的 target/rel，否则发出去的邮件内容会被改动。
+_COMPOSE_CLEANER = nh3.Cleaner(
+    tags=ALLOWED_TAGS,
+    clean_content_tags=_CLEAN_CONTENT_TAGS,
+    attributes={**ALLOWED_ATTRIBUTES, "*": set(ALLOWED_ATTRIBUTES["*"]) | {"class"}},
+    url_schemes=ALLOWED_PROTOCOLS,
+    attribute_filter=_attribute_filter,
+    filter_style_properties=_ALLOWED_CSS_PROPS,
+    strip_comments=True,
+    link_rel=None,
+)
+
+
+def sanitize_compose_html(raw_html: str) -> str:
+    """清洗要回填到写邮件编辑器的 HTML。"""
+    return _COMPOSE_CLEANER.clean(raw_html) if raw_html else ""
+
+
 # Detect leaked CSS rule text in already-rendered HTML. Earlier versions of
 # this module removed the <style> tag but kept its inner text, baking raw CSS
 # into ``body_html`` of persisted messages. We can't re-fetch those mails, so

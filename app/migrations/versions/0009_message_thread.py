@@ -9,6 +9,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
+from app.migrations.fts import create_triggers
+
 revision = "0009_message_thread"
 down_revision = "0008_app_settings"
 branch_labels = None
@@ -25,3 +27,5 @@ def downgrade() -> None:
     op.drop_index("ix_messages_account_thread", table_name="messages")
     with op.batch_alter_table("messages") as batch_op:
         batch_op.drop_column("thread_id")
+    # batch 操作重建了 messages 表，旧表上的全文索引触发器随之丢失
+    create_triggers(op)

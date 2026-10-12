@@ -52,3 +52,60 @@ def test_success_resets_failure_counter(client, fake_ip):
     with session_scope() as db:
         row = db.query(LoginThrottle).filter_by(ip_address="198.51.100.77").one()
         assert row.failed_attempts == 0
+
+
+def test_ipv6_failures_count_per_64(client, fake_ip):
+    import app.auth as web_auth
+
+    # 同一 /64 内轮换地址不能绕过封禁
+    for i in range(WEB_AUTH_MAX_FAILURES):
+        fake_ip["ip"] = f"2001:db8:1:2::{i + 1:x}"
+        _attempt(client, "wrong")
+    fake_ip["ip"] = "2001:db8:1:2:abcd::99"
+    assert "/login" in _attempt(client, "test-password").headers["location"]
+    assert web_auth.get_login_throttle_status("2001:db8:1:2::ffff").is_blocked
+
+    # 别的 /64 不受影响
+    fake_ip["ip"] = "2001:db8:1:3::1"
+    assert _attempt(client, "test-password").headers["location"].endswith("/messages/")
+
+
+def test_ipv6_auto_ban_covers_whole_64(monkeypatch):
+    import app.auth as web_auth
+
+    monkeypatch.setattr(web_auth, "WEB_AUTH_PERMANENT_BLOCK_AFTER_FAILURES", True)
+    try:
+        for _ in range(WEB_AUTH_MAX_FAILURES):
+            web_auth.register_failed_login("2001:db8:9:9::1")
+        assert web_auth.is_ip_banned("2001:db8:9:9:1234::5")
+        assert not web_auth.is_ip_banned("2001:db8:9:a::1")
+        assert web_auth.normalize_ip("2001:db8:9:9::/64") == "2001:db8:9:9::/64"
+        assert web_auth.unban_ip("2001:db8:9:9::/64")
+        assert not web_auth.is_ip_banned("2001:db8:9:9:1234::5")
+    finally:
+        with session_scope() as db:
+            db.execute(delete(LoginThrottle))
+        web_auth.invalidate_ban_cache()
+
+
+def test_global_failure_limit_only_admits_known_networks(client, fake_ip, monkeypatch):
+    import app.auth as web_auth
+    from app.models import AuditLog
+
+    with session_scope() as db:
+        db.execute(delete(AuditLog))
+    fake_ip["ip"] = "198.51.100.200"
+    assert _attempt(client, "test-password").headers["location"].endswith("/messages/")  # 已知 IP
+
+    monkeypatch.setattr(web_auth, "WEB_AUTH_GLOBAL_MAX_FAILURES", 4)
+    # 攻击者轮换 IP：每个 IP 都没到单 IP 上限，但合计达到全局上限
+    for i in range(4):
+        fake_ip["ip"] = f"203.0.113.{i + 1}"
+        _attempt(client, "wrong")
+
+    fake_ip["ip"] = "203.0.113.50"          # 新 IP：密码正确也暂时不能登录
+    resp = _attempt(client, "test-password")
+    assert "/login" in resp.headers["location"]
+
+    fake_ip["ip"] = "198.51.100.200"        # 以前登录成功过的 IP 不受影响
+    assert _attempt(client, "test-password").headers["location"].endswith("/messages/")

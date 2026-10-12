@@ -127,6 +127,23 @@ def is_known_login_ip(ip: str) -> bool:
     return found is not None
 
 
+def count_events(event: str, *, since) -> int:
+    with session_scope() as db:
+        return int(db.execute(
+            select(func.count(AuditLog.id)).where(AuditLog.event == event, AuditLog.created_at >= since)
+        ).scalar_one())
+
+
+def login_success_ips() -> set[str]:
+    """保留期内登录成功过的全部 IP。"""
+    with session_scope() as db:
+        return {
+            ip for ip in db.execute(
+                select(AuditLog.ip_address).where(AuditLog.event == "login_success").distinct()
+            ).scalars() if ip
+        }
+
+
 def prune(days: int = AUDIT_RETENTION_DAYS) -> int:
     cutoff = utcnow() - timedelta(days=days)
     with session_scope() as db:

@@ -50,7 +50,7 @@ from time import perf_counter
 from typing import Optional
 
 from imapclient import IMAPClient
-from imapclient.exceptions import IMAPClientError
+from imapclient.exceptions import IMAPClientAbortError, IMAPClientError
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -136,6 +136,10 @@ def _has_gmail_ext(client) -> bool:
         return False
 
 
+# 补齐标签时每次 FETCH 的 UID 区间长度
+LABEL_BACKFILL_RANGE = 5000
+
+
 def _backfill_labels(client: IMAPClient, account_id: int, folder: str) -> int:
     """升级后第一次同步：把已入库邮件的 Gmail 标签全部取一遍（每个文件夹只做一次）。"""
     if not _has_gmail_ext(client):
@@ -146,13 +150,15 @@ def _backfill_labels(client: IMAPClient, account_id: int, folder: str) -> int:
             return 0
         last_uid = int(state.last_uid or 0)
     changed = 0
-    if last_uid > 0:
+    # 按 UID 区间分段取，大文件夹不会一次把全部标签读进内存
+    for start in range(1, last_uid + 1, LABEL_BACKFILL_RANGE):
+        end = min(start + LABEL_BACKFILL_RANGE - 1, last_uid)
         try:
-            fetched = client.fetch(f"1:{last_uid}", ["X-GM-LABELS"])
+            fetched = client.fetch(f"{start}:{end}", ["X-GM-LABELS"])
         except IMAPClientError as exc:
             logger.warning("Label backfill failed account=%s folder=%s: %s", account_id, folder, exc)
-            return 0
-        changed = gmail_labels.apply_remote_labels(
+            return changed
+        changed += gmail_labels.apply_remote_labels(
             account_id, folder,
             {int(uid): gmail_labels.parse_labels(data.get(b"X-GM-LABELS")) for uid, data in fetched.items()},
         )
@@ -237,17 +243,19 @@ def _load_trusted_sender_emails(account_id: int) -> set[str]:
 
 
 def _existing_uids(account_id: int, folder: str, uids: list[int]) -> set[int]:
-    if not uids:
-        return set()
+    found: set[int] = set()
     with session_scope() as db:
-        rows = db.execute(
-            select(Message.uid).where(
-                Message.account_id == account_id,
-                Message.folder == folder,
-                Message.uid.in_(uids),
+        for chunk in _chunks(list(uids)):
+            found.update(
+                int(uid) for uid in db.execute(
+                    select(Message.uid).where(
+                        Message.account_id == account_id,
+                        Message.folder == folder,
+                        Message.uid.in_(chunk),
+                    )
+                ).scalars()
             )
-        ).scalars().all()
-    return {int(uid) for uid in rows}
+    return found
 
 
 def _parse_fetched_messages(
@@ -369,9 +377,12 @@ def _update_sync_state(
     *,
     uidvalidity: Optional[int],
     new_last_uid: Optional[int],
+    reopen_backfill: bool = False,
 ) -> None:
     with session_scope() as db:
         state = _get_or_create_sync_state(db, account_id, folder)
+        if reopen_backfill:
+            state.backfill_done = False
         if uidvalidity and state.uidvalidity and state.uidvalidity != uidvalidity:
             # 服务器 UID 体系已变，历史回填需要从头开始
             state.backfill_before_uid = None
@@ -431,13 +442,24 @@ _uid_failures_lock = threading.Lock()
 
 
 def _record_uid_outcome(
-    account_id: int, folder: str, attempted: list[int], failed: set[int]
+    account_id: int,
+    folder: str,
+    attempted: list[int],
+    failed: set[int],
+    transient: frozenset[int] | set[int] = frozenset(),
 ) -> list[int]:
-    """更新失败计数，返回仍需重试的失败 UID（已放弃的不含在内）。"""
+    """更新失败计数，返回仍需重试的失败 UID（已放弃的不含在内）。
+
+    ``transient`` 中的 UID 因限流或连接中断没能下载，与邮件本身无关：
+    下次照常重试，但不计入失败次数，否则限流持续一段时间后这些邮件会被放弃、永久丢失。
+    """
     retry: list[int] = []
     with _uid_failures_lock:
         for uid in attempted:
             key = (account_id, folder, uid)
+            if uid in transient:
+                retry.append(uid)
+                continue
             if uid not in failed:
                 _uid_failures.pop(key, None)
                 continue
@@ -454,6 +476,50 @@ def _record_uid_outcome(
     return sorted(retry)
 
 
+# Gmail 限流、超出每日下载限额、服务暂时不可用时返回的错误（如
+# "[OVERQUOTA] Account exceeded command or bandwidth limits"、"[THROTTLED]"、
+# "[UNAVAILABLE] Temporary System Error"），与具体邮件无关，过一段时间会自行恢复。
+_TRANSIENT_ERROR_MARKERS = ("THROTTLED", "OVERQUOTA", "UNAVAILABLE", "LIMIT", "TOO MANY", "TRY AGAIN", "TEMPORAR")
+
+
+def _is_transient_imap_error(exc: IMAPClientError) -> bool:
+    if isinstance(exc, IMAPClientAbortError):
+        return True  # 连接已断开
+    text = str(exc).upper()
+    return any(marker in text for marker in _TRANSIENT_ERROR_MARKERS)
+
+
+class _TransientFetchError(Exception):
+    """下载因限流或连接中断失败，本轮应停止，剩下的邮件下次再取。"""
+
+
+def _fetch_batch(
+    client: IMAPClient,
+    account_id: int,
+    folder: str,
+    chunk: list[int],
+    items: list[str],
+    failed_uids: set[int],
+) -> dict:
+    """下载一批邮件。整批失败时逐封重试，只把真正取不到的那几封记入 ``failed_uids``。"""
+    try:
+        return client.fetch(chunk, items)
+    except IMAPClientError as exc:
+        if _is_transient_imap_error(exc):
+            raise _TransientFetchError(str(exc)) from exc
+        logger.warning(
+            "IMAP fetch failed account=%s folder=%s uids=%s: %s",
+            account_id, folder, chunk, exc,
+        )
+        if len(chunk) == 1:
+            failed_uids.update(chunk)
+            return {}
+    fetched: dict = {}
+    for uid in chunk:
+        fetched.update(_fetch_batch(client, account_id, folder, [uid], items, failed_uids))
+    return fetched
+
+
 @dataclass
 class IngestResult:
     saved: int = 0
@@ -462,6 +528,8 @@ class IngestResult:
     newest_received: Optional[datetime] = None
     # 下载、解析或入库失败、下次需要重试的 UID（升序）
     failed_uids: list[int] = field(default_factory=list)
+    # 因 Gmail 限流或连接中断提前停止（剩下的邮件下次再取）
+    interrupted: bool = False
 
     @property
     def failed(self) -> bool:
@@ -494,16 +562,19 @@ def _ingest_uids(
     fetch_items = ["RFC822", "FLAGS", "INTERNALDATE"]
     if _has_gmail_ext(client):
         fetch_items += ["X-GM-THRID", "X-GM-LABELS"]
-    for chunk in _plan_fetch_batches(client, to_fetch):
+    transient_uids: set[int] = set()
+    batches = _plan_fetch_batches(client, to_fetch)
+    for index, chunk in enumerate(batches):
         try:
-            fetched = client.fetch(chunk, fetch_items)
-        except IMAPClientError as exc:
+            fetched = _fetch_batch(client, account_id, folder, chunk, fetch_items, failed_uids)
+        except _TransientFetchError as exc:
+            # 限流或断线时后面的批次也会失败，停在这里，剩下的下次再取（不计失败次数）
+            transient_uids.update(uid for rest in batches[index:] for uid in rest)
             logger.warning(
-                "IMAP fetch failed account=%s folder=%s uids=%s: %s",
-                account_id, folder, chunk, exc,
+                "IMAP fetch interrupted account=%s folder=%s; %s messages deferred: %s",
+                account_id, folder, len(transient_uids), exc,
             )
-            failed_uids.update(chunk)
-            continue
+            break
 
         fetched_items = sorted(
             ((int(uid), data) for uid, data in fetched.items()),
@@ -569,7 +640,10 @@ def _ingest_uids(
         saved=saved,
         rescue_uids=rescue_uids,
         newest_received=newest_received,
-        failed_uids=_record_uid_outcome(account_id, folder, to_fetch, failed_uids),
+        failed_uids=_record_uid_outcome(
+            account_id, folder, to_fetch, failed_uids | transient_uids, transient_uids
+        ),
+        interrupted=bool(transient_uids),
     )
 
 
@@ -597,8 +671,13 @@ def _chunks(items: list[int], size: int = _SQL_CHUNK):
         yield items[i:i + size]
 
 
-def _delete_local_rows(account_id: int, folder: str, uids: Optional[set[int]] = None) -> int:
-    """删除本地某文件夹的邮件（``uids`` 为 None 时删除全部）及其附件目录。"""
+def _delete_local_rows(
+    account_id: int, folder: str, uids: Optional[set[int]] = None, *, wait_dirs: bool = False
+) -> int:
+    """删除本地某文件夹的邮件（``uids`` 为 None 时删除全部）及其附件目录。
+
+    附件目录默认交给后台删除；``wait_dirs`` 为 True 时当场删完再返回。
+    """
     with session_scope() as db:
         rows = db.execute(
             select(Message.id, Message.folder_kind, Message.uid).where(
@@ -613,7 +692,10 @@ def _delete_local_rows(account_id: int, folder: str, uids: Optional[set[int]] = 
             db.execute(delete(Message).where(Message.id.in_(chunk)))
     dirs = [str(_message_base_dir(account_id, row.folder_kind, int(row.uid))) for row in rows]
     if dirs:
-        submit_bg(_remove_dirs, dirs)
+        if wait_dirs:
+            _remove_dirs(dirs)
+        else:
+            submit_bg(_remove_dirs, dirs)
     return len(ids)
 
 
@@ -628,7 +710,9 @@ def _reset_folder(account_id: int, folder: str, uidvalidity: int) -> None:
     不能只把 last_uid 归零：旧行会让同号的新邮件被当成「已存在」而不入库，
     outbox 里的旧 UID 操作会作用到服务器上另一封邮件，回填游标也会取错。
     """
-    removed = _delete_local_rows(account_id, folder)
+    # 附件目录按 UID 命名（不含 UIDVALIDITY），紧接着重新下载的新邮件可能与旧邮件同号：
+    # 必须当场删完，交给后台的话可能删掉刚写入的新附件。
+    removed = _delete_local_rows(account_id, folder, wait_dirs=True)
     with session_scope() as db:
         dropped = outbox.drop_folder_ops(db, account_id, folder)
         state = _get_or_create_sync_state(db, account_id, folder)
@@ -843,6 +927,7 @@ def _sync_one_folder(
     if changed_flags or removed:
         publish_mail_changed(account_id, folder_kind)
 
+    truncated = False
     if last_uid > 0:
         try:
             raw_uids = client.search(["UID", f"{last_uid + 1}:*"])
@@ -854,7 +939,10 @@ def _sync_one_folder(
             raw_uids = client.search(["ALL"])
         except IMAPClientError as exc:
             raise IMAPSyncError(f"IMAP search failed: {exc}") from exc
-        uids = sorted(int(u) for u in raw_uids)[-INITIAL_SYNC_LIMIT:]
+        all_uids = sorted(int(u) for u in raw_uids)
+        uids = all_uids[-INITIAL_SYNC_LIMIT:]
+        # 首次同步只取最新的一部分（文件夹此前为空、回填已标记完成时也一样），更早的交给回填
+        truncated = len(all_uids) > len(uids)
 
     scanned = len(uids)
     if not uids:
@@ -881,6 +969,7 @@ def _sync_one_folder(
         folder,
         uidvalidity=uidvalidity,
         new_last_uid=new_last_uid,
+        reopen_backfill=truncated,
     )
     _move_rescued_to_inbox(account_id, folder, result.rescue_uids)
     if saved and last_uid > 0 and folder_kind == "inbox":

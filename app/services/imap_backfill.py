@@ -6,8 +6,9 @@
 
 * 进度保存在 sync_state.backfill_before_uid / backfill_done，重启后接着回填；
   出错（网络、Gmail 每日下载限额等）就停下，下一次调度时从断点继续。
-* 使用独立连接和独立线程池，每批只持有该文件夹的锁、不占账号锁：
-  不阻塞新邮件同步、标记已读、删除等操作，页面也不会显示「正在同步」。
+* 使用独立连接和独立线程池，不占账号锁；文件夹锁只在下载每一小批
+  （IMAP_FETCH_BATCH_SIZE 封）时持有，批与批之间释放：新邮件同步、IDLE 推送
+  不必等整批回填结束，标记已读、删除等操作也不会因为同步排队而返回「忙」。
 * 回填的是旧邮件，不发送 Telegram 通知，也不推送「新邮件」提示。
 """
 from __future__ import annotations
@@ -15,6 +16,7 @@ from __future__ import annotations
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from typing import Optional
 
 from imapclient import IMAPClient
 from imapclient.exceptions import IMAPClientError
@@ -24,6 +26,7 @@ from ..config import (
     BACKFILL_BATCH_SIZE,
     BACKFILL_MAX_CONCURRENT,
     BACKFILL_PAUSE_SEC,
+    IMAP_FETCH_BATCH_SIZE,
     IMAP_TIMEOUT_SEC,
     SYNC_FULL_HISTORY,
 )
@@ -32,6 +35,7 @@ from ..database import session_scope
 from ..models import Account, Message, SyncState
 from .imap_client import _FOLDER_LOCK_TIMEOUT_SEC, IMAPSyncError, _folder_lock, _imap_client
 from .imap_service import (
+    _chunks,
     _get_or_create_sync_state,
     _ingest_uids,
     _move_rescued_to_inbox,
@@ -46,6 +50,7 @@ DONE = "done"          # 该文件夹已全部回填
 PROGRESS = "progress"  # 完成了一批，还有更早的邮件
 SKIP = "skip"          # 首次同步还没完成或 UIDVALIDITY 变了，等下次
 FAILED = "failed"      # 下载出错，停止本轮，下次从断点继续
+BUSY = "busy"          # 文件夹锁被同步长时间占用，稍后再试
 
 _mutex = threading.Lock()
 _running: set[int] = set()
@@ -68,14 +73,33 @@ def _mark_done(account_id: int, folder: str) -> None:
         _get_or_create_sync_state(db, account_id, folder).backfill_done = True
 
 
-def _backfill_batch(client: IMAPClient, account_id: int, folder: str, folder_kind: str) -> str:
-    """回填一批：取 UID 小于断点的邮件中最新的 BACKFILL_BATCH_SIZE 封。"""
+def _acquire(lock: Optional[threading.Lock]) -> bool:
+    return lock is None or lock.acquire(timeout=_FOLDER_LOCK_TIMEOUT_SEC)
+
+
+def _release(lock: Optional[threading.Lock]) -> None:
+    if lock is not None:
+        lock.release()
+
+
+def _current_validity(account_id: int, folder: str) -> Optional[int]:
+    with session_scope() as db:
+        return _get_or_create_sync_state(db, account_id, folder).uidvalidity
+
+
+def _plan_batch(client: IMAPClient, account_id: int, folder: str):
+    """确定本批要回填的 UID，返回 ``(batch, remaining, uidvalidity)``，无事可做时返回状态字符串。"""
     with session_scope() as db:
         state = _get_or_create_sync_state(db, account_id, folder)
         if state.backfill_done:
             return DONE
-        if not state.uidvalidity or not state.last_uid:
+        if not state.uidvalidity or state.last_synced_at is None:
             return SKIP  # 首次同步还没跑完
+        if not state.last_uid:
+            # 首次同步时文件夹是空的：没有更早的邮件。之后到达的邮件由增量同步处理，
+            # 若一次到达太多、超出首次同步上限，增量同步会重新打开回填。
+            state.backfill_done = True
+            return DONE
         expected_validity = int(state.uidvalidity)
         cursor = state.backfill_before_uid
         if cursor is None:
@@ -107,14 +131,50 @@ def _backfill_batch(client: IMAPClient, account_id: int, folder: str, folder_kin
         _mark_done(account_id, folder)
         logger.info("Backfill finished account=%s folder=%s", account_id, folder)
         return DONE
-
     batch = older[-BACKFILL_BATCH_SIZE:]
-    result = _ingest_uids(client, account_id, folder, folder_kind, batch)
-    _move_rescued_to_inbox(account_id, folder, result.rescue_uids)
-    if result.failed:
-        return FAILED
+    return batch, len(older) - len(batch), expected_validity
 
-    remaining = len(older) - len(batch)
+
+def _backfill_batch(
+    client: IMAPClient,
+    account_id: int,
+    folder: str,
+    folder_kind: str,
+    lock: Optional[threading.Lock] = None,
+) -> str:
+    """回填一批：取 UID 小于断点的邮件中最新的 BACKFILL_BATCH_SIZE 封。
+
+    ``lock`` 为该文件夹的锁，只在规划和下载每一小批时持有。
+    """
+    if not _acquire(lock):
+        return BUSY
+    try:
+        plan = _plan_batch(client, account_id, folder)
+    finally:
+        _release(lock)
+    if isinstance(plan, str):
+        return plan
+    batch, remaining, expected_validity = plan
+
+    saved = 0
+    for chunk in _chunks(batch, IMAP_FETCH_BATCH_SIZE):
+        # 中途停下时断点不推进；已入库的邮件下次会被跳过，不会重复下载
+        if not _acquire(lock):
+            return BUSY
+        try:
+            if _current_validity(account_id, folder) != expected_validity:
+                return SKIP  # 释放锁期间增量同步发现 UIDVALIDITY 变了，已清空该文件夹
+            result = _ingest_uids(client, account_id, folder, folder_kind, chunk)
+        finally:
+            _release(lock)
+        _move_rescued_to_inbox(account_id, folder, result.rescue_uids)
+        saved += result.saved
+        if result.interrupted:
+            # Gmail 限流或连接中断：其他文件夹也会失败，结束本轮回填，下次调度从断点继续
+            raise IMAPSyncError("fetch interrupted (throttled or connection lost)")
+        if result.failed:
+            return FAILED
+
     with session_scope() as db:
         state = _get_or_create_sync_state(db, account_id, folder)
         if state.uidvalidity == expected_validity:
@@ -122,7 +182,7 @@ def _backfill_batch(client: IMAPClient, account_id: int, folder: str, folder_kin
             state.backfill_done = remaining == 0
     logger.info(
         "Backfill batch account=%s folder=%s saved=%s remaining=%s",
-        account_id, folder, result.saved, remaining,
+        account_id, folder, saved, remaining,
     )
     return DONE if remaining == 0 else PROGRESS
 
@@ -141,14 +201,10 @@ def _run_backfill(account_id: int) -> None:
             pending = sync_targets(client, account_id)
             while pending and not _stop.is_set():
                 for folder, kind in list(pending):
-                    lock = _folder_lock(account_id, folder)
-                    if not lock.acquire(timeout=_FOLDER_LOCK_TIMEOUT_SEC):
-                        continue  # 该文件夹正在同步，下一轮再试
-                    try:
-                        status = _backfill_batch(client, account_id, folder, kind)
-                    finally:
-                        lock.release()
-                    if status != PROGRESS:
+                    status = _backfill_batch(
+                        client, account_id, folder, kind, _folder_lock(account_id, folder)
+                    )
+                    if status not in (PROGRESS, BUSY):  # 文件夹正在同步时下一轮再试
                         pending.remove((folder, kind))
                     if _stop.is_set():
                         break

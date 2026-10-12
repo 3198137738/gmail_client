@@ -39,6 +39,7 @@ from .routes import messages as messages_routes
 from .routes import senders as senders_routes
 from .routes import send as send_routes
 from .routes import sync as sync_routes
+from .services import image_proxy as image_proxy_service
 from .services import login_sessions
 from .services.background import shutdown_executor
 from .services.imap_backfill import shutdown_backfill, start_backfill
@@ -136,6 +137,20 @@ async def add_security_headers(request: Request, call_next):
     return response
 
 
+# 浏览器在 Sec-Fetch-Dest 中标明请求用途。邮件正文里的 <img src="/messages/123">、
+# CSS 背景图等会带着登录 cookie 请求本站页面（例如把邮件标为已读）；
+# 这类「当作图片 / 样式加载」的请求只允许访问真正提供这些资源的路径。
+_SUBRESOURCE_DESTS = {"image", "style", "script", "font", "audio", "video", "track", "object", "embed"}
+_SUBRESOURCE_PATHS = ("/static/", "/attachments/", image_proxy_service.PROXY_PATH)
+
+
+async def reject_misused_subresource(request: Request, call_next):
+    dest = request.headers.get("sec-fetch-dest", "").lower()
+    if dest in _SUBRESOURCE_DESTS and not request.url.path.startswith(_SUBRESOURCE_PATHS):
+        return PlainTextResponse("Forbidden", status_code=403)
+    return await call_next(request)
+
+
 class ForwardedProtoMiddleware:
     """按 X-Forwarded-Proto 设置请求协议，与代理是否可信无关。
 
@@ -162,6 +177,7 @@ class ForwardedProtoMiddleware:
 
 
 app.middleware("http")(require_app_password)
+app.middleware("http")(reject_misused_subresource)
 app.middleware("http")(add_security_headers)
 app.add_middleware(
     SessionMiddleware,

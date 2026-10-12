@@ -272,7 +272,10 @@ document.addEventListener("click", function (ev) {
             case "gm:compose:sent":
                 close();
                 if (window.GM && window.GM.toast) {
-                    window.GM.toast("邮件已发送", { href: ev.data.url, linkText: "查看邮件" });
+                    window.GM.toast(
+                        ev.data.partial ? "邮件已发送，但部分收件人被拒收" : "邮件已发送",
+                        { href: ev.data.url, linkText: ev.data.partial ? "查看详情" : "查看邮件" }
+                    );
                 }
                 break;
         }

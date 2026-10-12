@@ -6,7 +6,7 @@ import secrets
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from ipaddress import ip_address, ip_network
+from ipaddress import IPv6Address, ip_address, ip_network
 from urllib.parse import urlencode, urlparse
 
 from fastapi import Request
@@ -17,6 +17,8 @@ from .config import (
     SESSION_MAX_AGE_SEC,
     WEB_AUTH_BLOCKED_IPS,
     WEB_AUTH_ENABLED,
+    WEB_AUTH_GLOBAL_MAX_FAILURES,
+    WEB_AUTH_GLOBAL_WINDOW_MINUTES,
     WEB_AUTH_LOCKOUT_MINUTES,
     WEB_AUTH_MAX_FAILURES,
     WEB_AUTH_PERMANENT_BLOCK_AFTER_FAILURES,
@@ -212,6 +214,21 @@ def is_explicitly_blocked_ip(ip_address: str) -> bool:
     return ip_address in WEB_AUTH_BLOCKED_IPS
 
 
+def throttle_key(ip_value: str) -> str:
+    """登录限流、自动封禁用的键：IPv4 按单个地址，IPv6 按所在的 /64 网段。
+
+    运营商通常给每个 IPv6 用户分配整个 /64（2^64 个地址），按单个地址计数的话，
+    换个地址就能绕过封禁。
+    """
+    try:
+        addr = ip_address(ip_value)
+    except ValueError:
+        return ip_value
+    if isinstance(addr, IPv6Address) and addr.ipv4_mapped is None:
+        return str(ip_network(f"{addr}/64", strict=False))
+    return str(addr)
+
+
 def _get_or_create_throttle(db, ip_address: str) -> LoginThrottle:
     state = db.execute(
         select(LoginThrottle).where(LoginThrottle.ip_address == ip_address)
@@ -231,6 +248,7 @@ def _reset_state(state: LoginThrottle) -> None:
 
 
 def get_login_throttle_status(ip_address: str) -> LoginThrottleStatus:
+    ip_address = throttle_key(ip_address)
     if is_explicitly_blocked_ip(ip_address):
         return LoginThrottleStatus(
             ip_address=ip_address,
@@ -283,12 +301,31 @@ def is_ip_banned(ip_address: str) -> bool:
     """IP 是否被永久封禁（.env 黑名单、手动拉黑或多次输错密码自动永久封禁）。"""
     if not ip_address or ip_address == "unknown":
         return False
-    return is_explicitly_blocked_ip(ip_address) or ip_address in _banned_ips_from_db()
+    keys = {ip_address, throttle_key(ip_address)}   # IPv6 自动封禁记录的是 /64 网段
+    banned = _banned_ips_from_db()
+    return any(is_explicitly_blocked_ip(k) or k in banned for k in keys)
 
 
 def normalize_ip(value: str | None) -> str | None:
-    """把用户输入的 IP 规范化，不是合法 IP 返回 None。"""
-    return _normalize_ip(value)
+    """把用户输入的 IP（或自动封禁记录的 IPv6 /64 网段）规范化，不合法返回 None。"""
+    normalized = _normalize_ip(value)
+    if normalized or not value or "/" not in value:
+        return normalized
+    try:
+        return str(ip_network(value.strip(), strict=False))
+    except ValueError:
+        return None
+
+
+def global_failures_exceeded(ip_value: str) -> bool:
+    """全局限速：近期所有来源的密码错误次数已达上限，且该 IP 以前没登录成功过。"""
+    from .services import audit
+
+    since = utcnow() - timedelta(minutes=WEB_AUTH_GLOBAL_WINDOW_MINUTES)
+    if audit.count_events("login_failed", since=since) < WEB_AUTH_GLOBAL_MAX_FAILURES:
+        return False
+    key = throttle_key(ip_value)
+    return not any(throttle_key(ip) == key for ip in audit.login_success_ips())
 
 
 def ban_ip(ip_address: str) -> bool:
@@ -345,6 +382,7 @@ def list_banned_ips() -> list[BannedIp]:
 
 
 def register_failed_login(ip_address: str) -> LoginThrottleStatus:
+    ip_address = throttle_key(ip_address)
     if is_explicitly_blocked_ip(ip_address):
         return LoginThrottleStatus(
             ip_address=ip_address,
@@ -395,6 +433,7 @@ def register_failed_login(ip_address: str) -> LoginThrottleStatus:
 
 
 def clear_failed_logins(ip_address: str) -> None:
+    ip_address = throttle_key(ip_address)
     if is_explicitly_blocked_ip(ip_address):
         return
     with session_scope() as db:

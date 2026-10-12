@@ -7,7 +7,7 @@ import re
 import app.routes.send as send_routes
 from app.database import session_scope
 from app.models import Draft
-from app.services.smtp_service import SMTPSendError
+from app.services.smtp_service import SendResult, SMTPSendError
 from tests.helpers import create_account, create_message, login
 
 FETCH = {"X-Requested-With": "fetch"}
@@ -90,7 +90,7 @@ def test_successful_send_deletes_draft(client, monkeypatch):
     token = login(client)
     acc = create_account()
     did = _save(client, token, account_id=acc, to="d@example.com", subject="要发的").json()["id"]
-    monkeypatch.setattr(send_routes, "send_email", lambda **kw: "<id@example.com>")
+    monkeypatch.setattr(send_routes, "send_email", lambda **kw: SendResult("<id@example.com>"))
     client.post("/compose/", data={
         "account_id": acc, "to": "d@example.com", "subject": "要发的", "body_text": "x",
         "draft_id": did, "csrf_token": token,
@@ -113,3 +113,16 @@ def test_failed_send_keeps_draft(client, monkeypatch):
     }).text
     assert _draft(did) is not None
     assert f'id="gc-draft-id" value="{did}"' in page   # 重新显示的写邮件页继续沿用这个草稿
+
+
+def test_draft_html_is_sanitized_before_refill(client):
+    token = login(client)
+    acc = create_account()
+    body = ('<div class="gmail_quote" onmouseover="steal()">hi<script>evil()</script>'
+            '<img src="x" onerror="alert(1)"><a href="javascript:alert(1)">l</a></div>')
+    did = _save(client, token, account_id=acc, to="a@example.com", body_text="hi", body_html=body).json()["id"]
+    page = client.get(f"/compose/?draft={did}").text
+    data = json.loads(re.search(r'<script type="application/json"[^>]*>(.*?)</script>', page, re.S).group(1))
+    assert "gmail_quote" in data["body_html"]
+    for bad in ("evil()", "onerror", "onmouseover", "javascript:"):
+        assert bad not in data["body_html"]

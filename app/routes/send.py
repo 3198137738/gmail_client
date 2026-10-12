@@ -24,8 +24,10 @@ from ..services.mail_body import (
     body_document_response,
     body_has_remote_images,
     remote_images_allowed,
+    request_origin,
 )
 from ..services import audit
+from ..services.html_sanitizer import sanitize_compose_html
 from ..services.smtp_service import SMTPSendError, send_email
 from ..navigation import sidebar_data
 from ..templating import templates, utc_to_local
@@ -225,7 +227,7 @@ def _build_draft_prefill(db: Session, draft: Draft) -> dict:
         "bcc": draft.bcc_addr or "",
         "subject": draft.subject or "",
         "body_text": draft.body_text or "",
-        "body_html": draft.body_html or _text_to_html(draft.body_text or ""),
+        "body_html": sanitize_compose_html(draft.body_html) or _text_to_html(draft.body_text or ""),
         "in_reply_to": draft.in_reply_to or "",
         "references": draft.references or "",
         "is_reply": bool(draft.in_reply_to),
@@ -417,6 +419,16 @@ def _render_compose(request: Request, db: Session, accounts, *, prefill, error, 
     )
 
 
+def _unique_path(directory: Path, name: str) -> Path:
+    """同名附件（如两个 image.png）依次改名为 image_1.png、image_2.png，不能互相覆盖。"""
+    dest = directory / (name or "attachment")
+    n = 1
+    while dest.exists():
+        dest = directory / f"{Path(name).stem}_{n}{Path(name).suffix}"
+        n += 1
+    return dest
+
+
 @router.post("/", name="compose.send")
 # 必须是普通 def：smtplib 发信和保存附件都是阻塞调用（最长 30 秒），FastAPI 会把
 # 同步路由放进线程池；写成 async def 会卡住事件循环，期间所有请求和 SSE 都无响应。
@@ -455,8 +467,7 @@ def send(
         for upload in attachments or []:
             if not upload or not upload.filename:
                 continue
-            safe_name = Path(upload.filename).name
-            dest = session_dir / safe_name
+            dest = _unique_path(session_dir, Path(upload.filename).name)
             with dest.open("wb") as out:
                 shutil.copyfileobj(upload.file, out)
             saved_paths.append(dest)
@@ -479,11 +490,7 @@ def send(
                     logger.warning("Forwarded attachment missing on disk: %s", att.file_path)
                     continue
                 copy_name = Path(att.display_name or att.filename).name or src.name
-                dest = session_dir / copy_name
-                n = 1
-                while dest.exists():
-                    dest = session_dir / f"{dest.stem}_{n}{dest.suffix}"
-                    n += 1
+                dest = _unique_path(session_dir, copy_name)
                 try:
                     shutil.copyfile(src, dest)
                 except OSError:
@@ -492,7 +499,7 @@ def send(
                 saved_paths.append(dest)
 
         try:
-            message_id = send_email(
+            result = send_email(
                 from_email=account.email,
                 encrypted_password=account.encrypted_password,
                 from_name=account.display_name,
@@ -507,8 +514,16 @@ def send(
                 in_reply_to=(in_reply_to or None),
                 references=(references or None),
             )
-            status = "sent"
-            error = None
+            message_id = result.message_id
+            if result.refused:
+                # 邮件已发给其余收件人；记为「部分退回」，在发件记录里提示哪些地址没收到
+                status = "partial"
+                error = "以下收件人被拒收：" + "；".join(
+                    f"{addr}（{reason}）" for addr, reason in sorted(result.refused.items())
+                )
+            else:
+                status = "sent"
+                error = None
         except SMTPSendError as exc:
             status = "failed"
             error = str(exc)
@@ -529,12 +544,12 @@ def send(
         )
         db.add(record)
         recipients = ", ".join(x for x in (to, cc, bcc) if x)[:300]
-        if status == "sent":
+        if status != "failed":
             audit.record_request(request, "mail_sent", f"{account.email} → {recipients}：「{(subject or '(无主题)')[:80]}」")
         else:
             audit.record_request(request, "mail_send_failed", f"{account.email} → {recipients}：{(error or '')[:200]}")
         draft_record = db.get(Draft, _coerce_int(draft_id)) if _coerce_int(draft_id) else None
-        if status == "sent" and draft_record is not None:
+        if status != "failed" and draft_record is not None:
             db.delete(draft_record)   # 已发出，草稿不再需要
         db.commit()
 
@@ -548,7 +563,7 @@ def send(
                 "cc": cc or "",
                 "bcc": bcc or "",
                 "subject": subject,
-                "body_html": body_html or _text_to_html(body_text or ""),
+                "body_html": sanitize_compose_html(body_html or "") or _text_to_html(body_text or ""),
                 "body_text": body_text or "",
                 "in_reply_to": in_reply_to or "",
                 "references": references or "",
@@ -622,8 +637,14 @@ def sent_list(request: Request, db: Session = Depends(get_db)):
             ).scalars().all()
         }
 
+    # 部分收件人被拒收的发送：显示本地记录（带拒收提示），不显示 Gmail 里的同一封
+    partial_ids = {
+        _normalize_message_id(r.message_id) for r in local_rows if r.status == "partial" and r.message_id
+    }
     items: list[dict] = []
     for m in gmail_rows:
+        if partial_ids and _normalize_message_id(m.message_id) in partial_ids:
+            continue
         items.append({
             "source": "gmail",
             "account": m.account.email if m.account else f"#{m.account_id}",
@@ -665,20 +686,23 @@ def sent_list(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/sent/{sent_id}/done", response_class=HTMLResponse, name="compose.sent_done")
-def sent_done(request: Request, sent_id: int):
+def sent_done(request: Request, sent_id: int, db: Session = Depends(get_db)):
     """悬浮写邮件窗口发送成功后的落地页：通知父页面关闭窗口并提示「邮件已发送」。"""
+    status = db.execute(select(SentMessage.status).where(SentMessage.id == sent_id)).scalar()
     return templates.TemplateResponse(
         request,
         "compose_done.html",
         {
             "embed": True,
             "sent_url": str(request.url_for("compose.sent_detail", sent_id=sent_id)),
+            "send_partial": status == "partial",
         },
     )
 
 
 @router.get("/sent/{sent_id}/body", response_class=HTMLResponse, name="compose.sent_body")
 def sent_body(
+    request: Request,
     sent_id: int,
     images: bool = Query(False),
     db: Session = Depends(get_db),
@@ -689,7 +713,10 @@ def sent_body(
     ).first()
     if row is None:
         raise HTTPException(status_code=404, detail="Sent message not found")
-    return body_document_response(row.body_html, row.body_text, allow_remote_images=remote_images_allowed(images))
+    return body_document_response(
+        row.body_html, row.body_text,
+        allow_remote_images=remote_images_allowed(images), origin=request_origin(request),
+    )
 
 
 @router.get("/sent/{sent_id}", response_class=HTMLResponse, name="compose.sent_detail")

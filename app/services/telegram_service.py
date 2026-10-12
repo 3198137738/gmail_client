@@ -16,6 +16,7 @@ import uuid
 import urllib.error
 import urllib.request
 from datetime import datetime
+from bisect import bisect_right
 from html import escape
 from typing import Any, Optional
 
@@ -314,49 +315,71 @@ def _full_body(msg: Message) -> str:
     return plain.strip()
 
 
-def _split_text(text: str, limit: int) -> list[str]:
-    if len(text) <= limit:
-        return [text]
-    chunks: list[str] = []
+# HTML 转义后会变长的字符（与 html.escape 一致）
+_ESCAPED_LEN = {"&": 5, "<": 4, ">": 4, '"': 6, "'": 6}
+
+
+def _split_escaped(text: str, limit: int) -> list[str]:
+    """按纯文本切段后再做 HTML 转义，保证每段转义后不超过 ``limit``。
+
+    先转义再切的话可能切在 ``&amp;`` 这类实体或标签中间，Telegram 会以
+    "can't parse entities" 拒收整段。优先在换行处切。
+    """
+    cum = [0]   # cum[i]：text[:i] 转义后的长度
+    for ch in text:
+        cum.append(cum[-1] + _ESCAPED_LEN.get(ch, 1))
+    pieces: list[str] = []
     cursor = 0
     while cursor < len(text):
-        end = min(cursor + limit, len(text))
+        end = max(bisect_right(cum, cum[cursor] + limit) - 1, cursor + 1)
         if end < len(text):
             cut = text.rfind("\n", cursor, end)
             if cut > cursor + 100:
                 end = cut
         part = text[cursor:end].strip()
         if part:
-            chunks.append(part)
+            pieces.append(escape(part))
         cursor = end
-    return chunks or [text[:limit]]
+    return pieces
 
 
 def _send_message_chunked(
-    text: str,
+    header_html: str,
+    body: str,
     *,
     chat_id: Optional[str] = None,
     reply_markup: Optional[dict] = None,
 ) -> None:
-    pieces = _split_text(text, _TG_TEXT_LIMIT)
-    if not pieces:
-        return
+    """发送「HTML 表头 + 纯文本正文」，正文过长时分多条发送（正文在这里转义）。"""
+    budget = max(_TG_TEXT_LIMIT - len(header_html) - 32, 500)   # 32：留给 (n/m) 后缀
+    pieces = _split_escaped(body, budget) or [""]
     for idx, piece in enumerate(pieces):
         suffix = "" if len(pieces) == 1 else f"\n\n<i>({idx + 1}/{len(pieces)})</i>"
         send_message(
-            piece + suffix,
+            (header_html if idx == 0 else "") + piece + suffix,
             chat_id=chat_id,
             reply_markup=(reply_markup if idx == 0 else None),
         )
 
 
+# 表头里每个字段（收件人、抄送等）最多显示的字符数，收件人很多时表头不会超出单条消息上限
+_HEADER_FIELD_MAX = 300
+
+
+def _header_field(value: Optional[str]) -> str:
+    text = (value or "-").strip() or "-"
+    if len(text) > _HEADER_FIELD_MAX:
+        text = text[:_HEADER_FIELD_MAX] + "…"
+    return escape(text)
+
+
 def _notify_message_detail(msg: Message, safe_email: str, *, junk: bool = False) -> None:
-    subject = escape(msg.subject or "(无主题)")
-    sender = escape(msg.from_addr or "-")
-    to_addr = escape(msg.to_addr or "-")
-    cc_addr = escape(msg.cc_addr or "-")
+    subject = _header_field(msg.subject or "(无主题)")
+    sender = _header_field(msg.from_addr)
+    to_addr = _header_field(msg.to_addr)
+    cc_addr = _header_field(msg.cc_addr)
     sent_at = escape(_msg_datetime(msg.date))
-    body = escape(_full_body(msg) or "(正文为空)")
+    body = _full_body(msg) or "(正文为空)"
     title = "\u26A0 <b>垃圾邮件</b>" if junk else "\U0001F4EC <b>新邮件</b>"
     header = (
         f"{title}\n"
@@ -369,7 +392,8 @@ def _notify_message_detail(msg: Message, safe_email: str, *, junk: bool = False)
         "<b>正文</b>\n"
     )
     _send_message_chunked(
-        header + body,
+        header,
+        body,
         reply_markup=_action_keyboard(int(msg.id), junk=junk),
     )
 

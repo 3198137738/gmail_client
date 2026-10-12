@@ -62,12 +62,25 @@ def safe_body_html(body_html: str | None, body_text: str | None) -> str:
     return '<p class="mail-empty">邮件内容为空</p>'
 
 
+def request_origin(request) -> str:
+    """请求所在的源（协议 + 主机 + 端口），nginx 终止 HTTPS 时协议已由中间件改正。"""
+    return f"{request.url.scheme}://{request.url.netloc}"
+
+
 def body_has_remote_images(body_html: str | None) -> bool:
     return bool(body_html) and has_remote_resources(_sanitize_cached(body_html))
 
 
-def _csp(allow_direct_images: bool) -> str:
-    img_src = "'self' data: https: http:" if allow_direct_images else "'self' data:"
+def _csp(allow_direct_images: bool, origin: str | None = None) -> str:
+    # 本站图片只放开附件和图片代理两个路径：恶意邮件写 <img src="/messages/123">
+    # 或 CSS url() 时浏览器直接拦截，不会带着登录 cookie 去请求其他页面。
+    # 路径由浏览器规范化后再匹配，"/attachments/../messages/1" 同样会被拦截。
+    if origin:
+        own = f"{origin}/attachments/ {origin}{image_proxy.PROXY_PATH}"
+    else:
+        own = "'self'"
+    # 直接加载外部图片时 https: 也会匹配本站，这种情况靠 main.py 中按 Sec-Fetch-Dest 拦截
+    img_src = f"{own} data: https: http:" if allow_direct_images else f"{own} data:"
     return "; ".join(
         [
             "default-src 'none'",
@@ -87,7 +100,9 @@ def body_document_response(
     *,
     allow_remote_images: bool,
     proxy_images: bool | None = None,
+    origin: str | None = None,
 ) -> HTMLResponse:
+    """``origin``（如 ``https://mail.example.com``）用于把 CSP 中本站图片限定到具体路径。"""
     if proxy_images is None:
         proxy_images = IMAGE_PROXY_ENABLED
     content = safe_body_html(body_html, body_text)
@@ -103,7 +118,7 @@ def body_document_response(
     return HTMLResponse(
         document,
         headers={
-            "Content-Security-Policy": _csp(allow_remote_images and not proxy_images),
+            "Content-Security-Policy": _csp(allow_remote_images and not proxy_images, origin),
             "Referrer-Policy": "no-referrer",
             "X-Content-Type-Options": "nosniff",
             "X-Frame-Options": "SAMEORIGIN",

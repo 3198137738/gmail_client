@@ -240,6 +240,11 @@ WEB_AUTH_PERMANENT_BLOCK_AFTER_FAILURES = _get_bool(
     False,
 )
 WEB_AUTH_BLOCKED_IPS = _get_csv_set("WEB_AUTH_BLOCKED_IPS")
+# 全局限速：所有来源合计，WEB_AUTH_GLOBAL_WINDOW_MINUTES 分钟内密码错误达到这个次数后，
+# 只允许以前登录成功过的 IP（IPv6 按 /64 网段）继续尝试。防止攻击者轮换大量 IP
+# 绕过按 IP 的封禁（一个 IPv6 用户就有整段 /64 地址可用）。
+WEB_AUTH_GLOBAL_MAX_FAILURES = _get_positive_int("WEB_AUTH_GLOBAL_MAX_FAILURES", 10)
+WEB_AUTH_GLOBAL_WINDOW_MINUTES = _get_positive_int("WEB_AUTH_GLOBAL_WINDOW_MINUTES", 60)
 TRUST_PROXY_HEADERS = _get_bool("TRUST_PROXY_HEADERS", True)
 # 只有来自这些网段的直连请求，才会采信其 X-Forwarded-For / X-Real-IP。
 # 默认包含本机和私有网段（nginx 容器通过 Docker 内网转发过来）；公网地址永远不被信任。
@@ -302,16 +307,34 @@ SESSION_MAX_AGE_DAYS = _get_positive_int("SESSION_MAX_AGE_DAYS", 7)
 SESSION_MAX_AGE_SEC = SESSION_MAX_AGE_DAYS * 24 * 3600
 
 
+def _restrict_to_owner(path: Path) -> None:
+    """密钥文件只允许属主读写（0600）。Windows 不支持 POSIX 权限，跳过。"""
+    if os.name == "nt":
+        return
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
 def load_session_secret() -> str:
-    """Return the session signing secret, creating one on first run."""
+    """Return the session signing secret, creating one on first run.
+
+    该密钥能伪造会话 cookie，也是图片代理签名的根密钥，文件权限与 fernet.key 一样设为 0600。
+    """
     env_secret = os.getenv("SESSION_SECRET", "").strip()
     if env_secret:
         return env_secret
     if SESSION_SECRET_PATH.exists():
+        _restrict_to_owner(SESSION_SECRET_PATH)   # 旧版本创建的文件可能是 0644
         return SESSION_SECRET_PATH.read_text(encoding="utf-8").strip()
 
     secret = secrets.token_urlsafe(48)
-    SESSION_SECRET_PATH.write_text(secret, encoding="utf-8")
+    # 创建时就带上 0600，不留下「先按默认权限创建、再 chmod」的窗口
+    fd = os.open(SESSION_SECRET_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(secret)
+    _restrict_to_owner(SESSION_SECRET_PATH)
     logger = logging.getLogger(__name__)
     logger.info("Generated new session secret at %s", SESSION_SECRET_PATH)
     return secret

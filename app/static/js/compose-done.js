@@ -3,8 +3,9 @@
 (function () {
     var el = document.getElementById("gc-done");
     var url = el ? el.getAttribute("data-sent-url") : "/compose/sent";
+    var partial = !!(el && el.hasAttribute("data-partial"));
     if (window.parent && window.parent !== window) {
-        window.parent.postMessage({ type: "gm:compose:sent", url: url }, window.location.origin);
+        window.parent.postMessage({ type: "gm:compose:sent", url: url, partial: partial }, window.location.origin);
     } else {
         window.location.replace(url);
     }

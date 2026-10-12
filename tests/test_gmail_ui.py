@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import pytest
 
 import app.routes.send as send_routes
-from app.services.smtp_service import SMTPSendError
+from app.services.smtp_service import SendResult, SMTPSendError
 from app.templating import _gmail_full_date, _gmail_list_date, _recipients
 from tests.helpers import create_account, create_message, csrf_token, login
 
@@ -94,7 +94,7 @@ def test_send_failure_keeps_draft(client, monkeypatch):
 def test_send_success_in_embed_goes_to_done_page(client, monkeypatch):
     token = login(client)
     acc = create_account()
-    monkeypatch.setattr(send_routes, "send_email", lambda **kwargs: "<id@example.com>")
+    monkeypatch.setattr(send_routes, "send_email", lambda **kwargs: SendResult("<id@example.com>"))
 
     resp = client.post("/compose/", data=_send_form(token, acc, embed="1"), follow_redirects=False)
     assert resp.status_code == 303
@@ -195,3 +195,71 @@ def test_compose_passes_undo_seconds(client):
     page = client.get("/compose/").text
     raw = re.search(r'<script type="application/json" id="gc-compose-data">(.*?)</script>', page, re.S).group(1)
     assert json.loads(raw)["undo_seconds"] == 5
+
+
+def test_partially_refused_send_is_reported(client, monkeypatch):
+    token = login(client)
+    acc = create_account()
+    monkeypatch.setattr(
+        send_routes, "send_email",
+        lambda **kwargs: SendResult("<p@example.com>", refused={"bad@example.com": "550 No such user"}),
+    )
+    resp = client.post("/compose/", data=_send_form(token, acc, embed="1"), follow_redirects=False)
+    assert resp.status_code == 303
+    done = client.get(resp.headers["location"]).text
+    assert 'data-partial="1"' in done and "部分收件人被拒收" in done
+
+    sent_list = client.get("/compose/sent").text
+    assert "部分收件人被拒收" in sent_list
+    sent_id = re.search(r"/compose/sent/(\d+)/done", resp.headers["location"]).group(1)
+    detail = client.get(f"/compose/sent/{sent_id}").text
+    assert "bad@example.com" in detail and "550 No such user" in detail
+    assert "发送失败" not in detail
+
+
+def test_smtp_returns_refused_recipients(monkeypatch):
+    from app.crypto import encrypt_password
+    from app.services import smtp_service
+
+    class FakeSMTP:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def login(self, *a):
+            pass
+
+        def send_message(self, msg, from_addr, to_addrs):
+            return {"bad@example.com": (550, b"5.1.1 No such user")}
+
+    monkeypatch.setattr(smtp_service.smtplib, "SMTP_SSL", FakeSMTP)
+    result = smtp_service.send_email(
+        from_email="me@gmail.com", encrypted_password=encrypt_password("app-password"), from_name=None,
+        to="ok@example.com, bad@example.com", cc=None, bcc=None, subject="s", body_text="b", body_html=None,
+    )
+    assert result.message_id
+    assert result.refused == {"bad@example.com": "550 5.1.1 No such user"}
+
+
+def test_same_name_uploads_are_both_attached(client, monkeypatch):
+    token = login(client)
+    acc = create_account()
+    seen = {}
+
+    def fake_send(**kwargs):
+        seen["files"] = [(p.name, p.read_bytes()) for p in kwargs["attachments"]]
+        return SendResult("<a@example.com>")
+
+    monkeypatch.setattr(send_routes, "send_email", fake_send)
+    files = [
+        ("attachments", ("image.png", b"first", "image/png")),
+        ("attachments", ("image.png", b"second", "image/png")),
+    ]
+    resp = client.post("/compose/", data=_send_form(token, acc), files=files, follow_redirects=False)
+    assert resp.status_code == 303
+    assert seen["files"] == [("image.png", b"first"), ("image_1.png", b"second")]

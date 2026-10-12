@@ -2,8 +2,8 @@
 {% block title %}邮件已发送{% endblock %}
 {# 悬浮写邮件窗口发送成功：通知父页面关闭窗口并提示（见 compose-done.js） #}
 {% block bare_body %}
-<div class="gc-done" id="gc-done" data-sent-url="{{ sent_url }}">
-    {{ icon('check_circle', filled=True) }}<span>邮件已发送</span>
+<div class="gc-done" id="gc-done" data-sent-url="{{ sent_url }}"{% if send_partial %} data-partial="1"{% endif %}>
+    {{ icon('check_circle', filled=True) }}<span>{% if send_partial %}邮件已发送，但部分收件人被拒收{% else %}邮件已发送{% endif %}</span>
     <a href="{{ sent_url }}" target="_top">查看邮件</a>
 </div>
 {% endblock %}

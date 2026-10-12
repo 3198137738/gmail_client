@@ -14,60 +14,33 @@ from __future__ import annotations
 
 from alembic import op
 
+from app.migrations.fts import COLS, create_triggers, drop_triggers
+
 revision = "0002_messages_fts"
 down_revision = "0001_baseline"
 branch_labels = None
 depends_on = None
-
-_COLS = "subject, from_addr, to_addr, body_text"
-_NEW = "new.subject, new.from_addr, new.to_addr, new.body_text"
-_OLD = "old.subject, old.from_addr, old.to_addr, old.body_text"
 
 
 def upgrade() -> None:
     op.execute(
         f"""
         CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-            {_COLS},
+            {COLS},
             content='messages',
             content_rowid='id',
             tokenize='trigram'
         )
         """
     )
-    op.execute(
-        f"""
-        CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN
-            INSERT INTO messages_fts(rowid, {_COLS}) VALUES (new.id, {_NEW});
-        END
-        """
-    )
-    op.execute(
-        f"""
-        CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages BEGIN
-            INSERT INTO messages_fts(messages_fts, rowid, {_COLS})
-            VALUES ('delete', old.id, {_OLD});
-        END
-        """
-    )
-    op.execute(
-        f"""
-        CREATE TRIGGER IF NOT EXISTS messages_fts_au
-        AFTER UPDATE OF {_COLS} ON messages BEGIN
-            INSERT INTO messages_fts(messages_fts, rowid, {_COLS})
-            VALUES ('delete', old.id, {_OLD});
-            INSERT INTO messages_fts(rowid, {_COLS}) VALUES (new.id, {_NEW});
-        END
-        """
-    )
+    # 用触发器与 messages 表保持同步
+    create_triggers(op)
     # 为已有邮件建立索引
     op.execute("INSERT INTO messages_fts(messages_fts) VALUES ('rebuild')")
     op.execute("DROP INDEX IF EXISTS ix_messages_subject")
 
 
 def downgrade() -> None:
-    op.execute("DROP TRIGGER IF EXISTS messages_fts_ai")
-    op.execute("DROP TRIGGER IF EXISTS messages_fts_ad")
-    op.execute("DROP TRIGGER IF EXISTS messages_fts_au")
+    drop_triggers(op)
     op.execute("DROP TABLE IF EXISTS messages_fts")
     op.create_index("ix_messages_subject", "messages", ["subject"])

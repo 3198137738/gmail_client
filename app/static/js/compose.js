@@ -295,7 +295,7 @@
 
     // ---------------- 正文编辑器 ----------------
     if (data.body_html) {
-        editor.innerHTML = data.body_html;  // 服务端生成，内容已转义
+        editor.innerHTML = data.body_html;  // 服务端生成或已在服务端清洗（草稿、发送失败回填）
     } else if (data.body_text) {
         editor.innerText = data.body_text;
     }

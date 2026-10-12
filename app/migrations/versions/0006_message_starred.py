@@ -9,6 +9,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
+from app.migrations.fts import create_triggers
+
 revision = "0006_message_starred"
 down_revision = "0005_outbox_condstore"
 branch_labels = None
@@ -25,3 +27,5 @@ def downgrade() -> None:
     op.drop_index("ix_messages_starred_date", table_name="messages")
     with op.batch_alter_table("messages") as batch_op:
         batch_op.drop_column("is_starred")
+    # batch 操作重建了 messages 表，旧表上的全文索引触发器随之丢失
+    create_triggers(op)

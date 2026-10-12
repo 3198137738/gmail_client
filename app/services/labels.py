@@ -109,26 +109,38 @@ def set_message_labels(db: Session, account_id: int, message_id: int, names: Ite
         db.add(MessageLabel(message_id=message_id, label_id=label_id))
 
 
+# 每条 SQL 中 IN (...) 的参数个数上限：SQLite 对单条语句的变量数有限制
+# （3.32 之前 999，之后 32766），大文件夹一次查全部会直接报错
+_SQL_CHUNK = 500
+
+
+def _chunks(items: list, size: int = _SQL_CHUNK):
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
+
+
 def apply_remote_labels(
     account_id: int, folder: str, labels_by_uid: dict[int, set[str]], skip_uids: Optional[set[int]] = None
 ) -> int:
     """用服务器上的标签覆盖本地这些邮件的标签，返回改动的邮件数。"""
     skip_uids = skip_uids or set()
+    uids = sorted(u for u in labels_by_uid if u not in skip_uids)
     changed = 0
-    with session_scope() as db:
-        rows = db.execute(
-            select(Message.id, Message.uid).where(
-                Message.account_id == account_id,
-                Message.folder == folder,
-                Message.uid.in_([u for u in labels_by_uid if u not in skip_uids]),
-            )
-        ).all() if labels_by_uid else []
-        current = labels_by_message(db, [int(r.id) for r in rows])
-        for message_id, uid in rows:
-            wanted = labels_by_uid[int(uid)]
-            if {label["name"] for label in current.get(int(message_id), [])} != wanted:
-                set_message_labels(db, account_id, int(message_id), wanted)
-                changed += 1
+    for chunk in _chunks(uids):
+        with session_scope() as db:
+            rows = db.execute(
+                select(Message.id, Message.uid).where(
+                    Message.account_id == account_id,
+                    Message.folder == folder,
+                    Message.uid.in_(chunk),
+                )
+            ).all()
+            current = labels_by_message(db, [int(r.id) for r in rows])
+            for message_id, uid in rows:
+                wanted = labels_by_uid[int(uid)]
+                if {label["name"] for label in current.get(int(message_id), [])} != wanted:
+                    set_message_labels(db, account_id, int(message_id), wanted)
+                    changed += 1
     return changed
 
 
@@ -137,13 +149,14 @@ def labels_by_message(db: Session, message_ids: list[int]) -> dict[int, list[dic
     if not message_ids:
         return {}
     result: dict[int, list[dict]] = defaultdict(list)
-    for message_id, label_id, name in db.execute(
-        select(MessageLabel.message_id, Label.id, Label.name)
-        .join(Label, Label.id == MessageLabel.label_id)
-        .where(MessageLabel.message_id.in_(message_ids))
-        .order_by(Label.name)
-    ).all():
-        result[int(message_id)].append({"id": int(label_id), "name": name})
+    for chunk in _chunks(list(message_ids)):
+        for message_id, label_id, name in db.execute(
+            select(MessageLabel.message_id, Label.id, Label.name)
+            .join(Label, Label.id == MessageLabel.label_id)
+            .where(MessageLabel.message_id.in_(chunk))
+            .order_by(Label.name)
+        ).all():
+            result[int(message_id)].append({"id": int(label_id), "name": name})
     return dict(result)
 
 

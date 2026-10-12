@@ -30,9 +30,10 @@ def _format_event(event: dict) -> str:
 
 @router.get("/stream", name="events.stream")
 async def stream(request: Request):
-    subscriber = event_bus.subscribe()
-
     async def event_generator():
+        # 在生成器里订阅：客户端在响应开始前就断开时生成器不会运行，
+        # 若在外面订阅，finally 里的取消订阅永远不会执行，订阅者就泄漏了
+        subscriber = event_bus.subscribe()
         try:
             # Initial handshake so the client can flip its status to "connected".
             yield _format_event({"type": "ready"})

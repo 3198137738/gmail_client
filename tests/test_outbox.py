@@ -147,3 +147,40 @@ def test_process_all_due_kicks_accounts(_no_background_network):
         outbox.enqueue(db, acc, "INBOX", outbox.OP_DELETE, [1])
     outbox.process_all_due()
     assert ("process_account", (acc,), {}) in _no_background_network
+
+
+def test_newer_flag_op_supersedes_failed_older_one(monkeypatch):
+    """先标已读失败、再标未读成功：已读的重试不能把服务器改回已读。"""
+    acc = create_account()
+    calls = []
+
+    def flags(account_id, pairs, add_flags=None, remove_flags=None):
+        calls.append(("add" if add_flags else "remove", pairs[0][1]))
+        return {"ok": calls[-1][0] == "remove", "error": "busy", "folders": {}}
+
+    monkeypatch.setattr(outbox, "update_imap_flags", flags)
+    with session_scope() as db:
+        outbox.enqueue(db, acc, "INBOX", outbox.OP_ADD_FLAGS, [1, 2], "\Seen")
+    outbox.process_account(acc)                      # 标已读失败，退避
+    with session_scope() as db:
+        outbox.enqueue(db, acc, "INBOX", outbox.OP_REMOVE_FLAGS, [2], "\Seen")
+        outbox.enqueue(db, acc, "INBOX", outbox.OP_ADD_FLAGS, [2], "\Flagged")  # 别的标记不受影响
+    outbox.process_account(acc)
+
+    ops = _ops(acc)
+    remaining = {(op.op, op.arg): op.uids for op in ops}
+    assert remaining[(outbox.OP_ADD_FLAGS, "\Seen")] == "1"    # 只剩 1 还要标已读
+    assert (outbox.OP_REMOVE_FLAGS, "\Seen") not in remaining
+    assert remaining[(outbox.OP_ADD_FLAGS, "\Flagged")] == "2"
+
+
+def test_fully_superseded_op_is_removed():
+    acc = create_account()
+    with session_scope() as db:
+        outbox.enqueue(db, acc, "INBOX", outbox.OP_ADD_LABEL, [3], "Work")
+    with session_scope() as db:
+        outbox.enqueue(db, acc, "INBOX", outbox.OP_REMOVE_LABEL, [3], "Work")
+        outbox.enqueue(db, acc, "INBOX", outbox.OP_DELETE, [3])
+    assert [(op.op, op.uids) for op in _ops(acc)] == [
+        (outbox.OP_REMOVE_LABEL, "3"), (outbox.OP_DELETE, "3"),
+    ]

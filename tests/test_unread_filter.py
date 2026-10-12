@@ -49,3 +49,20 @@ def test_bulk_action_keeps_unread_filter(client):
     )
     assert resp.status_code == 303
     assert "unread=1" in resp.headers["location"]
+
+
+def test_mark_all_read_keeps_filter_off(client, monkeypatch):
+    from app.services import outbox
+
+    monkeypatch.setattr(outbox, "kick", lambda ids: None)
+    token = login(client)
+    acc = create_account()
+    create_message(acc, is_read=False)
+    data = {"csrf_token": token, "kind": "inbox", "account_id": acc}
+    resp = client.post("/messages/mark-all-read", data=data, follow_redirects=False)
+    assert resp.status_code == 303
+    assert "unread=" not in resp.headers["location"]   # 原本没开「仅未读」，标记后也不能开
+
+    create_message(acc, is_read=False)
+    resp = client.post("/messages/mark-all-read", data={**data, "unread": "1"}, follow_redirects=False)
+    assert "unread=1" in resp.headers["location"]

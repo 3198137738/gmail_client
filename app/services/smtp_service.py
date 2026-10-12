@@ -7,6 +7,7 @@ import smtplib
 import socket
 import ssl
 import uuid
+from dataclasses import dataclass, field
 from email.message import EmailMessage
 from email.utils import formataddr, formatdate
 from pathlib import Path
@@ -21,6 +22,26 @@ logger = logging.getLogger(__name__)
 
 class SMTPSendError(Exception):
     pass
+
+
+@dataclass
+class SendResult:
+    message_id: str
+    # 服务器拒收的收件人 → 拒收原因（邮件已发给其余收件人）
+    refused: dict[str, str] = field(default_factory=dict)
+
+
+def _describe_refused(refused) -> dict[str, str]:
+    """smtplib 返回的 {地址: (状态码, 说明)} → {地址: "状态码 说明"}。"""
+    result: dict[str, str] = {}
+    for addr, detail in (refused or {}).items():
+        try:
+            code, message = detail
+            text = message.decode("utf-8", "replace") if isinstance(message, bytes) else str(message)
+            result[str(addr)] = f"{code} {text}".strip()
+        except (TypeError, ValueError):
+            result[str(addr)] = str(detail)
+    return result
 
 
 def _split_recipients(value: Optional[str]) -> list[str]:
@@ -100,8 +121,12 @@ def send_email(
     use_ssl: bool = True,
     in_reply_to: Optional[str] = None,
     references: Optional[str] = None,
-) -> str:
-    """Send an email and return its Message-ID."""
+) -> SendResult:
+    """Send an email and return its Message-ID plus any refused recipients.
+
+    只有部分收件人被拒收时 smtplib 不抛异常，而是返回被拒的地址：邮件已经发给
+    其余收件人，不能当作失败，但必须告诉用户哪些地址没收到。
+    """
     try:
         password = decrypt_password(encrypted_password)
     except ValueError as exc:
@@ -148,14 +173,14 @@ def send_email(
                 SMTP_HOST, SMTP_SSL_PORT, timeout=SMTP_TIMEOUT_SEC, context=context
             ) as server:
                 authenticate(server)
-                server.send_message(msg, from_addr=from_email, to_addrs=recipients)
+                refused = server.send_message(msg, from_addr=from_email, to_addrs=recipients)
         else:
             with smtplib.SMTP(SMTP_HOST, SMTP_STARTTLS_PORT, timeout=SMTP_TIMEOUT_SEC) as server:
                 server.ehlo()
                 server.starttls(context=context)
                 server.ehlo()
                 authenticate(server)
-                server.send_message(msg, from_addr=from_email, to_addrs=recipients)
+                refused = server.send_message(msg, from_addr=from_email, to_addrs=recipients)
     except smtplib.SMTPAuthenticationError as exc:
         raise SMTPSendError("SMTP authentication failed") from exc
     except smtplib.SMTPRecipientsRefused as exc:
@@ -163,4 +188,7 @@ def send_email(
     except (smtplib.SMTPException, socket.timeout, socket.gaierror, OSError) as exc:
         raise SMTPSendError(f"SMTP error: {exc.__class__.__name__}") from exc
 
-    return msg["Message-ID"]
+    refused_info = _describe_refused(refused)
+    if refused_info:
+        logger.warning("SMTP refused some recipients from=%s refused=%s", from_email, sorted(refused_info))
+    return SendResult(message_id=msg["Message-ID"], refused=refused_info)

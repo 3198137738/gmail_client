@@ -67,3 +67,31 @@ def test_legacy_database_without_version_table(tmp_path, monkeypatch):
     tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"trusted_senders", "blocked_senders", "sync_state", "alembic_version"} <= tables
     conn.close()
+
+
+def test_downgrade_through_batch_migrations_keeps_fts_triggers(tmp_path):
+    """0006 / 0009 的降级会重建 messages 表，全文索引触发器必须随后重建。"""
+    from sqlalchemy import create_engine
+
+    db_path = tmp_path / "roundtrip.db"
+    db_engine = create_engine(f"sqlite:///{db_path.as_posix()}")
+    cfg = alembic_config()
+    with db_engine.connect() as connection:
+        cfg.attributes["connection"] = connection
+        command.upgrade(cfg, "head")
+        command.downgrade(cfg, "0005_outbox_condstore")
+
+    conn = sqlite3.connect(db_path)
+    triggers = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
+    assert {"messages_fts_ai", "messages_fts_ad", "messages_fts_au"} <= triggers
+    conn.execute(
+        "INSERT INTO accounts (id, email, encrypted_password, enabled, created_at, updated_at) "
+        "VALUES (1, 'a@example.com', 'x', 1, '2026-01-01', '2026-01-01')"
+    )
+    conn.execute(
+        "INSERT INTO messages (account_id, folder, folder_kind, uid, subject, is_read, has_attachments, created_at) "
+        "VALUES (1, 'INBOX', 'inbox', 1, '降级后的新邮件', 0, 0, '2026-01-01')"
+    )
+    conn.commit()
+    assert conn.execute("SELECT count(*) FROM messages_fts WHERE messages_fts MATCH '降级后'").fetchone()[0] == 1
+    conn.close()

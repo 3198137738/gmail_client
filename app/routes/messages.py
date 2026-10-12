@@ -23,6 +23,7 @@ from ..services.mail_body import (
     body_document_response,
     body_has_remote_images,
     remote_images_allowed,
+    request_origin,
 )
 from ..services.imap_client import is_account_busy
 from ..services import labels as gmail_labels
@@ -553,8 +554,8 @@ def mark_all_read(
     if search_filter is not None:
         stmt = stmt.where(search_filter)
 
-    unread = db.execute(stmt).scalars().all()
-    affected = _toggle_messages_read_state(db, unread, is_read=True)
+    targets = db.execute(stmt).scalars().all()
+    affected = _toggle_messages_read_state(db, targets, is_read=True)
 
     logger.info(
         "mark-all-read kind=%s account_id=%s affected=%s",
@@ -779,6 +780,7 @@ def _position_in_list(db: Session, message: Message, back_url: str, conversation
 
 @router.get("/{message_id}/body", response_class=HTMLResponse, name="messages.body")
 def message_body(
+    request: Request,
     message_id: int,
     images: bool = Query(False),
     db: Session = Depends(get_db),
@@ -789,7 +791,10 @@ def message_body(
     ).first()
     if row is None:
         raise HTTPException(status_code=404, detail="Message not found")
-    return body_document_response(row.body_html, row.body_text, allow_remote_images=remote_images_allowed(images))
+    return body_document_response(
+        row.body_html, row.body_text,
+        allow_remote_images=remote_images_allowed(images), origin=request_origin(request),
+    )
 
 
 @router.get("/{message_id}", response_class=HTMLResponse, name="messages.detail")

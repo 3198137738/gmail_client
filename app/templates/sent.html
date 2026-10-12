@@ -32,7 +32,7 @@
             <div class="gm-row-sender" title="{{ s.to_addr }}">收件人：{{ s.to_addr|recipients }}</div>
             <div class="gm-row-main">
                 <div class="gm-row-line">
-                    {% if s.status != 'sent' %}<span class="gm-label-chip is-failed" title="{{ s.error or '' }}">发送失败</span>{% endif %}
+                    {% if s.status == 'partial' %}<span class="gm-label-chip is-failed" title="{{ s.error or '' }}">部分收件人被拒收</span>{% elif s.status != 'sent' %}<span class="gm-label-chip is-failed" title="{{ s.error or '' }}">发送失败</span>{% endif %}
                     {% if acc and nav.accounts|length > 1 %}
                     <span class="gm-label-chip is-account" style="--label: {{ acc.color }}" title="{{ acc.email }}">{{ acc.name }}</span>
                     {% endif %}
