@@ -47,7 +47,6 @@ SECRETS_DIR = DATA_ROOT / "secrets"
 LOGS_DIR = DATA_ROOT / "logs"
 IMAGE_CACHE_DIR = DATA_ROOT / "data" / "image-cache"
 BACKUPS_DIR = DATA_ROOT / "backups"
-TEMPLATES_DIR = BASE_DIR / "app" / "templates"
 STATIC_DIR = BASE_DIR / "app" / "static"
 
 for _d in (DATA_DIR, ATTACHMENTS_DIR, SECRETS_DIR, LOGS_DIR, BACKUPS_DIR, IMAGE_CACHE_DIR):

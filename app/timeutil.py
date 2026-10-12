@@ -12,3 +12,16 @@ from datetime import datetime, timezone
 def utcnow() -> datetime:
     """当前 UTC 时间（naive，与数据库中保存的格式一致）。"""
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def utc_to_local(value: datetime | None) -> datetime | None:
+    """数据库中 sent_at/created_at 等字段为 UTC（无时区），显示前转换为服务器本地时间。
+
+    邮件的 ``date`` 字段已是本地时间，不需要转换。
+    """
+    if value is None:
+        return None
+    try:
+        return value.replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
+    except Exception:
+        return value

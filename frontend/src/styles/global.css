@@ -1,0 +1,158 @@
+/* 全局样式：Gmail（Material 3）浅色主题的变量和几个通用类。组件自己的样式写在各 .vue 文件里。 */
+:root {
+    --gm-font: "Google Sans", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", Arial, sans-serif;
+    --gm-font-text: Roboto, "Google Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", Arial, sans-serif;
+
+    --gm-bg: #f6f8fc;
+    --gm-surface: #ffffff;
+    --gm-text: #1f1f1f;
+    --gm-text-2: #444746;
+    --gm-text-3: #5e5e5e;
+    --gm-text-4: #747775;
+    --gm-outline-variant: #c4c7c5;
+    --gm-divider: rgba(100, 121, 143, .122);
+    --gm-primary: #0b57d0;
+    --gm-compose: #c2e7ff;
+    --gm-nav-active: #d3e3fd;
+    --gm-search: #eaf1fb;
+    --gm-row-read: #f2f6fc;
+    --gm-row-selected: #c2dbff;
+    --gm-hover: rgba(68, 71, 70, .08);
+    --gm-error: #b3261e;
+    --gm-error-bg: #fce8e6;
+    --gm-success: #146c2e;
+    --gm-star: #e8a400;
+    --gm-shadow-1: 0 1px 2px 0 rgba(60, 64, 67, .3), 0 1px 3px 1px rgba(60, 64, 67, .15);
+    --gm-shadow-2: 0 1px 2px 0 rgba(60, 64, 67, .3), 0 2px 6px 2px rgba(60, 64, 67, .15);
+    --gm-shadow-3: 0 4px 8px 3px rgba(60, 64, 67, .15), 0 1px 3px rgba(60, 64, 67, .3);
+    --gm-header-h: 64px;
+    --gm-nav-w: 256px;
+    --gm-nav-w-collapsed: 72px;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--gm-bg);
+    color: var(--gm-text);
+    font-family: var(--gm-font-text);
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+}
+
+#app { height: 100%; }
+
+a { color: var(--gm-primary); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+code {
+    font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+    font-size: .92em;
+    background: #f1f3f4;
+    border-radius: 4px;
+    padding: 1px 4px;
+}
+
+/* 内容区的白色圆角卡片 */
+.gm-card {
+    background: var(--gm-surface);
+    border-radius: 16px;
+    min-height: 0;
+}
+
+/* 列表 / 详情顶部的工具栏 */
+.gm-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 48px;
+    padding: 4px 8px 4px 12px;
+    flex-wrap: wrap;
+}
+.gm-toolbar-start { display: flex; align-items: center; gap: 2px; flex: 1 1 auto; min-width: 0; flex-wrap: wrap; }
+.gm-toolbar-end { display: flex; align-items: center; gap: 2px; margin-left: auto; }
+.gm-toolbar-title { font: 500 18px/1.4 var(--gm-font); padding: 0 8px; }
+.gm-pager-info { color: var(--gm-text-2); font-size: 12px; padding: 0 8px; white-space: nowrap; }
+.gm-toolbar-sep { width: 1px; height: 20px; background: var(--gm-outline-variant); margin: 0 6px; }
+
+/* 文件夹说明条 */
+.gm-banner {
+    margin: 0 16px 8px;
+    padding: 10px 16px;
+    border-radius: 8px;
+    background: var(--gm-search);
+    color: var(--gm-text-2);
+    font-size: 13px;
+}
+
+/* 空列表 */
+.gm-empty { padding: 72px 24px; text-align: center; color: var(--gm-text-2); }
+.gm-empty-title { font: 400 20px/1.4 var(--gm-font); color: var(--gm-text); margin-bottom: 8px; }
+
+/* 头像圆点 */
+.gm-avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    color: #fff;
+    font: 500 14px/1 var(--gm-font);
+    user-select: none;
+}
+.gm-avatar.is-lg { width: 40px; height: 40px; font-size: 18px; }
+
+/* 标签小方块（列表、详情中的 Gmail 标签 / 文件夹 / 账号） */
+.gm-chip {
+    display: inline-flex;
+    align-items: center;
+    max-width: 160px;
+    height: 20px;
+    padding: 0 6px;
+    margin-right: 6px;
+    border-radius: 4px;
+    background: #ddd;
+    color: var(--gm-text-2);
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: middle;
+    flex: none;
+}
+.gm-chip.is-label { background: #e1e3e1; color: var(--gm-text); cursor: pointer; }
+.gm-chip.is-label:hover { background: #d3d6d3; text-decoration: none; }
+.gm-chip.is-account { background: color-mix(in srgb, var(--label, #5f6368) 16%, #fff); color: color-mix(in srgb, var(--label, #5f6368) 80%, #000); }
+.gm-chip.is-failed { background: var(--gm-error-bg); color: var(--gm-error); }
+.gm-chip.is-junk { background: var(--gm-error-bg); color: var(--gm-error); }
+
+/* 设置页 */
+.gm-settings { padding: 8px 24px 32px; }
+.gm-settings-row {
+    display: grid;
+    grid-template-columns: minmax(180px, 240px) 1fr;
+    gap: 16px 32px;
+    padding: 20px 0;
+    border-bottom: 1px solid var(--gm-divider);
+}
+.gm-settings-label { font-weight: 500; color: var(--gm-text); }
+.gm-settings-hint { font-weight: 400; color: var(--gm-text-3); font-size: 13px; line-height: 1.5; margin-top: 4px; }
+.gm-settings-content { min-width: 0; }
+.gm-settings-content p { margin: 0 0 8px; line-height: 1.6; }
+.gm-settings-empty { color: var(--gm-text-3); padding: 8px 0; }
+
+@media (max-width: 768px) {
+    .gm-settings { padding: 8px 16px 24px; }
+    .gm-settings-row { grid-template-columns: 1fr; gap: 12px; }
+    .gm-toolbar { padding-left: 4px; }
+}
+
+@media print {
+    .no-print, .gm-header, .gm-nav, .gm-compose, .gm-snackbar { display: none !important; }
+    html, body, #app { height: auto; background: #fff; }
+}

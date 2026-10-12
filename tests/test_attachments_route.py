@@ -5,13 +5,19 @@ from tests.helpers import login
 
 
 def test_path_traversal_rejected(client):
+    from app.config import SECRETS_DIR
+
     login(client)
+    SECRETS_DIR.mkdir(parents=True, exist_ok=True)
+    (SECRETS_DIR / "probe.secret").write_text("TOP-SECRET-KEY")
     for path in (
-        "/attachments/1/inbox/1/files/..%2F..%2F..%2F..%2Fsecrets%2Ffernet.key",
-        "/attachments/1/inbox/1/inline/..%2F..%2F..%2F..%2Fsecrets%2Ffernet.key",
+        "/attachments/1/inbox/1/files/..%2F..%2F..%2F..%2Fsecrets%2Fprobe.secret",
+        "/attachments/1/inbox/1/inline/..%2F..%2F..%2F..%2Fsecrets%2Fprobe.secret",
         "/attachments/1/evil/1/files/a.txt",
     ):
         resp = client.get(path)
+        # 解码后的 ../ 不匹配附件路由时也返回 404，不会落到前端页面
+        assert "TOP-SECRET-KEY" not in resp.text, path
         assert resp.status_code in (400, 404), path
 
 

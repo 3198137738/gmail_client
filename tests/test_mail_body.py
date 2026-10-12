@@ -46,8 +46,6 @@ def test_remote_images_load_automatically_by_default(client):
     assert "/mail-image?u=" in resp.text and "t.example" not in resp.text
     assert "script-src" not in csp and "default-src 'none'" in csp  # 脚本仍然禁止
 
-    detail = client.get(f"/messages/{mid}").text
-    assert "显示图片" not in detail  # 不再显示拦截提示
 
 
 def test_remote_images_load_directly_when_proxy_disabled(client, monkeypatch):
@@ -85,20 +83,40 @@ def test_body_document_blocks_remote_images_when_disabled(client, monkeypatch):
     assert "/mail-image?u=" in resp.text
 
 
-def test_detail_page_uses_sandboxed_iframe(client, monkeypatch):
+def test_detail_api_does_not_embed_body(client, monkeypatch):
+    """详情接口不返回正文 HTML：正文只在 sandbox iframe 中通过 /messages/{id}/body 加载。"""
     import app.services.mail_body as mail_body
 
     monkeypatch.setattr(mail_body, "MAIL_LOAD_REMOTE_IMAGES", False)
     login(client)
     acc = create_account()
-    mid = create_message(acc, body_html='<p>secret-body</p><img src="https://t.example/p.gif">')
+    mid = create_message(acc, body_html='<p>secret-body</p><img src="https://t.example/p.gif">', body_text="")
 
-    resp = client.get(f"/messages/{mid}")
+    resp = client.get(f"/api/messages/{mid}")
     assert resp.status_code == 200
-    assert "secret-body" not in resp.text  # 正文不再直接插入主页面
-    assert 'sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"' in resp.text
-    assert "显示图片" in resp.text
-    assert "content-security-policy" in resp.headers
+    assert "secret-body" not in resp.text
+    assert resp.json()["thread"][0]["remote_images"] is True   # 前端据此显示「显示图片」
+
+
+def test_no_show_images_banner_when_remote_images_load_by_default(client, monkeypatch):
+    """默认就加载外部图片时，图片并没有被拦，不应提示「外部图片未显示」。"""
+    import app.services.mail_body as mail_body
+
+    monkeypatch.setattr(mail_body, "MAIL_LOAD_REMOTE_IMAGES", True)
+    login(client)
+    acc = create_account()
+    mid = create_message(acc, body_html='<p>x</p><img src="https://t.example/p.gif">', body_text="")
+
+    assert client.get(f"/api/messages/{mid}").json()["thread"][0]["remote_images"] is False
+
+
+def test_body_frame_component_is_sandboxed():
+    """前端渲染正文的 iframe 必须带 sandbox（不允许脚本）。"""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parent.parent / "frontend" / "src" / "components" / "MailBodyFrame.vue").read_text(encoding="utf-8")
+    assert 'sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"' in src
+    assert "allow-scripts" not in src
 
 
 def test_sanitized_body_is_cached(monkeypatch):
@@ -135,6 +153,8 @@ def test_pages_cannot_be_loaded_as_images(client):
     login(client)
     acc = create_account()
     mid = create_message(acc, is_read=False)
+    resp = client.get(f"/api/messages/{mid}", headers={"Sec-Fetch-Dest": "image"}, follow_redirects=False)
+    assert resp.status_code == 403
     resp = client.get(f"/messages/{mid}", headers={"Sec-Fetch-Dest": "image"}, follow_redirects=False)
     assert resp.status_code == 403
     from app.database import session_scope
@@ -144,6 +164,7 @@ def test_pages_cannot_be_loaded_as_images(client):
         assert db.get(Message, mid).is_read is False
 
     # 正常打开（导航）以及真正的图片路径不受影响
-    assert client.get(f"/messages/{mid}", headers={"Sec-Fetch-Dest": "document"}).status_code == 200
-    assert client.get("/static/img/logo.svg", headers={"Sec-Fetch-Dest": "image"}).status_code == 200
+    assert client.get(f"/api/messages/{mid}", headers={"Sec-Fetch-Dest": "empty"}).status_code == 200
+    # /static/ 下的路径不被拦截（文件不存在时是 404 而不是 403）
+    assert client.get("/static/dist/img/none.svg", headers={"Sec-Fetch-Dest": "image"}).status_code == 404
     assert client.get("/attachments/1/inbox/1/inline/x.png", headers={"Sec-Fetch-Dest": "image"}).status_code == 404

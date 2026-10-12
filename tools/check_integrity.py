@@ -11,8 +11,9 @@ import re
 import sys
 from pathlib import Path
 
-SCAN_SUFFIXES = {".py", ".sh", ".js", ".html", ".mako", ".txt", ".lock", ".yml", ".yaml", ".cfg", ".ini", ".toml"}
-SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", "data", "attachments", "backups", "logs", "secrets", "vendor", ".pytest_cache"}
+SCAN_SUFFIXES = {".py", ".sh", ".js", ".mjs", ".vue", ".css", ".html", ".mako", ".txt", ".lock", ".yml", ".yaml", ".cfg", ".ini", ".toml"}
+# dist：前端构建产物（压缩后的代码，由 frontend/ 源码重新生成，不入库）
+SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", "dist", "data", "attachments", "backups", "logs", "secrets", "vendor", ".pytest_cache"}
 
 # 特征串拆开书写，避免本文件匹配到自己
 SIGNATURES = [

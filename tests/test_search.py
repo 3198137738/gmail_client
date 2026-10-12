@@ -68,6 +68,8 @@ def test_list_page_search(client):
     login(client)
     acc = create_account()
     create_message(acc, subject="独一无二的主题ABC")
-    resp = client.get("/messages/", params={"q": "一无二的", "account_id": acc})
+    resp = client.get("/api/messages", params={"q": "一无二的", "account_id": acc})
     assert resp.status_code == 200
-    assert "独一无二的主题ABC" in resp.text
+    data = resp.json()
+    assert [m["subject"] for m in data["items"]] == ["独一无二的主题ABC"]
+    assert data["q"] == "一无二的"

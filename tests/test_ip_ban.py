@@ -9,7 +9,7 @@ import app.auth as web_auth
 import app.routes.auth as auth_routes
 from app.database import session_scope
 from app.models import AuditLog, LoginThrottle
-from tests.helpers import csrf_token, login
+from tests.helpers import api_post, csrf_token, login
 
 ADMIN_IP = "198.51.100.10"
 BAD_IP = "203.0.113.5"
@@ -39,64 +39,67 @@ def _last_event() -> tuple[str, str | None]:
         return row.event, row.detail
 
 
+def _logged_in(c) -> bool:
+    return c.get("/api/messages").status_code == 200
+
+
 def test_ban_blocks_all_requests_and_revokes_sessions(app, fake_ips):
     with _client(app, ADMIN_IP) as admin, _client(app, BAD_IP) as bad:
         token = login(admin)
         login(bad)
-        assert bad.get("/messages/", follow_redirects=False).status_code == 200
+        assert _logged_in(bad)
 
-        resp = admin.post("/accounts/security/ip-ban", data={"ip": BAD_IP, "csrf_token": token},
-                          follow_redirects=False)
-        assert resp.status_code == 303
+        resp = api_post(admin, "/api/security/ip-ban", token, {"ip": BAD_IP})
+        assert resp.status_code == 200 and "已永久拉黑" in resp.json()["message"]
         assert _last_event() == ("ip_banned", BAD_IP)
         assert web_auth.is_ip_banned(BAD_IP)
 
-        # 被拉黑的 IP 连登录页也打不开，健康检查不受影响
+        # 被拉黑的 IP 什么都打不开（接口、页面、登录），健康检查不受影响
+        assert bad.get("/api/messages").status_code == 403
         assert bad.get("/messages/", follow_redirects=False).status_code == 403
         assert bad.get("/login").status_code == 403
+        assert bad.get("/api/session").status_code == 403
         assert bad.get("/healthz").status_code == 200
 
-        page = admin.get("/accounts/security").text
-        assert "IP 黑名单" in page and BAD_IP in page and "已永久拉黑" in page
+        banned = admin.get("/api/security").json()["banned_ips"]
+        assert any(b["ip_address"] == BAD_IP and not b["from_env"] for b in banned)
 
         # 再拉黑一次提示已在黑名单中
-        page = admin.post("/accounts/security/ip-ban", data={"ip": BAD_IP, "csrf_token": token}).text
-        assert "已在黑名单中" in page
+        resp = api_post(admin, "/api/security/ip-ban", token, {"ip": BAD_IP})
+        assert resp.status_code == 400 and "已在黑名单中" in resp.json()["detail"]
 
-        resp = admin.post("/accounts/security/ip-unban", data={"ip": BAD_IP, "csrf_token": token},
-                          follow_redirects=False)
-        assert resp.status_code == 303
+        resp = api_post(admin, "/api/security/ip-unban", token, {"ip": BAD_IP})
+        assert resp.status_code == 200
         assert _last_event() == ("ip_unbanned", BAD_IP)
         assert not web_auth.is_ip_banned(BAD_IP)
-        # 解封后能访问登录页，但之前的会话已被撤销，需要重新登录
-        assert bad.get("/login").status_code == 200
-        assert bad.get("/messages/", follow_redirects=False).status_code == 303
+        # 解封后能访问登录接口，但之前的会话已被撤销，需要重新登录
+        assert bad.get("/api/session").status_code == 200
+        assert not _logged_in(bad)
 
 
 def test_cannot_ban_own_or_invalid_ip(app, fake_ips):
     with _client(app, ADMIN_IP) as admin:
         token = login(admin)
-        page = admin.post("/accounts/security/ip-ban", data={"ip": ADMIN_IP, "csrf_token": token}).text
-        assert "不能拉黑自己当前的 IP" in page
-        page = admin.post("/accounts/security/ip-ban", data={"ip": "not-an-ip", "csrf_token": token}).text
-        assert "IP 地址格式不正确" in page
+        resp = api_post(admin, "/api/security/ip-ban", token, {"ip": ADMIN_IP})
+        assert resp.status_code == 400 and "不能拉黑自己当前的 IP" in resp.json()["detail"]
+        resp = api_post(admin, "/api/security/ip-ban", token, {"ip": "not-an-ip"})
+        assert resp.status_code == 400 and "IP 地址格式不正确" in resp.json()["detail"]
         assert not web_auth.is_ip_banned(ADMIN_IP)
-        assert admin.get("/messages/", follow_redirects=False).status_code == 200
+        assert _logged_in(admin)
 
 
-def test_ban_from_audit_log_returns_to_same_page(app, fake_ips):
+def test_ban_from_audit_log(app, fake_ips):
     with _client(app, ADMIN_IP) as admin, _client(app, BAD_IP) as bad:
         token = login(admin)
-        bad.post("/login", data={"password": "wrong", "csrf_token": csrf_token(bad)})
-        page = admin.get("/accounts/security/audit").text
-        assert f'name="ip" value="{BAD_IP}"' in page
+        api_post(bad, "/api/login", csrf_token(bad), {"password": "wrong"})
+        rows = admin.get("/api/security/audit").json()["rows"]
+        row = next(r for r in rows if r["ip_address"] == BAD_IP)
+        assert row["ip_banned"] is False
 
-        resp = admin.post("/accounts/security/ip-ban",
-                          data={"ip": BAD_IP, "audit_page": "1", "csrf_token": token},
-                          follow_redirects=False)
-        assert resp.headers["location"].endswith("/accounts/security/audit?page=1")
-        page = admin.get("/accounts/security/audit").text
-        assert "已永久拉黑" in page and "已拉黑" in page
+        assert api_post(admin, "/api/security/ip-ban", token, {"ip": BAD_IP}).status_code == 200
+        data = admin.get("/api/security/audit").json()
+        assert next(r for r in data["rows"] if r["ip_address"] == BAD_IP)["ip_banned"] is True
+        assert data["current_ip"] == ADMIN_IP
 
 
 def test_auto_permanent_block_also_denies_all_requests(app, fake_ips, monkeypatch):

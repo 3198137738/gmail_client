@@ -1,74 +1,61 @@
-"""CSP：禁止内联脚本，页面中不能出现内联 <script> 或 on* 事件属性。"""
+"""CSP：禁止内联脚本、不信任外部来源；接口和前端页面都带上安全响应头。"""
 from __future__ import annotations
-
-import re
 
 import pytest
 
 from tests.helpers import create_account, create_message, login
 
-# 允许外部脚本（src=）和 JSON 数据块（不会执行）
-INLINE_SCRIPT_RE = re.compile(r"<script(?![^>]*(?:\ssrc=|type=\"application/json\"))[^>]*>", re.I)
-INLINE_HANDLER_RE = re.compile(r"<[^>]+\son[a-z]+\s*=", re.I)
+
+@pytest.fixture()
+def spa_index(tmp_path, monkeypatch):
+    """测试环境可能没有构建前端：用一个假的 index.html 代替。"""
+    import app.main as main
+
+    index = tmp_path / "index.html"
+    index.write_text('<!doctype html><div id="app"></div>', encoding="utf-8")
+    monkeypatch.setattr(main, "SPA_INDEX", index)
+    return index
 
 
-def test_csp_trusts_no_external_origins(client):
+def _directive(csp: str, name: str) -> str:
+    return next(p for p in csp.split(";") if p.strip().startswith(name))
+
+
+def test_csp_trusts_no_external_origins(client, spa_index):
     csp = client.get("/login").headers["content-security-policy"]
-    for directive in ("script-src", "style-src", "font-src"):
-        part = next(p for p in csp.split(";") if p.strip().startswith(directive))
-        assert "http" not in part, part
+    for directive in ("script-src", "style-src", "font-src", "connect-src"):
+        assert "http" not in _directive(csp, directive)
 
 
-@pytest.mark.parametrize("path", ["/login", "/messages/"])
-def test_pages_load_no_external_scripts_or_styles(client, path):
+def test_csp_forbids_inline_scripts(client, spa_index):
+    csp = client.get("/login").headers["content-security-policy"]
+    assert "'unsafe-inline'" not in _directive(csp, "script-src")
+
+
+@pytest.mark.parametrize("path", ["/login", "/messages/", "/accounts/", "/compose/sent", "/messages/999999"])
+def test_spa_pages_have_security_headers(client, spa_index, path):
     if path != "/login":
         login(client)
-    html = client.get(path).text
-    # url_for 生成的是本站绝对地址（测试中为 testserver），其他主机一律不允许
-    hosts = re.findall(r"<(?:script|link)[^>]+(?:src|href)=\"https?://([^/\"]+)", html)
-    assert hosts and set(hosts) == {"testserver"}, hosts
+    resp = client.get(path)
+    assert resp.status_code == 200
+    assert "script-src 'self'" in resp.headers["content-security-policy"]
+    assert resp.headers["x-frame-options"] == "SAMEORIGIN"
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    # index.html 不能缓存：更新后要拿到新的脚本文件名
+    assert resp.headers["cache-control"] == "no-cache"
 
 
-def test_vendor_files_match_sri():
-    """本地 Bootstrap 文件必须与模板里的 integrity 一致（被篡改时测试失败）。"""
-    import base64
-    import hashlib
-    from pathlib import Path
-
-    root = Path(__file__).resolve().parent.parent / "app"
-    base = (root / "templates" / "base.html").read_text(encoding="utf-8")
-    pairs = re.findall(r"path='(vendor/[^']+)'\) }}\"\s+integrity=\"sha384-([^\"]+)\"", base)
-    assert len(pairs) == 2
-    for rel, expected in pairs:
-        digest = hashlib.sha384((root / "static" / rel).read_bytes()).digest()
-        assert base64.b64encode(digest).decode() == expected, rel
-
-
-def test_csp_forbids_inline_scripts(client):
-    resp = client.get("/login")
-    csp = resp.headers["content-security-policy"]
-    script_src = next(part for part in csp.split(";") if "script-src" in part)
-    assert "'unsafe-inline'" not in script_src
-
-
-@pytest.mark.parametrize(
-    "path",
-    ["/login", "/messages/", "/messages/?kind=junk", "/accounts/", "/compose/",
-     "/compose/?embed=1", "/compose/sent", "/messages/blocked-senders", "/messages/999999"],
-)
-def test_pages_have_no_inline_scripts(client, path):
-    if path != "/login":
-        login(client)
-    create_message(create_account(), subject="csp")
-    html = client.get(path).text
-    assert not INLINE_SCRIPT_RE.search(html), INLINE_SCRIPT_RE.search(html)
-    assert not INLINE_HANDLER_RE.search(html), INLINE_HANDLER_RE.search(html)
-
-
-def test_message_detail_has_no_inline_scripts(client):
+def test_api_responses_have_csp(client):
     login(client)
-    mid = create_message(create_account(), from_addr="O'Brien <o'brien@example.com>")
-    html = client.get(f"/messages/{mid}").text
-    assert not INLINE_SCRIPT_RE.search(html)
-    assert not INLINE_HANDLER_RE.search(html)
-    assert "data-confirm=" in html
+    resp = client.get("/api/messages")
+    assert resp.status_code == 200
+    assert "script-src 'self'" in resp.headers["content-security-policy"]
+
+
+def test_message_body_has_own_strict_csp(client):
+    login(client)
+    mid = create_message(create_account(), body_html="<p>hi</p>")
+    csp = client.get(f"/messages/{mid}/body").headers["content-security-policy"]
+    # 正文文档自带更严格的 CSP（不允许任何脚本），不会被页面 CSP 覆盖
+    assert "default-src 'none'" in csp
+    assert "script-src 'self'" not in csp

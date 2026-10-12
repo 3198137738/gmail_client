@@ -44,23 +44,21 @@ def create_message(account_id: int, **fields) -> int:
         return int(msg.id)
 
 
-def csrf_token(client, path: str = "/login") -> str:
-    """打开一个页面拿到表单里的 CSRF token。"""
-    import re
-
-    html = client.get(path).text
-    match = re.search(r'name="csrf_token" value="([^"]+)"', html)
-    assert match, f"no csrf token on {path}"
-    return match.group(1)
+def csrf_token(client) -> str:
+    """当前会话的 CSRF token（前端启动时同样从 /api/session 取得）。"""
+    resp = client.get("/api/session")
+    assert resp.status_code == 200, resp.text
+    return resp.json()["csrf_token"]
 
 
 def login(client, password: str = "test-password") -> str:
-    """登录并返回登录后会话的 CSRF token。"""
-    token = csrf_token(client, "/login")
-    resp = client.post(
-        "/login",
-        data={"password": password, "next": "/messages/", "csrf_token": token},
-        follow_redirects=False,
-    )
-    assert resp.status_code == 303, resp.text
-    return csrf_token(client, "/messages/")
+    """登录并返回登录后会话的 CSRF token（登录会重建会话，token 随之改变）。"""
+    token = csrf_token(client)
+    resp = client.post("/api/login", json={"password": password}, headers={"X-CSRF-Token": token})
+    assert resp.status_code == 200, resp.text
+    return resp.json()["csrf_token"]
+
+
+def api_post(client, path: str, token: str, json: dict | None = None, **kwargs):
+    """带 CSRF 请求头的 JSON 写请求。"""
+    return client.post(path, json=json if json is not None else {}, headers={"X-CSRF-Token": token}, **kwargs)

@@ -130,7 +130,8 @@ def test_security_page_shows_backup_status(client, monkeypatch):
         "encrypted": True, "size": 3 * 1048576, "uploads": {"webdav": None, "telegram": "too big"},
     })
     login(client)
-    page = client.get("/accounts/security").text
-    assert "gmail-client-x.tar.gz.enc" in page and "3.0 MB" in page
-    assert "已上传" in page and "上传失败" in page
-    assert "未加密" in page   # 测试环境没有配置公钥
+    data = client.get("/api/security").json()["backup"]
+    status = data["status"]
+    assert status["file"] == "gmail-client-x.tar.gz.enc" and status["ok"] is True
+    assert status["uploads"] == {"webdav": None, "telegram": "too big"}
+    assert data["encrypted"] is False   # 测试环境没有配置公钥

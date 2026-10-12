@@ -16,3 +16,7 @@ logs/
 .vscode/
 .pytest_cache/
 backups/
+
+# 前端依赖与构建产物（npm ci && npm run build 生成）
+node_modules/
+app/static/dist/

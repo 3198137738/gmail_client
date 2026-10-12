@@ -1,21 +1,16 @@
-"""发件人管理：屏蔽 / 解除屏蔽、信任（这不是垃圾邮件）/ 取消信任。
-
-URL 仍在 /messages 下。注意本路由器必须先于 messages 路由器注册，
-否则 GET /messages/blocked-senders 会被 /messages/{message_id} 抢先匹配。
-"""
+"""发件人管理接口：屏蔽 / 解除屏蔽 / 永久删除、信任（这不是垃圾邮件）/ 取消信任。"""
 from __future__ import annotations
 
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from ..auth import is_safe_redirect
+from .. import serializers as ser
 from ..database import get_db
-from ..models import Account, BlockedSender, Message, TrustedSender
+from ..models import BlockedSender, Message, TrustedSender
 from ..services import audit
 from ..services.background import submit_bg
 from ..services.imap_purge import describe_purge, purge_sender_messages
@@ -24,60 +19,30 @@ from ..services.message_actions import (
     delete_local_messages as _delete_local_messages,
     mark_not_spam,
 )
-from ..templating import templates
 from ..timeutil import utcnow
-from .messages import (
-    DEFAULT_PAGE_SIZE,
-    _coerce_int,
-    _normalize_sender_email,
-    _redirect_to_list,
-)
+from .messages import _coerce_int, _normalize_sender_email
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/messages", tags=["senders"])
-
-# 屏蔽页的操作结果提示放会话里（不走 URL 参数，避免被构造成钓鱼链接）
-_BLOCKED_FLASH_KEY = "blocked_flash"
+router = APIRouter(prefix="/api", tags=["senders"])
 
 
-@router.post("/{message_id}/not-spam", name="messages.not_spam")
-def not_spam(
-    request: Request,
-    message_id: int,
-    next: Optional[str] = Form(None),
-    db: Session = Depends(get_db),
-):
+@router.post("/messages/{message_id}/not-spam", name="messages.not_spam")
+def not_spam(message_id: int, db: Session = Depends(get_db)):
     """「这不是垃圾邮件」：信任发件人，并把其垃圾邮件移回收件箱。"""
-    message = db.get(Message, message_id)
-    if message is None:
+    if db.get(Message, message_id) is None:
         raise HTTPException(status_code=404, detail="Message not found")
-    account_id = int(message.account_id)
     db.close()  # 释放连接；后续操作在 mark_not_spam 内自行开启会话
 
     ok, info = mark_not_spam(message_id)
     if not ok:
         raise HTTPException(status_code=502, detail=info)
-    if is_safe_redirect(next):
-        return RedirectResponse(url=next, status_code=303)
-    return _redirect_to_list(
-        request,
-        kind="junk",
-        account_id=account_id,
-        q="",
-        page=1,
-        page_size=DEFAULT_PAGE_SIZE,
-    )
+    return {"ok": True, "message": info}
 
 
-@router.post("/{message_id}/block-sender", name="messages.block_sender")
-def block_sender(
-    request: Request,
-    message_id: int,
-    next: Optional[str] = Form(None),
-    db: Session = Depends(get_db),
-):
-    """Permanently block the sender for this account and hide existing mail."""
+@router.post("/messages/{message_id}/block-sender", name="messages.block_sender")
+def block_sender(message_id: int, db: Session = Depends(get_db)):
+    """永久屏蔽该账号下的这个发件人，并隐藏已有的同发件人邮件。"""
     message = db.get(Message, message_id)
     if message is None:
         raise HTTPException(status_code=404, detail="Message not found")
@@ -85,7 +50,6 @@ def block_sender(
     sender_email = _normalize_sender_email(message.from_addr)
     if not sender_email:
         raise HTTPException(status_code=400, detail="Cannot parse sender email")
-    folder_kind = str(message.folder_kind or "inbox")
 
     exists = db.execute(
         select(BlockedSender.id).where(
@@ -94,12 +58,7 @@ def block_sender(
         )
     ).first()
     if exists is None:
-        db.add(
-            BlockedSender(
-                account_id=int(message.account_id),
-                sender_email=sender_email,
-            )
-        )
+        db.add(BlockedSender(account_id=int(message.account_id), sender_email=sender_email))
         db.flush()
 
     pattern = f"%{sender_email}%"
@@ -114,77 +73,47 @@ def block_sender(
     to_delete = [m for m in matched if _normalize_sender_email(m.from_addr) == sender_email]
     deleted = _delete_local_messages(db, to_delete)
     logger.info(
-        "block-sender account_id=%s sender=%s hidden=%s",
-        message.account_id,
-        sender_email,
-        deleted,
+        "block-sender account_id=%s sender=%s hidden=%s", message.account_id, sender_email, deleted,
     )
-
-    if is_safe_redirect(next):
-        return RedirectResponse(url=next, status_code=303)
-    # 未带 next 时回到原邮件所在文件夹，而不是固定回收件箱
-    return _redirect_to_list(
-        request,
-        kind=folder_kind,
-        account_id=int(message.account_id),
-        q="",
-        page=1,
-        page_size=DEFAULT_PAGE_SIZE,
-    )
+    return {"ok": True, "sender_email": sender_email, "hidden": deleted}
 
 
-@router.get("/blocked-senders", response_class=HTMLResponse, name="messages.blocked_senders")
-def blocked_senders(
-    request: Request,
+def _sender_row(row) -> dict:
+    account = row.account
+    return {
+        "id": int(row.id),
+        "account_id": int(row.account_id),
+        "account_name": (account.display_name or account.email) if account else f"#{row.account_id}",
+        "sender_email": row.sender_email,
+        "created_at": ser.iso_utc(row.created_at),
+    }
+
+
+@router.get("/senders", name="senders.list")
+def senders(
     account_id: Optional[str] = Query(None),
     q: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
     account_id_int = _coerce_int(account_id)
     q_clean = (q or "").strip().lower()
-    accounts = db.execute(select(Account).order_by(Account.email)).scalars().all()
 
-    stmt = select(BlockedSender).options(selectinload(BlockedSender.account))
-    if account_id_int:
-        stmt = stmt.where(BlockedSender.account_id == account_id_int)
-    if q_clean:
-        stmt = stmt.where(BlockedSender.sender_email.ilike(f"%{q_clean}%"))
-    blocked_rows = db.execute(
-        stmt.order_by(BlockedSender.created_at.desc(), BlockedSender.id.desc())
-    ).scalars().all()
+    def rows(model):
+        stmt = select(model).options(selectinload(model.account))
+        if account_id_int:
+            stmt = stmt.where(model.account_id == account_id_int)
+        if q_clean:
+            stmt = stmt.where(model.sender_email.ilike(f"%{q_clean}%"))
+        return db.execute(stmt.order_by(model.created_at.desc(), model.id.desc())).scalars().all()
 
-    trusted_stmt = select(TrustedSender).options(selectinload(TrustedSender.account))
-    if account_id_int:
-        trusted_stmt = trusted_stmt.where(TrustedSender.account_id == account_id_int)
-    if q_clean:
-        trusted_stmt = trusted_stmt.where(TrustedSender.sender_email.ilike(f"%{q_clean}%"))
-    trusted_rows = db.execute(
-        trusted_stmt.order_by(TrustedSender.created_at.desc(), TrustedSender.id.desc())
-    ).scalars().all()
-
-    flash = request.session.pop(_BLOCKED_FLASH_KEY, None)
-    return templates.TemplateResponse(
-        request,
-        "blocked_senders.html",
-        {
-            "accounts": accounts,
-            "blocked_rows": blocked_rows,
-            "trusted_rows": trusted_rows,
-            "current_account_id": account_id_int,
-            "q": q,
-            "flash": flash[0] if flash else None,
-            "flash_level": flash[1] if flash else "success",
-        },
-    )
+    return {
+        "blocked": [_sender_row(r) for r in rows(BlockedSender)],
+        "trusted": [_sender_row(r) for r in rows(TrustedSender)],
+    }
 
 
-@router.post("/blocked-senders/{blocked_id}/purge", name="messages.purge_blocked_sender")
-def purge_blocked_sender(
-    request: Request,
-    blocked_id: int,
-    next: Optional[str] = Form(None),
-    db: Session = Depends(get_db),
-):
+@router.post("/senders/blocked/{blocked_id}/purge", name="senders.purge_blocked")
+def purge_blocked_sender(request: Request, blocked_id: int, db: Session = Depends(get_db)):
     """「永久删除」：屏蔽保持不变，把该发件人在 Gmail 上的全部邮件彻底清除。"""
     row = db.execute(
         select(BlockedSender).options(selectinload(BlockedSender.account)).where(BlockedSender.id == blocked_id)
@@ -206,24 +135,12 @@ def purge_blocked_sender(
         account_id, sender_email, result["trashed"], result["purged"], result["local"],
         result["ok"], result["error"],
     )
-    level = "success" if result["ok"] else "danger"
-    request.session[_BLOCKED_FLASH_KEY] = [f"{sender_email}：{summary}", level]
-    if is_safe_redirect(next):
-        return RedirectResponse(url=next, status_code=303)
-    return RedirectResponse(
-        url=request.url_for("messages.blocked_senders").include_query_params(account_id=account_id),
-        status_code=303,
-    )
+    return {"ok": bool(result["ok"]), "message": f"{sender_email}：{summary}"}
 
 
-@router.post("/blocked-senders/{blocked_id}/remove", name="messages.unblock_sender")
-def unblock_sender(
-    request: Request,
-    blocked_id: int,
-    next: Optional[str] = Form(None),
-    db: Session = Depends(get_db),
-):
-    """Remove one blocked sender row from the permanent block list."""
+@router.post("/senders/blocked/{blocked_id}/remove", name="senders.unblock")
+def unblock_sender(blocked_id: int, db: Session = Depends(get_db)):
+    """解除屏蔽，并在后台补回屏蔽期间被忽略的邮件。"""
     row = db.get(BlockedSender, blocked_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Blocked sender not found")
@@ -233,40 +150,20 @@ def unblock_sender(
     db.delete(row)
     db.commit()
     submit_bg(restore_sender_messages_since, account_id, sender_email, blocked_at)
-
     logger.info(
-        "unblock-sender account_id=%s sender=%s removed=%s restore_since=%s",
-        account_id,
-        sender_email,
-        1,
-        blocked_at.isoformat(),
+        "unblock-sender account_id=%s sender=%s restore_since=%s",
+        account_id, sender_email, blocked_at.isoformat(),
     )
-    if is_safe_redirect(next):
-        return RedirectResponse(url=next, status_code=303)
-    return RedirectResponse(
-        url=request.url_for("messages.blocked_senders").include_query_params(account_id=account_id),
-        status_code=303,
-    )
+    return {"ok": True}
 
 
-@router.post("/trusted-senders/{trusted_id}/remove", name="messages.untrust_sender")
-def untrust_sender(
-    request: Request,
-    trusted_id: int,
-    next: Optional[str] = Form(None),
-    db: Session = Depends(get_db),
-):
+@router.post("/senders/trusted/{trusted_id}/remove", name="senders.untrust")
+def untrust_sender(trusted_id: int, db: Session = Depends(get_db)):
     """取消信任发件人：之后其邮件若被 Gmail 判为垃圾邮件，将正常留在垃圾邮件中。"""
     row = db.get(TrustedSender, trusted_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Trusted sender not found")
-    account_id = int(row.account_id)
-    logger.info("untrust-sender account_id=%s sender=%s", account_id, row.sender_email)
+    logger.info("untrust-sender account_id=%s sender=%s", row.account_id, row.sender_email)
     db.delete(row)
     db.commit()
-    if is_safe_redirect(next):
-        return RedirectResponse(url=next, status_code=303)
-    return RedirectResponse(
-        url=request.url_for("messages.blocked_senders").include_query_params(account_id=account_id),
-        status_code=303,
-    )
+    return {"ok": True}

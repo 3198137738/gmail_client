@@ -2,7 +2,22 @@
 
 # 基础镜像按 digest 固定：标签可以被重新指向，digest 不会。升级时取新 digest：
 #   docker pull python:3.12-slim && docker inspect --format '{{index .RepoDigests 0}}' python:3.12-slim
+# （tools/deploy.sh 取第一个 FROM 作为检查用的 Python 镜像，Python 镜像必须写在最前面）
 FROM python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1 AS base
+
+# ---- 前端构建（Vue 3 + Naive UI）：产物只有静态文件，Node 不进入最终镜像 ----
+#   docker pull node:24-alpine && docker inspect --format '{{index .RepoDigests 0}}' node:24-alpine
+FROM node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 AS frontend
+WORKDIR /frontend
+# 依赖按 package-lock.json 安装：每个包都锁定版本和 sha512，被替换或投毒时校验失败；
+# --ignore-scripts：不执行任何包的安装脚本
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --ignore-scripts --no-audit --no-fund
+COPY frontend/ ./
+# 输出到 /app/static/dist（见 vite.config.js 的 outDir）
+RUN npm run build
+
+FROM base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -32,6 +47,7 @@ COPY requirements.lock ./
 RUN pip install --no-cache-dir --require-hashes --no-deps -r requirements.lock  && pip check
 
 COPY app ./app
+COPY --from=frontend /app/static/dist ./app/static/dist
 COPY run.py ./run.py
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 # Windows CRLF in the script makes the kernel look for "/bin/sh\r" → "no such file or directory"

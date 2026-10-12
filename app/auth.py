@@ -10,7 +10,7 @@ from ipaddress import IPv6Address, ip_address, ip_network
 from urllib.parse import urlencode, urlparse
 
 from fastapi import Request
-from fastapi.responses import PlainTextResponse, RedirectResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from sqlalchemy import select
 
 from .config import (
@@ -36,12 +36,19 @@ AUTH_SESSION_KEY = "authenticated"
 AUTH_AT_SESSION_KEY = "authenticated_at"
 # 服务端登录会话的令牌（见 services/login_sessions.py），撤销后该设备立即登出
 AUTH_SID_SESSION_KEY = "sid"
-AUTH_ERROR_SESSION_KEY = "auth_error"
 LOGIN_PATH = "/login"
-LOGOUT_PATH = "/logout"
-PUBLIC_PATH_PREFIXES = ("/static/", "/healthz")
 LOGIN_2FA_PATH = "/login/2fa"
-PUBLIC_PATHS = {LOGIN_PATH, LOGOUT_PATH, LOGIN_2FA_PATH}
+API_PREFIX = "/api/"
+PUBLIC_PATH_PREFIXES = ("/static/", "/healthz")
+# 登录页本身（前端页面）和登录用到的接口不需要登录
+PUBLIC_PATHS = {
+    LOGIN_PATH,
+    LOGIN_2FA_PATH,
+    "/api/session",
+    "/api/login",
+    "/api/login/2fa",
+    "/api/logout",
+}
 # 被永久封禁的 IP 也放行健康检查（Docker 从本机调用）
 BAN_EXEMPT_PATHS = {"/healthz"}
 # 永久封禁名单在内存里缓存这么久（秒），避免每个请求都查库；本进程内封禁/解封会立即刷新
@@ -111,18 +118,6 @@ def clear_auth(request: Request, *, revoke: bool = True) -> None:
         login_sessions.revoke_token(token)
     request.session.pop(AUTH_SESSION_KEY, None)
     request.session.pop(AUTH_AT_SESSION_KEY, None)
-
-
-def set_auth_error(request: Request, message: str | None) -> None:
-    if message:
-        request.session[AUTH_ERROR_SESSION_KEY] = message
-        return
-    request.session.pop(AUTH_ERROR_SESSION_KEY, None)
-
-
-def pop_auth_error(request: Request) -> str | None:
-    value = request.session.pop(AUTH_ERROR_SESSION_KEY, None)
-    return value if isinstance(value, str) else None
 
 
 def is_public_path(path: str) -> bool:
@@ -469,22 +464,20 @@ def safe_next_url(next_url: str | None, fallback: str = "/messages/") -> str:
 
 
 async def require_app_password(request: Request, call_next):
-    """Redirect unauthenticated users to the login page when enabled."""
+    """未登录时：接口返回 401（前端跳转到登录页），页面重定向到登录页。"""
     # 永久封禁的 IP 什么页面都不给看（包括登录页），已登录的会话也一并拒绝
     if request.url.path not in BAN_EXEMPT_PATHS and is_ip_banned(get_client_ip(request)):
         return PlainTextResponse("Forbidden", status_code=403)
     if not WEB_AUTH_ENABLED or is_public_path(request.url.path) or is_authenticated(request):
         return await call_next(request)
 
+    if request.url.path.startswith(API_PREFIX):
+        return JSONResponse({"detail": "未登录或登录已过期"}, status_code=401)
+
     next_url = request.url.path
     if request.url.query:
         next_url = f"{next_url}?{request.url.query}"
-
-    login_url = str(request.url_for("auth.login_form"))
-    return RedirectResponse(
-        url=f"{login_url}?{urlencode({'next': next_url})}",
-        status_code=303,
-    )
+    return RedirectResponse(url=f"{LOGIN_PATH}?{urlencode({'next': next_url})}", status_code=303)
 
 
 def password_matches(candidate: str, expected: str) -> bool:

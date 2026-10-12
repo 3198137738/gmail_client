@@ -1,4 +1,4 @@
-"""Routes for composing and sending email via SMTP."""
+"""写邮件、草稿、发件记录的接口（SMTP 发信）。"""
 from __future__ import annotations
 
 import logging
@@ -12,12 +12,13 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+from .. import serializers as ser
 from ..config import ATTACHMENTS_DIR, SYNC_SENT_ENABLED
-from ..auth import is_safe_redirect
 from ..database import get_db
 from ..models import Account, Attachment, Draft, Message, SentMessage
 from ..services.mail_body import (
@@ -30,11 +31,13 @@ from ..services import audit
 from ..services.html_sanitizer import sanitize_compose_html
 from ..services.smtp_service import SMTPSendError, send_email
 from ..navigation import sidebar_data
-from ..templating import templates, utc_to_local
+from ..timeutil import utc_to_local
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/compose", tags=["compose"])
+router = APIRouter(prefix="/api", tags=["compose"])
+# 不是 JSON 接口的部分：发件记录的正文文档（在详情页的 sandbox iframe 中加载）
+body_router = APIRouter(prefix="/compose", tags=["compose"])
 
 OUTBOX_DIR = ATTACHMENTS_DIR / "outbox"
 OUTBOX_DIR.mkdir(parents=True, exist_ok=True)
@@ -252,69 +255,7 @@ def _draft_is_empty(*values: Optional[str]) -> bool:
     return not any((v or "").strip() for v in values)
 
 
-@router.post("/draft", name="compose.save_draft")
-def save_draft(
-    draft_id: Optional[str] = Form(None),
-    account_id: Optional[str] = Form(None),
-    to: Optional[str] = Form(None),
-    cc: Optional[str] = Form(None),
-    bcc: Optional[str] = Form(None),
-    subject: Optional[str] = Form(None),
-    body_text: Optional[str] = Form(None),
-    body_html: Optional[str] = Form(None),
-    in_reply_to: Optional[str] = Form(None),
-    references: Optional[str] = Form(None),
-    forward_message_id: Optional[str] = Form(None),
-    db: Session = Depends(get_db),
-):
-    """写邮件时自动保存草稿（新建或更新），返回 JSON。内容全部清空时删除草稿。"""
-    record = db.get(Draft, _coerce_int(draft_id)) if _coerce_int(draft_id) else None
-    if _draft_is_empty(to, cc, bcc, subject, body_text):
-        if record is not None:
-            db.delete(record)
-            db.commit()
-        return JSONResponse({"id": None})
-    account = db.get(Account, _coerce_int(account_id) or 0)
-    if account is None:
-        raise HTTPException(status_code=400, detail="Selected account is not available")
-    if record is None:
-        record = Draft(account_id=int(account.id))
-        db.add(record)
-    record.account_id = int(account.id)
-    record.to_addr = to or ""
-    record.cc_addr = cc or ""
-    record.bcc_addr = bcc or ""
-    record.subject = subject or ""
-    record.body_text = body_text or ""
-    record.body_html = body_html or ""
-    record.in_reply_to = in_reply_to or None
-    record.references = references or None
-    record.forward_message_id = _coerce_int(forward_message_id)
-    db.commit()
-    return JSONResponse({"id": int(record.id), "saved_at": utc_to_local(record.updated_at).strftime("%H:%M")})
-
-
-@router.post("/draft/{draft_id}/delete", name="compose.delete_draft")
-def delete_draft(
-    request: Request,
-    draft_id: int,
-    db: Session = Depends(get_db),
-):
-    record = db.get(Draft, draft_id)
-    if record is not None:
-        db.delete(record)
-        db.commit()
-    if request.headers.get("x-requested-with") == "fetch":
-        return JSONResponse({"ok": True})
-    return RedirectResponse(url=request.url_for("compose.drafts"), status_code=303)
-
-
-@router.get("/drafts", response_class=HTMLResponse, name="compose.drafts")
-def drafts_list(request: Request, db: Session = Depends(get_db)):
-    drafts = db.execute(select(Draft).order_by(Draft.updated_at.desc())).scalars().all()
-    return templates.TemplateResponse(request, "drafts.html", {"drafts": drafts})
-
-
+# ---- 写邮件 -------------------------------------------------------------------
 # 收件人自动补全：扫描最近多少封邮件、最多返回多少个联系人。
 _CONTACT_SCAN_LIMIT = 3000
 _CONTACT_MAX = 300
@@ -360,22 +301,22 @@ def _recent_contacts(db: Session) -> list[dict]:
     return [{"email": addr, "name": names.get(addr, "")} for addr, _ in scores.most_common(_CONTACT_MAX)]
 
 
-@router.get("/", response_class=HTMLResponse, name="compose.form")
-def compose_form(
+def _enabled_accounts(db: Session):
+    return db.execute(
+        select(Account).where(Account.enabled.is_(True)).order_by(Account.email)
+    ).scalars().all()
+
+
+@router.get("/compose", name="compose.init")
+def compose_init(
     request: Request,
-    db: Session = Depends(get_db),
-    error: Optional[str] = None,
     reply_to: Optional[int] = None,
     mode: Optional[str] = None,
     forward: Optional[int] = None,
     draft: Optional[int] = None,
-    embed: bool = Query(False),
+    db: Session = Depends(get_db),
 ):
-    accounts = db.execute(
-        select(Account).where(Account.enabled.is_(True)).order_by(Account.email)
-    ).scalars().all()
-
-    prefill: Optional[dict] = None
+    """打开写邮件窗口：可用的发件账号、预填内容（回复 / 转发 / 草稿）和联系人。"""
     source_id = forward if forward is not None else reply_to
     if draft is not None:
         record = db.get(Draft, draft)
@@ -385,10 +326,7 @@ def compose_form(
     elif source_id is not None:
         message = db.execute(
             select(Message)
-            .options(
-                selectinload(Message.account),
-                selectinload(Message.attachments),
-            )
+            .options(selectinload(Message.account), selectinload(Message.attachments))
             .where(Message.id == source_id)
         ).scalar_one_or_none()
         if message is None:
@@ -401,22 +339,86 @@ def compose_form(
         # 新邮件默认用当前选中的账号发送（与左侧导航一致）
         prefill = {"account_id": sidebar_data(request).preferred_account_id}
 
-    return _render_compose(request, db, accounts, prefill=prefill, error=error, embed=embed)
+    return {
+        "accounts": [
+            {"id": int(a.id), "email": a.email, "display_name": a.display_name or ""}
+            for a in _enabled_accounts(db)
+        ],
+        "prefill": prefill,
+        "contacts": _recent_contacts(db),
+    }
 
 
-def _render_compose(request: Request, db: Session, accounts, *, prefill, error, embed, status_code=200):
-    return templates.TemplateResponse(
-        request,
-        "compose.html",
-        {
-            "accounts": accounts,
-            "error": error,
-            "prefill": prefill,
-            "contacts": _recent_contacts(db),
-            "embed": embed,
-        },
-        status_code=status_code,
-    )
+class DraftBody(BaseModel):
+    draft_id: Optional[int] = None
+    account_id: Optional[int] = None
+    to: Optional[str] = None
+    cc: Optional[str] = None
+    bcc: Optional[str] = None
+    subject: Optional[str] = None
+    body_text: Optional[str] = None
+    body_html: Optional[str] = None
+    in_reply_to: Optional[str] = None
+    references: Optional[str] = None
+    forward_message_id: Optional[int] = None
+
+
+@router.post("/drafts", name="compose.save_draft")
+def save_draft(body: DraftBody, db: Session = Depends(get_db)):
+    """写邮件时自动保存草稿（新建或更新）。内容全部清空时删除草稿。"""
+    record = db.get(Draft, body.draft_id) if body.draft_id else None
+    if _draft_is_empty(body.to, body.cc, body.bcc, body.subject, body.body_text):
+        if record is not None:
+            db.delete(record)
+            db.commit()
+        return {"id": None}
+    account = db.get(Account, body.account_id or 0)
+    if account is None:
+        raise HTTPException(status_code=400, detail="Selected account is not available")
+    if record is None:
+        record = Draft(account_id=int(account.id))
+        db.add(record)
+    record.account_id = int(account.id)
+    record.to_addr = body.to or ""
+    record.cc_addr = body.cc or ""
+    record.bcc_addr = body.bcc or ""
+    record.subject = body.subject or ""
+    record.body_text = body.body_text or ""
+    record.body_html = body.body_html or ""
+    record.in_reply_to = body.in_reply_to or None
+    record.references = body.references or None
+    record.forward_message_id = body.forward_message_id
+    db.commit()
+    return {"id": int(record.id), "saved_at": utc_to_local(record.updated_at).strftime("%H:%M")}
+
+
+@router.post("/drafts/{draft_id}/delete", name="compose.delete_draft")
+def delete_draft(draft_id: int, db: Session = Depends(get_db)):
+    record = db.get(Draft, draft_id)
+    if record is not None:
+        db.delete(record)
+        db.commit()
+    return {"ok": True}
+
+
+@router.get("/drafts", name="compose.drafts")
+def drafts_list(db: Session = Depends(get_db)):
+    drafts = db.execute(select(Draft).order_by(Draft.updated_at.desc())).scalars().all()
+    return {
+        "items": [
+            {
+                "id": int(d.id),
+                "account_id": int(d.account_id),
+                "to": d.to_addr or "",
+                "to_short": ser.recipients(d.to_addr),
+                "to_name": ser.addr_name(d.to_addr),
+                "subject": d.subject or "",
+                "snippet": ser.snippet(d.body_text),
+                "updated_at": ser.iso_utc(d.updated_at),
+            }
+            for d in drafts
+        ]
+    }
 
 
 def _unique_path(directory: Path, name: str) -> Path:
@@ -429,13 +431,13 @@ def _unique_path(directory: Path, name: str) -> Path:
     return dest
 
 
-@router.post("/", name="compose.send")
+@router.post("/compose/send", name="compose.send")
 # 必须是普通 def：smtplib 发信和保存附件都是阻塞调用（最长 30 秒），FastAPI 会把
 # 同步路由放进线程池；写成 async def 会卡住事件循环，期间所有请求和 SSE 都无响应。
 def send(
     request: Request,
     account_id: int = Form(...),
-    to: str = Form(...),
+    to: str = Form(""),
     cc: Optional[str] = Form(None),
     bcc: Optional[str] = Form(None),
     subject: str = Form(""),
@@ -445,12 +447,11 @@ def send(
     in_reply_to: Optional[str] = Form(None),
     references: Optional[str] = Form(None),
     forward_message_id: Optional[str] = Form(None),
-    embed: Optional[str] = Form(None),
     draft_id: Optional[str] = Form(None),
     attachments: List[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
 ):
-    is_embed = embed in ("1", "true", "on")
+    """发送邮件。发送失败返回 400，前端保留已填写的内容（含附件）以便重试。"""
     account = db.get(Account, account_id)
     if account is None or not account.enabled:
         raise HTTPException(status_code=400, detail="Selected account is not available")
@@ -472,14 +473,11 @@ def send(
                 shutil.copyfileobj(upload.file, out)
             saved_paths.append(dest)
 
-        # When forwarding, re-attach the original message's (non-inline)
-        # attachments by copying them into this send session under their
-        # original display names.
+        # 转发时把原邮件的附件（不含内嵌图片）按原文件名复制进本次发送一起发出
         fwd_id = _coerce_int(forward_message_id)
         if fwd_id:
             originals = db.execute(
-                select(Attachment)
-                .where(
+                select(Attachment).where(
                     Attachment.message_id == fwd_id,
                     Attachment.is_inline.is_(False),
                 )
@@ -554,37 +552,8 @@ def send(
         db.commit()
 
         if status == "failed":
-            # 发送失败：带着已填写的内容重新显示写邮件界面（附件需要重新添加）
-            uploaded = any(u and u.filename for u in (attachments or []))
-            fwd_names = [p.name for p in saved_paths] if fwd_id else []
-            prefill = {
-                "account_id": account_id,
-                "to": to,
-                "cc": cc or "",
-                "bcc": bcc or "",
-                "subject": subject,
-                "body_html": sanitize_compose_html(body_html or "") or _text_to_html(body_text or ""),
-                "body_text": body_text or "",
-                "in_reply_to": in_reply_to or "",
-                "references": references or "",
-                "is_reply": bool(in_reply_to),
-                "is_forward": bool(fwd_id),
-                "forward_message_id": fwd_id or "",
-                "forward_attachments": fwd_names,
-                "draft_id": _coerce_int(draft_id) or "",
-            }
-            accounts = db.execute(
-                select(Account).where(Account.enabled.is_(True)).order_by(Account.email)
-            ).scalars().all()
-            message = error + ("（附件需要重新添加）" if uploaded else "")
-            return _render_compose(
-                request, db, accounts, prefill=prefill, error=message, embed=is_embed, status_code=400
-            )
-        if is_embed:
-            return RedirectResponse(
-                url=request.url_for("compose.sent_done", sent_id=record.id), status_code=303
-            )
-        return RedirectResponse(url=request.url_for("compose.sent_list"), status_code=303)
+            raise HTTPException(status_code=400, detail=f"发送失败：{error}")
+        return {"ok": True, "sent_id": int(record.id), "status": status, "error": error}
     finally:
         for p in saved_paths:
             try:
@@ -597,12 +566,30 @@ def send(
             pass
 
 
+# ---- 发件记录 -----------------------------------------------------------------
 def _normalize_message_id(value: Optional[str]) -> str:
     return (value or "").strip().strip("<>").strip().lower()
 
 
-@router.get("/sent", response_class=HTMLResponse, name="compose.sent_list")
-def sent_list(request: Request, db: Session = Depends(get_db)):
+def _sent_item(source: str, row_id: int, account_id: int, to_addr: Optional[str], subject: Optional[str],
+               body_text: Optional[str], time: Optional[datetime], status: str, error: Optional[str]) -> dict:
+    return {
+        "source": source,
+        "id": row_id,
+        "account_id": account_id,
+        "to": to_addr or "",
+        "to_short": ser.recipients(to_addr),
+        "to_name": ser.addr_name(to_addr),
+        "subject": subject or "",
+        "snippet": ser.snippet(body_text),
+        "time": ser.iso(time),
+        "status": status,
+        "error": error,
+    }
+
+
+@router.get("/sent", name="compose.sent_list")
+def sent_list(db: Session = Depends(get_db)):
     """发件记录：合并 Gmail「已发送」文件夹（需开启 SYNC_SENT_ENABLED）与本客户端的发送记录。
 
     本客户端发出的邮件 Gmail 也会存入「已发送」，按 Message-ID 去重后只显示 Gmail 那一份；
@@ -641,66 +628,68 @@ def sent_list(request: Request, db: Session = Depends(get_db)):
     partial_ids = {
         _normalize_message_id(r.message_id) for r in local_rows if r.status == "partial" and r.message_id
     }
-    items: list[dict] = []
+    items: list[tuple[Optional[datetime], dict]] = []
     for m in gmail_rows:
         if partial_ids and _normalize_message_id(m.message_id) in partial_ids:
             continue
-        items.append({
-            "source": "gmail",
-            "account": m.account.email if m.account else f"#{m.account_id}",
-            "account_id": m.account_id,
-            "to_addr": m.to_addr or "",
-            "subject": m.subject,
-            "body_text": m.body_text,
-            "time": m.date,
-            "status": "sent",
-            "error": None,
-            "detail_url": request.url_for("messages.detail", message_id=m.id),
-            "delete_url": request.url_for("messages.delete_one", message_id=m.id),
-            "delete_confirm": "确定删除这封邮件吗？Gmail「已发送」中的邮件也会移到已删除邮件。",
-        })
+        items.append((m.date, _sent_item(
+            "gmail", int(m.id), int(m.account_id), m.to_addr, m.subject, m.body_text, m.date, "sent", None,
+        )))
     for r in local_rows:
         if r.status == "sent" and _normalize_message_id(r.message_id) in synced_ids:
             continue
-        items.append({
-            "source": "local",
-            "account": r.account.email if r.account else f"#{r.account_id}",
-            "account_id": r.account_id,
-            "to_addr": r.to_addr or "",
-            "subject": r.subject,
-            "body_text": r.body_text,
-            "time": utc_to_local(r.sent_at),
-            "status": r.status,
-            "error": r.error,
-            "detail_url": request.url_for("compose.sent_detail", sent_id=r.id),
-            "delete_url": request.url_for("compose.sent_delete", sent_id=r.id),
-            "delete_confirm": "确定删除这条发件记录吗？",
-        })
+        local_time = utc_to_local(r.sent_at)
+        items.append((local_time, _sent_item(
+            "local", int(r.id), int(r.account_id), r.to_addr, r.subject, r.body_text, local_time, r.status, r.error,
+        )))
 
-    items.sort(key=lambda it: it["time"] or datetime.min, reverse=True)
-    return templates.TemplateResponse(
-        request,
-        "sent.html",
-        {"sent": items[:SENT_LIST_LIMIT], "sync_sent_enabled": SYNC_SENT_ENABLED},
-    )
+    items.sort(key=lambda it: it[0] or datetime.min, reverse=True)
+    return {
+        "items": [item for _, item in items[:SENT_LIST_LIMIT]],
+        "sync_sent_enabled": SYNC_SENT_ENABLED,
+    }
 
 
-@router.get("/sent/{sent_id}/done", response_class=HTMLResponse, name="compose.sent_done")
-def sent_done(request: Request, sent_id: int, db: Session = Depends(get_db)):
-    """悬浮写邮件窗口发送成功后的落地页：通知父页面关闭窗口并提示「邮件已发送」。"""
-    status = db.execute(select(SentMessage.status).where(SentMessage.id == sent_id)).scalar()
-    return templates.TemplateResponse(
-        request,
-        "compose_done.html",
-        {
-            "embed": True,
-            "sent_url": str(request.url_for("compose.sent_detail", sent_id=sent_id)),
-            "send_partial": status == "partial",
-        },
-    )
+@router.get("/sent/{sent_id}", name="compose.sent_detail")
+def sent_detail(sent_id: int, db: Session = Depends(get_db)):
+    record = db.execute(
+        select(SentMessage)
+        .options(selectinload(SentMessage.account))
+        .where(SentMessage.id == sent_id)
+    ).scalar_one_or_none()
+    if record is None:
+        raise HTTPException(status_code=404, detail="Sent message not found")
+    account = record.account
+    return {
+        "id": int(record.id),
+        "account_email": account.email if account else "",
+        "account_name": (account.display_name or account.email) if account else "",
+        "subject": record.subject or "",
+        "to_full": ser.addr_list(record.to_addr),
+        "cc_full": ser.addr_list(record.cc_addr) if record.cc_addr else "",
+        "bcc_full": ser.addr_list(record.bcc_addr) if record.bcc_addr else "",
+        "to_short": ser.recipients(record.to_addr),
+        "cc_short": ser.recipients(record.cc_addr) if record.cc_addr else "",
+        "time": ser.iso_utc(record.sent_at),
+        "status": record.status,
+        "error": record.error,
+        "remote_images": body_has_remote_images(record.body_html) and not remote_images_allowed(),
+    }
 
 
-@router.get("/sent/{sent_id}/body", response_class=HTMLResponse, name="compose.sent_body")
+@router.post("/sent/{sent_id}/delete", name="compose.sent_delete")
+def sent_delete(request: Request, sent_id: int, db: Session = Depends(get_db)):
+    record = db.get(SentMessage, sent_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Sent message not found")
+    audit.record_request(request, "sent_record_deleted", f"「{(record.subject or '(无主题)')[:80]}」→ {(record.to_addr or '')[:120]}")
+    db.delete(record)
+    db.commit()
+    logger.info("Deleted sent record id=%s account_id=%s", sent_id, record.account_id)
+    return {"ok": True}
+
+
+@body_router.get("/sent/{sent_id}/body", response_class=HTMLResponse, name="compose.sent_body")
 def sent_body(
     request: Request,
     sent_id: int,
@@ -719,45 +708,3 @@ def sent_body(
     )
 
 
-@router.get("/sent/{sent_id}", response_class=HTMLResponse, name="compose.sent_detail")
-def sent_detail(
-    request: Request,
-    sent_id: int,
-    images: bool = Query(False),
-    db: Session = Depends(get_db),
-):
-    record = db.execute(
-        select(SentMessage)
-        .options(selectinload(SentMessage.account))
-        .where(SentMessage.id == sent_id)
-    ).scalar_one_or_none()
-    if record is None:
-        raise HTTPException(status_code=404, detail="Sent message not found")
-    return templates.TemplateResponse(
-        request,
-        "sent_detail.html",
-        {
-            "message": record,
-            "show_images": remote_images_allowed(images),
-            "has_remote_images": body_has_remote_images(record.body_html),
-        },
-    )
-
-
-@router.post("/sent/{sent_id}/delete", name="compose.sent_delete")
-def sent_delete(
-    request: Request,
-    sent_id: int,
-    next: Optional[str] = Form(None),
-    db: Session = Depends(get_db),
-):
-    record = db.get(SentMessage, sent_id)
-    if record is None:
-        raise HTTPException(status_code=404, detail="Sent message not found")
-    audit.record_request(request, "sent_record_deleted", f"「{(record.subject or '(无主题)')[:80]}」→ {(record.to_addr or '')[:120]}")
-    db.delete(record)
-    db.commit()
-    logger.info("Deleted sent record id=%s account_id=%s", sent_id, record.account_id)
-    if is_safe_redirect(next):
-        return RedirectResponse(url=next, status_code=303)
-    return RedirectResponse(url=request.url_for("compose.sent_list"), status_code=303)

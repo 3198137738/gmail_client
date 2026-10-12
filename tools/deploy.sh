@@ -8,6 +8,8 @@
 # 修改依赖（requirements.txt）后需要在开发机重新生成锁文件并提交：
 #   uv pip compile requirements.txt --generate-hashes --python-version 3.12 \
 #       --python-platform x86_64-manylinux_2_28 --no-header -o requirements.lock
+# 前端依赖（frontend/package.json）修改后用 npm install 更新 package-lock.json 并提交；
+# 前端在 docker compose build 时构建，服务器上不需要安装 Node。
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -22,8 +24,9 @@ fi
 git fetch --quiet origin main
 git merge --ff-only origin/main
 
-# 检查与扫描都在固定 digest 的基础镜像里运行，不依赖宿主机的 Python
+# 检查与扫描都在固定 digest 的基础镜像里运行，不依赖宿主机的 Python / Node
 IMAGE=$(sed -n 's/^FROM \([^ ]*\).*/\1/p' Dockerfile | head -n 1)
+NODE_IMAGE=$(sed -n 's/^FROM \(node:[^ ]*\).*/\1/p' Dockerfile | head -n 1)
 
 echo "==> 完整性检查（恶意注入特征、依赖锁文件）"
 docker run --rm --network none -v "$PWD:/src:ro" -w /src "$IMAGE" python tools/check_integrity.py /src
@@ -35,6 +38,8 @@ else
     docker run --rm -v "$PWD:/src:ro" -w /src "$IMAGE" sh -c '
         pip install --quiet --no-cache-dir --root-user-action=ignore --require-hashes -r tools/audit-requirements.lock \
         && pip-audit --strict --progress-spinner off -r requirements.lock --require-hashes --disable-pip'
+    echo "==> 前端依赖漏洞扫描（npm audit，按 package-lock.json 检查打包进页面的依赖）"
+    docker run --rm -v "$PWD/frontend:/src:ro" -w /src "$NODE_IMAGE" npm audit --omit=dev
 fi
 
 echo "==> 构建并重启"

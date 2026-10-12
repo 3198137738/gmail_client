@@ -7,7 +7,7 @@ from app.database import session_scope
 from app.models import Label, Message, MessageLabel, PendingOp
 from app.services import labels as gmail_labels
 from app.services.imap_service import _sync_one_folder
-from tests.helpers import create_account, create_message, csrf_token, login
+from tests.helpers import api_post, create_account, create_message, login
 from tests.test_backfill import FakeMailbox, no_notify  # noqa: F401
 
 
@@ -87,11 +87,14 @@ def test_label_view_lists_labeled_messages(client):
     create_message(acc, subject="普通邮件")
     with session_scope() as db:
         db.add(MessageLabel(message_id=tagged, label_id=label_id))
-    html = client.get(f"/messages/?kind=label-{label_id}&account_id={acc}").text
-    assert "带标签的邮件" in html and "普通邮件" not in html
-    assert f'href="/messages/?kind=label-{label_id}&account_id={acc}"' in html   # 侧栏
-    inbox = client.get(f"/messages/?kind=inbox&account_id={acc}").text
-    assert 'class="gm-label-chip is-label"' in inbox                                   # 行内标签
+    data = client.get("/api/messages", params={"kind": f"label-{label_id}", "account_id": acc}).json()
+    assert [m["subject"] for m in data["items"]] == ["带标签的邮件"]
+    assert data["current_label"] == {"id": label_id, "name": "项目"}
+    nav = client.get("/api/messages/nav").json()                                         # 侧栏
+    assert {"id": label_id, "account_id": acc, "name": "项目", "short": "项目"} in nav["labels"]
+    inbox = client.get("/api/messages", params={"kind": "inbox", "account_id": acc}).json()
+    labels = {m["subject"]: m["labels"] for m in inbox["items"]}                         # 行内标签
+    assert labels["带标签的邮件"] == [{"id": label_id, "name": "项目"}] and labels["普通邮件"] == []
 
 
 def test_set_labels_updates_locally_and_enqueues(client):
@@ -104,9 +107,8 @@ def test_set_labels_updates_locally_and_enqueues(client):
     with session_scope() as db:
         db.add(MessageLabel(message_id=mid, label_id=ids["A"]))
 
-    resp = client.post(f"/messages/{mid}/labels",
-                       data={"label_ids": [ids["B"]], "csrf_token": token}, follow_redirects=False)
-    assert resp.status_code == 303
+    resp = api_post(client, f"/api/messages/{mid}/labels", token, {"label_ids": [ids["B"]]})
+    assert resp.json() == {"ok": True, "labels": [{"id": ids["B"], "name": "B"}]}
     assert _labels_of(acc) == {321: {"B"}}
     with session_scope() as db:
         ops = sorted(db.execute(
@@ -115,10 +117,11 @@ def test_set_labels_updates_locally_and_enqueues(client):
     assert ops == [("add_label", "321", "B"), ("remove_label", "321", "A")]
 
 
-def test_detail_shows_label_menu(client):
+def test_detail_lists_account_labels(client):
     login(client)
     acc = create_account()
     gmail_labels.sync_label_list(acc, ["出差"])
     mid = create_message(acc)
-    html = client.get(f"/messages/{mid}").text
-    assert "gm-label-menu" in html and "出差" in html
+    data = client.get(f"/api/messages/{mid}").json()
+    assert [lb["name"] for lb in data["account_labels"]] == ["出差"]
+    assert data["thread_labels"] == []

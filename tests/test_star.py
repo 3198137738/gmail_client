@@ -6,7 +6,7 @@ from sqlalchemy import select
 from app.database import session_scope
 from app.models import Message, PendingOp
 from app.services.imap_service import _sync_one_folder
-from tests.helpers import create_account, create_message, login
+from tests.helpers import api_post, create_account, create_message, login
 from tests.test_backfill import FakeMailbox, no_notify  # noqa: F401
 
 
@@ -15,25 +15,18 @@ def _starred(mid: int) -> bool:
         return bool(db.get(Message, mid).is_starred)
 
 
-def test_toggle_star_via_fetch_returns_json_and_enqueues_flag(client):
+def test_toggle_star_returns_json_and_enqueues_flag(client):
     token = login(client)
     acc = create_account()
     mid = create_message(acc, uid=811)
-    resp = client.post(
-        f"/messages/{mid}/star",
-        data={"starred": "1"},
-        headers={"X-Requested-With": "fetch", "X-CSRF-Token": token},
-    )
+    resp = api_post(client, f"/api/messages/{mid}/star", token, {"starred": True})
     assert resp.json() == {"id": mid, "starred": True}
     assert _starred(mid)
     with session_scope() as db:
         op = db.execute(select(PendingOp).where(PendingOp.account_id == acc)).scalar_one()
-        assert (op.op, op.uids, op.arg) == ("add_flags", "811", "\\Flagged")
+        assert (op.op, op.uids, op.arg) == ("add_flags", "811", "\Flagged")
 
-    resp = client.post(
-        f"/messages/{mid}/star",
-        headers={"X-Requested-With": "fetch", "X-CSRF-Token": token},
-    )
+    resp = api_post(client, f"/api/messages/{mid}/star", token)
     assert resp.json()["starred"] is False      # 不带参数时切换
     assert not _starred(mid)
 
@@ -41,7 +34,7 @@ def test_toggle_star_via_fetch_returns_json_and_enqueues_flag(client):
 def test_star_requires_csrf(client):
     login(client)
     mid = create_message(create_account())
-    resp = client.post(f"/messages/{mid}/star", headers={"X-Requested-With": "fetch"})
+    resp = client.post(f"/api/messages/{mid}/star", json={})
     assert resp.status_code == 403
     assert not _starred(mid)
 
@@ -52,21 +45,19 @@ def test_starred_view_lists_only_starred_non_junk(client):
     create_message(acc, subject="星标收件", is_starred=True)
     create_message(acc, subject="普通邮件")
     create_message(acc, subject="星标垃圾", folder="[Gmail]/Spam", folder_kind="junk", is_starred=True)
-    html = client.get(f"/messages/?kind=starred&account_id={acc}").text
-    assert "星标收件" in html
-    assert "普通邮件" not in html and "星标垃圾" not in html
-    assert "已加星标" in html
+    data = client.get("/api/messages", params={"kind": "starred", "account_id": acc}).json()
+    subjects = {m["subject"] for m in data["items"]}
+    assert subjects == {"星标收件"}
+    assert data["kind_label"] == "已加星标"
 
 
-def test_row_and_detail_have_star_buttons(client):
+def test_list_and_detail_report_star_state(client):
     login(client)
     acc = create_account()
     mid = create_message(acc, is_starred=True)
-    html = client.get(f"/messages/?account_id={acc}").text
-    assert f'data-star-url="http://testserver/messages/{mid}/star"' in html
-    assert "is-starred" in html
-    detail = client.get(f"/messages/{mid}").text
-    assert "gm-star-btn is-starred" in detail
+    items = client.get("/api/messages", params={"account_id": acc}).json()["items"]
+    assert [m["is_starred"] for m in items if m["id"] == mid] == [True]
+    assert client.get(f"/api/messages/{mid}").json()["is_starred"] is True
 
 
 def test_server_star_is_synced(no_notify):
@@ -91,17 +82,3 @@ def test_server_star_is_synced(no_notify):
     box.changed_since[2] = box.changed_since[3] = box.modseq
     _sync_one_folder(box, acc, "INBOX", "inbox")
     assert starred_uids() == {3}
-
-
-def test_shortcut_targets_present(client):
-    """键盘快捷键依赖的标记：脚本已加载，详情页按钮带 data-shortcut。"""
-    login(client)
-    acc = create_account()
-    mid = create_message(acc)
-    listing = client.get(f"/messages/?account_id={acc}").text
-    assert "js/shortcuts.js" in listing
-    assert 'data-shortcut="compose"' in listing
-    detail = client.get(f"/messages/{mid}").text
-    for name in ("back", "delete", "unread", "reply", "reply-all", "forward"):
-        assert f'data-shortcut="{name}"' in detail, name
-    assert "js/shortcuts.js" not in client.get("/login").text

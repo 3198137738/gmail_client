@@ -10,28 +10,44 @@ from tests.helpers import csrf_token, login
 def test_login_required(client):
     resp = client.get("/messages/", follow_redirects=False)
     assert resp.status_code == 303
-    assert "/login" in resp.headers["location"]
+    assert resp.headers["location"].startswith("/login?next=")
+
+
+def test_api_requires_login(client):
+    resp = client.get("/api/messages")
+    assert resp.status_code == 401
+    assert client.get("/api/session").json()["authenticated"] is False
 
 
 def test_login_then_access(client):
     login(client)
-    assert client.get("/messages/", follow_redirects=False).status_code == 200
+    assert client.get("/api/messages").status_code == 200
+    assert client.get("/api/session").json()["authenticated"] is True
+    assert client.get("/messages/", follow_redirects=False).status_code != 303
 
 
 def test_session_expires_after_absolute_max_age(client, monkeypatch):
     login(client)
     real_time = time.time
     monkeypatch.setattr(auth.time, "time", lambda: real_time() + auth.SESSION_MAX_AGE_SEC + 60)
+    assert client.get("/api/messages").status_code == 401
     resp = client.get("/messages/", follow_redirects=False)
     assert resp.status_code == 303
     assert "/login" in resp.headers["location"]
 
 
+def test_login_regenerates_session(client):
+    """登录时清空旧会话内容（防会话固定）：CSRF token 随之更换。"""
+    before = csrf_token(client)
+    after = login(client)
+    assert before != after
+    assert csrf_token(client) == after
+
+
 def test_cookie_flags(client):
-    token = csrf_token(client, "/login")
-    resp = client.post(
-        "/login", data={"password": "test-password", "csrf_token": token}, follow_redirects=False
-    )
+    token = csrf_token(client)
+    resp = client.post("/api/login", json={"password": "test-password"}, headers={"X-CSRF-Token": token})
+    assert resp.status_code == 200
     cookie = resp.headers["set-cookie"].lower()
     assert "httponly" in cookie
     assert "samesite=lax" in cookie
@@ -39,7 +55,7 @@ def test_cookie_flags(client):
 
 
 def test_password_with_non_ascii_characters(client, monkeypatch):
-    """含中文的密码：之前 compare_digest(str, str) 抛 TypeError，登录页 500。"""
+    """含中文的密码：之前 compare_digest(str, str) 抛 TypeError，登录 500。"""
     import app.routes.auth as auth_routes
 
     assert auth.password_matches("邮箱密码123", "邮箱密码123")
@@ -47,6 +63,12 @@ def test_password_with_non_ascii_characters(client, monkeypatch):
     assert not auth.password_matches("abc", "邮箱密码123")
     monkeypatch.setattr(auth_routes, "WEB_AUTH_PASSWORD", "邮箱密码123")
     login(client, password="邮箱密码123")
+
+
+def test_logout_ends_session(client):
+    token = login(client)
+    assert client.post("/api/logout", headers={"X-CSRF-Token": token}).status_code == 200
+    assert client.get("/api/messages").status_code == 401
 
 
 def test_refuses_to_start_without_password():

@@ -1,79 +1,56 @@
 """从邮件详情返回列表时回到原来的位置（账号、页码、筛选、搜索）。"""
 from __future__ import annotations
 
-import html
-import re
-from urllib.parse import parse_qs, urlparse
+from sqlalchemy import select
 
-from tests.helpers import create_account, create_message, login
-
-
-def _first_detail_link(page_html: str) -> str:
-    href = re.search(r'class="rcm-subject-link[^"]*" href="([^"]+)"', page_html).group(1)
-    return html.unescape(href)
+from app.database import session_scope
+from app.models import BlockedSender
+from tests.helpers import api_post, create_account, create_message, login
 
 
-def test_back_button_returns_to_same_list_view(client):
+def test_detail_keeps_back_url_and_position(client):
     login(client)
     acc = create_account()
     for i in range(30):
         create_message(acc, subject=f"back-{i:02d}")
 
-    list_html = client.get(
-        "/messages/", params={"account_id": acc, "page": 2, "page_size": 25, "unread": 1}
-    ).text
-    detail_url = _first_detail_link(list_html)
-    back = parse_qs(urlparse(detail_url).query)["back"][0]
-    assert "page=2" in back and "unread=1" in back and f"account_id={acc}" in back
-
-    detail_html = client.get(detail_url).text
-    back_href = html.unescape(
-        re.search(r'href="([^"]+)" title="返回列表[^"]*"', detail_html).group(1)
-    )
-    assert back_href == back
-    # 删除、标记未读、屏蔽发件人后也回到原列表
-    assert detail_html.count(f'name="next" value="{html.escape(back)}"') == 3
+    back = f"/messages/?kind=inbox&account_id={acc}&q=&page=2&page_size=25"
+    listing = client.get("/api/messages", params={"account_id": acc, "page": 2, "page_size": 25}).json()
+    first = listing["items"][0]
+    data = client.get(f"/api/messages/{first['id']}", params={"back": back}).json()
+    assert data["back_url"] == back
+    # 第 2 页第一封：列表中的第 26 封
+    assert data["position"]["position"] == listing["first_index"] == 26
+    assert data["position"]["total"] == 30
+    assert data["position"]["newer_id"] and data["position"]["older_id"]
 
 
 def test_back_param_must_be_message_list(client):
     login(client)
     mid = create_message(create_account())
     for bad in ("https://evil.example/", "//evil.example", "/accounts/", "/messages/blocked-senders"):
-        detail_html = client.get(f"/messages/{mid}", params={"back": bad}).text
-        href = re.search(r'href="([^"]+)" title="返回列表[^"]*"', detail_html).group(1)
-        assert href.startswith("http://testserver/messages/?kind=") or href.startswith("/messages/?kind=")
-        assert "evil" not in href and "accounts" not in href
+        back = client.get(f"/api/messages/{mid}", params={"back": bad}).json()["back_url"]
+        assert back.startswith("/messages/?kind=")
+        assert "evil" not in back and "accounts" not in back
 
 
-def test_delete_returns_to_list_position(client):
+def test_delete_one(client):
     token = login(client)
     acc = create_account()
     mid = create_message(acc)
-    back = f"/messages/?kind=inbox&account_id={acc}&q=&page=2&page_size=25&unread=1"
-    resp = client.post(
-        f"/messages/{mid}/delete",
-        data={"csrf_token": token, "next": back},
-        follow_redirects=False,
-    )
-    assert resp.status_code == 303
-    assert resp.headers["location"] == back
+    resp = api_post(client, f"/api/messages/{mid}/delete", token)
+    assert resp.json() == {"ok": True}
+    assert client.get(f"/api/messages/{mid}").status_code == 404
 
 
-def test_block_sender_returns_to_original_folder(client):
+def test_block_sender_hides_existing_mail(client):
     token = login(client)
     acc = create_account()
     mid = create_message(acc, from_addr="Spam <spam@bad.example>", folder_kind="junk")
-    back = f"/messages/?kind=junk&account_id={acc}&q=&page=1&page_size=25"
-    resp = client.post(
-        f"/messages/{mid}/block-sender",
-        data={"csrf_token": token, "next": back},
-        follow_redirects=False,
-    )
-    assert resp.headers["location"] == back
-
-    # 未带 next 时也按原邮件所在文件夹返回，而不是固定回收件箱
-    mid2 = create_message(acc, from_addr="Other <other@bad.example>", folder_kind="junk")
-    resp = client.post(
-        f"/messages/{mid2}/block-sender", data={"csrf_token": token}, follow_redirects=False
-    )
-    assert "kind=junk" in resp.headers["location"]
+    other = create_message(acc, from_addr="spam@bad.example", folder_kind="inbox")
+    resp = api_post(client, f"/api/messages/{mid}/block-sender", token)
+    assert resp.json() == {"ok": True, "sender_email": "spam@bad.example", "hidden": 2}
+    assert client.get(f"/api/messages/{other}").status_code == 404
+    with session_scope() as db:
+        blocked = db.execute(select(BlockedSender.sender_email).where(BlockedSender.account_id == acc)).scalar_one()
+    assert blocked == "spam@bad.example"

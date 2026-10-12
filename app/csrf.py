@@ -1,15 +1,13 @@
 """CSRF 防护：会话内随机 token，所有写操作（POST 等）必须带上。
 
-模板中用 ``{{ csrf_input() }}`` 在表单里输出隐藏字段；JS 发起的请求可改用
-``X-CSRF-Token`` 请求头。校验以应用级依赖的形式挂在所有路由上。
+前端启动时从 ``GET /api/session`` 取得 token，之后每个写请求都带上 ``X-CSRF-Token``
+请求头（表单提交也可以用 ``csrf_token`` 字段）。校验以应用级依赖的形式挂在所有路由上。
 """
 from __future__ import annotations
 
 import secrets
 
 from fastapi import HTTPException, Request
-from jinja2 import pass_context
-from markupsafe import Markup, escape
 
 CSRF_SESSION_KEY = "csrf_token"
 CSRF_FIELD_NAME = "csrf_token"
@@ -40,14 +38,3 @@ async def verify_csrf(request: Request) -> None:
             supplied = value if isinstance(value, str) else None
     if not expected or not supplied or not secrets.compare_digest(expected, supplied):
         raise HTTPException(status_code=403, detail="页面已过期")
-
-
-@pass_context
-def csrf_input(context) -> Markup:
-    token = get_csrf_token(context["request"])
-    return Markup(f'<input type="hidden" name="{CSRF_FIELD_NAME}" value="{escape(token)}">')
-
-
-@pass_context
-def csrf_token(context) -> str:
-    return get_csrf_token(context["request"])

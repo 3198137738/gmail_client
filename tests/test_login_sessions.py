@@ -7,7 +7,7 @@ from sqlalchemy import delete, select
 from app.database import session_scope
 from app.models import AppSetting, AuditLog, LoginSession
 from app.services import audit, login_sessions
-from tests.helpers import csrf_token, login
+from tests.helpers import api_post, csrf_token, login
 
 
 def _new_client(app) -> TestClient:
@@ -20,7 +20,7 @@ def _events() -> list[str]:
 
 
 def _logged_in(c) -> bool:
-    return c.get("/messages/", follow_redirects=False).status_code == 200
+    return c.get("/api/messages").status_code == 200
 
 
 def test_login_creates_session_and_audit(client):
@@ -28,13 +28,14 @@ def test_login_creates_session_and_audit(client):
     login(client)
     assert _logged_in(client)
     assert "login_success" in _events()[before:]
-    page = client.get("/accounts/security").text
-    assert "登录设备" in page and "本机" in page
+    sessions = client.get("/api/security").json()["sessions"]
+    assert sum(1 for s in sessions if s["is_current"]) == 1
 
 
 def test_failed_login_is_audited(client):
-    token = csrf_token(client, "/login")
-    client.post("/login", data={"password": "wrong", "csrf_token": token}, follow_redirects=False)
+    token = csrf_token(client)
+    resp = api_post(client, "/api/login", token, {"password": "wrong"})
+    assert resp.status_code == 400
     assert _events()[-1] == "login_failed"
     from app.auth import clear_failed_logins
 
@@ -45,9 +46,8 @@ def test_revoke_others_keeps_current(app):
     with _new_client(app) as a, _new_client(app) as b:
         login(a)
         token_b = login(b)
-        resp = b.post("/accounts/security/sessions/revoke-others", data={"csrf_token": token_b},
-                      follow_redirects=False)
-        assert resp.status_code == 303
+        resp = api_post(b, "/api/security/sessions/revoke-others", token_b)
+        assert resp.status_code == 200
         assert not _logged_in(a)
         assert _logged_in(b)
 
@@ -56,9 +56,8 @@ def test_revoke_all_logs_out_everyone(app):
     with _new_client(app) as a, _new_client(app) as b:
         login(a)
         token_b = login(b)
-        resp = b.post("/accounts/security/sessions/revoke-all", data={"csrf_token": token_b},
-                      follow_redirects=False)
-        assert "/login" in resp.headers["location"]
+        resp = api_post(b, "/api/security/sessions/revoke-all", token_b)
+        assert resp.json()["logged_out"] is True
         assert not _logged_in(a)
         assert not _logged_in(b)
 
@@ -73,15 +72,24 @@ def test_revoke_single_device(app):
         login(a)
         session_a = _newest_session_id()
         token_b = login(b)
-        b.post(f"/accounts/security/sessions/{session_a}/revoke", data={"csrf_token": token_b})
+        resp = api_post(b, f"/api/security/sessions/{session_a}/revoke", token_b)
+        assert resp.json()["logged_out"] is False
         assert not _logged_in(a)
         assert _logged_in(b)
+
+
+def test_revoke_current_device_logs_out(client):
+    token = login(client)
+    current = next(s for s in client.get("/api/security").json()["sessions"] if s["is_current"])
+    resp = api_post(client, f"/api/security/sessions/{current['id']}/revoke", token)
+    assert resp.json()["logged_out"] is True
+    assert not _logged_in(client)
 
 
 def test_logout_revokes_server_session(client):
     token = login(client)
     active_before = len(login_sessions.list_active())
-    client.post("/logout", data={"csrf_token": token}, follow_redirects=False)
+    api_post(client, "/api/logout", token)
     assert len(login_sessions.list_active()) == active_before - 1
     assert not _logged_in(client)
 
@@ -121,9 +129,11 @@ def test_new_ip_alert_only_first_time(monkeypatch):
 def test_audit_page_lists_events(client):
     login(client)
     audit.record("mail_deleted", "「<script>x</script>」", ip="198.51.100.1")
-    page = client.get("/accounts/security/audit").text
-    assert "删除邮件" in page and "198.51.100.1" in page
-    assert "<script>x</script>" not in page   # 详情被转义
+    rows = client.get("/api/security/audit").json()["rows"]
+    row = next(r for r in rows if r["ip_address"] == "198.51.100.1")
+    assert row["event_label"] == "删除邮件"
+    # 详情原样返回，由前端按文本显示（不作为 HTML 插入）
+    assert row["detail"] == "「<script>x</script>」"
 
 
 def test_describe_user_agent():

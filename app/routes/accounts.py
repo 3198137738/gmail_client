@@ -1,16 +1,21 @@
-"""Routes for managing Gmail accounts (CRUD + enable/disable)."""
+"""设置相关接口：邮箱账号（增删改、启停、通知）、安全（两步验证、登录设备、IP 黑名单、备份）、审计日志。
+
+用 Google 账号授权添加（OAuth2）需要整页跳转到 Google，``/accounts/oauth/*`` 仍是普通页面地址。
+"""
 from __future__ import annotations
 
 import logging
 import re
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from .. import serializers as ser
 from ..config import TELEGRAM_CHAT_ID, TELEGRAM_NOTIFY_SENT
 from ..crypto import decrypt_password, encrypt_password
 from ..database import get_db
@@ -18,16 +23,18 @@ from ..models import Account, Message, SyncState
 from .. import auth as web_auth
 from ..auth import current_session_token
 from ..config import BACKUP_PUBLIC_KEY
+from ..navigation import LABEL_COLORS
 from ..services import audit, backup, google_oauth, login_sessions, telegram_service
 from ..services.idle_service import reconcile_idle
 from ..services.background import submit_bg
 from ..services.imap_backfill import is_backfilling, sync_then_backfill
 from ..services.imap_client import IMAPSyncError, is_account_busy, verify_credentials
-from ..templating import templates
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/accounts", tags=["accounts"])
+router = APIRouter(prefix="/api", tags=["accounts"])
+# OAuth 授权需要整页跳转，不是 JSON 接口
+oauth_router = APIRouter(prefix="/accounts/oauth", tags=["accounts"])
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -71,7 +78,18 @@ def _parse_account_line(line: str) -> Optional[tuple[str, str, Optional[str]]]:
     return email, password, display
 
 
-@router.get("/", response_class=HTMLResponse, name="accounts.list")
+def _get_account(db: Session, account_id: int) -> Account:
+    account = db.get(Account, account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return account
+
+
+# ---- 设置 › 账号 -------------------------------------------------------------
+_ACCOUNTS_FLASH_KEY = "accounts_flash"
+
+
+@router.get("/accounts", name="accounts.list")
 def list_accounts(request: Request, db: Session = Depends(get_db)):
     accounts = db.execute(select(Account).order_by(Account.email.asc())).scalars().all()
     states_by_account: dict[int, list[SyncState]] = {}
@@ -80,72 +98,80 @@ def list_accounts(request: Request, db: Session = Depends(get_db)):
             select(SyncState).where(SyncState.account_id.in_([a.id for a in accounts]))
         ).scalars().all()
         for st in states:
-            states_by_account.setdefault(st.account_id, []).append(st)
+            states_by_account.setdefault(int(st.account_id), []).append(st)
 
-    busy = {int(a.id): is_account_busy(int(a.id)) for a in accounts}
-    backfilling = {int(a.id): is_backfilling(int(a.id)) for a in accounts}
     message_counts = dict(
         db.execute(
             select(Message.account_id, func.count(Message.id)).group_by(Message.account_id)
         ).all()
     )
 
-    session_flash = request.session.pop(_ACCOUNTS_FLASH_KEY, None)
-    flash = session_flash[0] if session_flash else request.query_params.get("flash")
-    flash_level = session_flash[1] if session_flash else request.query_params.get("level", "info")
-    oauth_accounts = set()
-    for a in accounts:
+    def is_oauth(account: Account) -> bool:
         try:
-            if google_oauth.is_oauth_secret(decrypt_password(a.encrypted_password)):
-                oauth_accounts.add(int(a.id))
+            return google_oauth.is_oauth_secret(decrypt_password(account.encrypted_password))
         except ValueError:
-            pass
+            return False
 
-    return templates.TemplateResponse(
-        request,
-        "accounts.html",
-        {
-            "accounts": accounts,
-            "states_by_account": states_by_account,
-            "busy": busy,
-            "backfilling": backfilling,
-            "message_counts": message_counts,
-            "flash": flash,
-            "flash_level": flash_level if flash_level in ("info", "success", "warning", "danger") else "info",
-            "telegram_configured": telegram_service.is_configured(),
-            "telegram_enabled": telegram_service.is_enabled(),
-            "telegram_chat_id": TELEGRAM_CHAT_ID,
-            "telegram_notify_sent": TELEGRAM_NOTIFY_SENT,
-            "oauth_configured": google_oauth.is_configured(),
-            "oauth_accounts": oauth_accounts,
+    # Google 授权回调后跳回设置页时的结果提示
+    flash = request.session.pop(_ACCOUNTS_FLASH_KEY, None)
+    return {
+        "accounts": [
+            {
+                "id": int(a.id),
+                "email": a.email,
+                "display_name": a.display_name or "",
+                "color": LABEL_COLORS[(int(a.id) - 1) % len(LABEL_COLORS)],
+                "enabled": bool(a.enabled),
+                "notify_enabled": bool(a.notify_enabled),
+                "oauth": is_oauth(a),
+                "busy": is_account_busy(int(a.id)),
+                "backfilling": is_backfilling(int(a.id)),
+                "message_count": int(message_counts.get(a.id, 0)),
+                "sync_states": [
+                    {
+                        "folder": st.folder,
+                        "last_synced_at": ser.iso_utc(st.last_synced_at),
+                        "last_error": st.last_error,
+                    }
+                    for st in states_by_account.get(int(a.id), [])
+                ],
+            }
+            for a in accounts
+        ],
+        "telegram": {
+            "configured": telegram_service.is_configured(),
+            "enabled": telegram_service.is_enabled(),
+            "chat_id": TELEGRAM_CHAT_ID,
+            "notify_sent": TELEGRAM_NOTIFY_SENT,
         },
-    )
+        "oauth_configured": google_oauth.is_configured(),
+        "flash": {"message": flash[0], "level": flash[1]} if flash else None,
+    }
 
 
-@router.post("/", name="accounts.create")
-def create_account(
-    request: Request,
-    email: str = Form(...),
-    display_name: Optional[str] = Form(None),
-    password: str = Form(...),
-    verify: Optional[str] = Form(None),
-    db: Session = Depends(get_db),
-):
-    email_norm = _validate_email(email)
-    if not password or len(password.strip()) < 8:
+class AccountCreateBody(BaseModel):
+    email: str
+    display_name: Optional[str] = None
+    password: str
+    verify: bool = False
+
+
+@router.post("/accounts", name="accounts.create")
+def create_account(request: Request, body: AccountCreateBody, db: Session = Depends(get_db)):
+    email_norm = _validate_email(body.email)
+    password_clean = (body.password or "").strip()
+    if len(password_clean) < 8:
         raise HTTPException(status_code=400, detail="App password is required")
 
-    password_clean = password.strip()
-
-    if verify == "on":
+    if body.verify:
         try:
             verify_credentials(email_norm, password_clean)
         except IMAPSyncError as exc:
-            raise HTTPException(status_code=400, detail=f"Verification failed: {exc}") from exc
+            raise HTTPException(status_code=400, detail=f"验证失败：{exc}") from exc
 
     account = Account(
         email=email_norm,
-        display_name=(display_name or "").strip() or None,
+        display_name=(body.display_name or "").strip() or None,
         encrypted_password=encrypt_password(password_clean),
         enabled=True,
     )
@@ -159,30 +185,27 @@ def create_account(
     reconcile_idle()
     # 首次同步后立即开始回填全部历史邮件
     submit_bg(sync_then_backfill, int(account.id))
-    return RedirectResponse(url=request.url_for("accounts.list"), status_code=303)
+    return {"ok": True, "id": int(account.id)}
 
 
-@router.post("/batch", name="accounts.batch_create")
-def batch_create_accounts(
-    request: Request,
-    accounts_text: str = Form(...),
-    verify: Optional[str] = Form(None),
-    db: Session = Depends(get_db),
-):
-    """Add many accounts at once from a textarea.
+class BatchCreateBody(BaseModel):
+    accounts_text: str
+    verify: bool = False
 
-    Each line is ``email<sep>password[<sep>display_name]`` where ``<sep>`` may
-    be ``----``, tab, comma, semicolon, pipe, colon or whitespace. Blank lines
-    and lines starting with ``#`` are ignored. Errors on individual lines are
-    collected and reported instead of aborting the whole batch.
+
+@router.post("/accounts/batch", name="accounts.batch_create")
+def batch_create_accounts(request: Request, body: BatchCreateBody, db: Session = Depends(get_db)):
+    """一次添加多个账号。
+
+    每行 ``邮箱<分隔符>应用密码[<分隔符>显示名]``，分隔符可以是 ``----``、制表符、逗号、
+    分号、竖线、冒号或空白。空行和以 ``#`` 开头的行忽略。单行出错只记下错误，不影响其他行。
     """
-    do_verify = verify == "on"
     added = 0
     skipped_dup = 0
     errors: list[str] = []
     seen: set[str] = set()
 
-    for lineno, raw in enumerate((accounts_text or "").splitlines(), start=1):
+    for lineno, raw in enumerate((body.accounts_text or "").splitlines(), start=1):
         try:
             parsed = _parse_account_line(raw)
         except ValueError as exc:
@@ -208,7 +231,7 @@ def batch_create_accounts(
             continue
         seen.add(email_norm)
 
-        if do_verify:
+        if body.verify:
             try:
                 verify_credentials(email_norm, password_clean)
             except IMAPSyncError as exc:
@@ -242,202 +265,180 @@ def batch_create_accounts(
         summary_parts.append(f"失败 {len(errors)} 个: " + "; ".join(errors[:10]))
         if len(errors) > 10:
             summary_parts.append(f"…等共 {len(errors)} 个错误")
-    flash = "，".join(summary_parts)
-    level = "danger" if errors else ("warning" if skipped_dup else "success")
-
-    logger.info(
-        "batch-create added=%s skipped_dup=%s errors=%s", added, skipped_dup, len(errors)
-    )
-    return RedirectResponse(
-        url=request.url_for("accounts.list").include_query_params(flash=flash, level=level),
-        status_code=303,
-    )
+    level = "error" if errors else ("warning" if skipped_dup else "success")
+    logger.info("batch-create added=%s skipped_dup=%s errors=%s", added, skipped_dup, len(errors))
+    return {"ok": not errors, "added": added, "message": "，".join(summary_parts), "level": level}
 
 
-@router.post("/batch-delete", name="accounts.batch_delete")
-def batch_delete_accounts(
-    request: Request,
-    account_ids: list[int] = Form(default=[]),
-    db: Session = Depends(get_db),
-):
-    """Delete multiple accounts (and their cascaded data) in one request."""
-    ids = sorted({int(aid) for aid in account_ids if aid})
+class IdsBody(BaseModel):
+    ids: list[int] = []
+
+
+@router.post("/accounts/batch-delete", name="accounts.batch_delete")
+def batch_delete_accounts(request: Request, body: IdsBody, db: Session = Depends(get_db)):
+    """一次删除多个账号（及其本地邮件）。"""
+    ids = sorted({int(aid) for aid in body.ids if aid})
     deleted = 0
     if ids:
-        accounts = db.execute(select(Account).where(Account.id.in_(ids))).scalars().all()
-        for account in accounts:
+        for account in db.execute(select(Account).where(Account.id.in_(ids))).scalars().all():
             audit.record_request(request, "account_deleted", account.email)
             db.delete(account)
             deleted += 1
         db.commit()
         if deleted:
             reconcile_idle()
-
     logger.info("batch-delete accounts selected=%s deleted=%s", len(ids), deleted)
-    flash = f"已删除 {deleted} 个账号及其本地邮件" if deleted else "未选择任何账号"
-    level = "success" if deleted else "warning"
-    return RedirectResponse(
-        url=request.url_for("accounts.list").include_query_params(flash=flash, level=level),
-        status_code=303,
-    )
+    return {"ok": True, "deleted": deleted}
 
 
-@router.post("/telegram-test", name="accounts.telegram_test")
-def telegram_test(request: Request):
-    """Send a test Telegram message to validate the bot configuration."""
+@router.post("/accounts/telegram-test", name="accounts.telegram_test")
+def telegram_test():
+    """发一条 Telegram 测试消息，检查机器人配置。"""
     if not telegram_service.is_configured():
-        flash = "Telegram 未配置"
-        level = "warning"
-    else:
-        ok, detail = telegram_service.send_test_message()
-        flash = "Telegram 测试消息已发送，请查收" if ok else f"Telegram 发送失败：{detail}"
-        level = "success" if ok else "danger"
-    logger.info("telegram-test ok=%s", level == "success")
-    return RedirectResponse(
-        url=request.url_for("accounts.list").include_query_params(flash=flash, level=level),
-        status_code=303,
-    )
+        return {"ok": False, "message": "Telegram 未配置"}
+    ok, detail = telegram_service.send_test_message()
+    logger.info("telegram-test ok=%s", ok)
+    return {"ok": ok, "message": "Telegram 测试消息已发送，请查收" if ok else f"Telegram 发送失败：{detail}"}
 
 
-@router.post("/{account_id}/update", name="accounts.update")
-def update_account(
-    request: Request,
-    account_id: int,
-    display_name: Optional[str] = Form(None),
-    password: Optional[str] = Form(None),
-    db: Session = Depends(get_db),
-):
-    account = db.get(Account, account_id)
-    if account is None:
-        raise HTTPException(status_code=404, detail="Account not found")
-    if display_name is not None:
-        account.display_name = display_name.strip() or None
-    if password:
-        cleaned = password.strip()
+class AccountUpdateBody(BaseModel):
+    display_name: Optional[str] = None
+    password: Optional[str] = None
+
+
+@router.post("/accounts/{account_id}/update", name="accounts.update")
+def update_account(request: Request, account_id: int, body: AccountUpdateBody, db: Session = Depends(get_db)):
+    account = _get_account(db, account_id)
+    if body.display_name is not None:
+        account.display_name = body.display_name.strip() or None
+    if body.password:
+        cleaned = body.password.strip()
         if len(cleaned) < 8:
             raise HTTPException(status_code=400, detail="App password is too short")
         account.encrypted_password = encrypt_password(cleaned)
-    changes = [c for c, on in (("显示名称", display_name is not None), ("应用专用密码", bool(password))) if on]
+    changes = [c for c, on in (("显示名称", body.display_name is not None), ("应用专用密码", bool(body.password))) if on]
     audit.record_request(request, "account_updated", f"{account.email}：{'、'.join(changes) or '无变化'}")
     db.commit()
     reconcile_idle()
-    return RedirectResponse(url=request.url_for("accounts.list"), status_code=303)
+    return {"ok": True}
 
 
-@router.post("/{account_id}/toggle", name="accounts.toggle")
+@router.post("/accounts/{account_id}/toggle", name="accounts.toggle")
 def toggle_account(request: Request, account_id: int, db: Session = Depends(get_db)):
-    account = db.get(Account, account_id)
-    if account is None:
-        raise HTTPException(status_code=404, detail="Account not found")
+    account = _get_account(db, account_id)
     account.enabled = not account.enabled
     audit.record_request(request, "account_enabled" if account.enabled else "account_disabled", account.email)
     db.commit()
     reconcile_idle()
-    return RedirectResponse(url=request.url_for("accounts.list"), status_code=303)
+    return {"ok": True, "enabled": bool(account.enabled)}
 
 
-@router.post("/{account_id}/toggle-notify", name="accounts.toggle_notify")
-def toggle_notify(request: Request, account_id: int, db: Session = Depends(get_db)):
-    account = db.get(Account, account_id)
-    if account is None:
-        raise HTTPException(status_code=404, detail="Account not found")
+@router.post("/accounts/{account_id}/toggle-notify", name="accounts.toggle_notify")
+def toggle_notify(account_id: int, db: Session = Depends(get_db)):
+    account = _get_account(db, account_id)
     account.notify_enabled = not bool(account.notify_enabled)
     db.commit()
-    return RedirectResponse(url=request.url_for("accounts.list"), status_code=303)
+    return {"ok": True, "notify_enabled": bool(account.notify_enabled)}
 
 
-@router.post("/{account_id}/delete", name="accounts.delete")
+@router.post("/accounts/{account_id}/delete", name="accounts.delete")
 def delete_account(request: Request, account_id: int, db: Session = Depends(get_db)):
-    account = db.get(Account, account_id)
-    if account is None:
-        raise HTTPException(status_code=404, detail="Account not found")
+    account = _get_account(db, account_id)
     audit.record_request(request, "account_deleted", account.email)
     db.delete(account)
     db.commit()
     reconcile_idle()
-    return RedirectResponse(url=request.url_for("accounts.list"), status_code=303)
+    return {"ok": True}
 
 
 # ---- 设置 › 安全：两步验证 ---------------------------------------------------
 _SETUP_SECRET_KEY = "2fa_setup_secret"
-_SECURITY_FLASH_KEY = "security_flash"
 
 
-def _security_redirect(
-    request: Request, message: Optional[str] = None, level: str = "ok", *, audit_page: Optional[int] = None
-) -> RedirectResponse:
-    # 提示放在会话里而不是 URL 参数，避免被人构造成钓鱼链接
-    if message:
-        request.session[_SECURITY_FLASH_KEY] = [message, level]
-    if audit_page:
-        url = request.url_for("accounts.audit_log").include_query_params(page=max(1, audit_page))
-    else:
-        url = request.url_for("accounts.security")
-    return RedirectResponse(url=str(url), status_code=303)
+def _result(ok: bool, message: str, status_code: int = 400) -> dict:
+    """操作结果。失败时返回 4xx，前端统一按错误提示显示 detail。"""
+    if not ok:
+        raise HTTPException(status_code=status_code, detail=message)
+    return {"ok": True, "message": message}
 
 
-@router.get("/security", response_class=HTMLResponse, name="accounts.security")
+@router.get("/security", name="accounts.security")
 def security(request: Request):
     from .. import totp
     from ..config import WEB_AUTH_2FA_RESET, WEB_AUTH_ENABLED
     from ..services import two_factor
 
-    flash = request.session.pop(_SECURITY_FLASH_KEY, None)
     setup_secret = request.session.get(_SETUP_SECRET_KEY)
-    return templates.TemplateResponse(
-        request,
-        "security.html",
-        {
+    status = backup.last_status()
+    return {
+        "two_factor": {
             "enabled": two_factor.is_enabled(),
-            "auth_enabled": WEB_AUTH_ENABLED,
             "reset_active": WEB_AUTH_2FA_RESET,
             "setup_secret": totp.format_secret(setup_secret) if setup_secret else None,
             "setup_uri": totp.provisioning_uri(setup_secret, request.url.hostname or "mail") if setup_secret else None,
-            "sessions": login_sessions.list_active(current_session_token(request)),
-            "current_ip": web_auth.get_client_ip(request),
-            "banned_ips": web_auth.list_banned_ips(),
-            "backup_encrypted": bool(BACKUP_PUBLIC_KEY),
-            "backup_targets": backup.upload_targets(),
-            "backup_status": backup.last_status(),
-            "flash": flash[0] if flash else None,
-            "flash_level": flash[1] if flash else "ok",
         },
-    )
+        "auth_enabled": WEB_AUTH_ENABLED,
+        "sessions": [
+            {
+                "id": s.id,
+                "device": s.device,
+                "ip_address": s.ip_address,
+                "created_at": ser.iso_utc(s.created_at),
+                "last_seen_at": ser.iso_utc(s.last_seen_at),
+                "is_current": s.is_current,
+            }
+            for s in login_sessions.list_active(current_session_token(request))
+        ],
+        "current_ip": web_auth.get_client_ip(request),
+        "banned_ips": [
+            {"ip_address": b.ip_address, "since": ser.iso_utc(b.since), "from_env": b.from_env}
+            for b in web_auth.list_banned_ips()
+        ],
+        "backup": {
+            "encrypted": bool(BACKUP_PUBLIC_KEY),
+            "targets": backup.upload_targets(),
+            "status": status,
+        },
+    }
 
 
-@router.post("/security/setup", name="accounts.security_setup")
+@router.post("/security/2fa/setup", name="accounts.security_setup")
 def security_setup(request: Request):
     """生成新的密钥（暂存在会话中），用户在认证器中添加并输入验证码确认后才生效。"""
     from .. import totp
 
     request.session[_SETUP_SECRET_KEY] = totp.generate_secret()
-    return _security_redirect(request)
+    return {"ok": True}
 
 
-@router.post("/security/enable", name="accounts.security_enable")
-def security_enable(request: Request, code: str = Form("")):
+class CodeBody(BaseModel):
+    code: str = ""
+
+
+@router.post("/security/2fa/enable", name="accounts.security_enable")
+def security_enable(request: Request, body: CodeBody):
     from .. import totp
     from ..services import two_factor
 
     secret = request.session.get(_SETUP_SECRET_KEY)
     if not secret:
-        return _security_redirect(request, "密钥已失效", "error")
-    if totp.verify(secret, code) is None:
-        return _security_redirect(request, "验证码不正确", "error")
+        return _result(False, "密钥已失效")
+    if totp.verify(secret, body.code) is None:
+        return _result(False, "验证码不正确")
     two_factor.enable(secret)
     audit.record_request(request, "2fa_enabled")
     request.session.pop(_SETUP_SECRET_KEY, None)
-    return _security_redirect(request, "两步验证已开启")
+    return _result(True, "两步验证已开启")
 
 
-@router.post("/security/cancel", name="accounts.security_cancel")
+@router.post("/security/2fa/cancel", name="accounts.security_cancel")
 def security_cancel(request: Request):
     request.session.pop(_SETUP_SECRET_KEY, None)
-    return _security_redirect(request)
+    return {"ok": True}
 
 
-@router.post("/security/disable", name="accounts.security_disable")
-def security_disable(request: Request, code: str = Form("")):
+@router.post("/security/2fa/disable", name="accounts.security_disable")
+def security_disable(request: Request, body: CodeBody):
     """关闭两步验证需要输入当前验证码，防止他人用一个未退出的会话把它关掉。"""
     from ..services import two_factor
     from .auth import register_two_factor_failure
@@ -445,16 +446,16 @@ def security_disable(request: Request, code: str = Form("")):
     # 与登录第二步一样计入该 IP 的失败次数：拿到一个未退出会话的人也不能靠反复猜验证码关掉两步验证
     ip_address = web_auth.get_client_ip(request)
     if web_auth.get_login_throttle_status(ip_address).is_blocked:
-        return _security_redirect(request, "验证码错误次数过多，请稍后再试", "error")
-    if not two_factor.verify_and_consume(code):
+        return _result(False, "验证码错误次数过多，请稍后再试", 429)
+    if not two_factor.verify_and_consume(body.code):
         throttle = register_two_factor_failure(ip_address, "关闭两步验证")
         if throttle.is_blocked:
-            return _security_redirect(request, "验证码错误次数过多，请稍后再试", "error")
-        return _security_redirect(request, f"验证码不正确，还可尝试 {throttle.remaining_attempts} 次", "error")
+            return _result(False, "验证码错误次数过多，请稍后再试", 429)
+        return _result(False, f"验证码不正确，还可尝试 {throttle.remaining_attempts} 次")
     web_auth.clear_failed_logins(ip_address)
     two_factor.disable()
     audit.record_request(request, "2fa_disabled")
-    return _security_redirect(request, "两步验证已关闭")
+    return _result(True, "两步验证已关闭")
 
 
 # ---- 设置 › 安全：登录设备 ---------------------------------------------------
@@ -465,18 +466,18 @@ def session_revoke(request: Request, session_id: int):
         for s in login_sessions.list_active(current_session_token(request))
     )
     if not login_sessions.revoke(session_id):
-        return _security_redirect(request, "该设备已登出", "error")
+        return _result(False, "该设备已登出")
     audit.record_request(request, "session_revoked", "本机" if is_current else f"会话 #{session_id}")
     if is_current:
-        return RedirectResponse(url=request.url_for("auth.login_form"), status_code=303)
-    return _security_redirect(request, "已登出该设备")
+        request.session.clear()
+    return {"ok": True, "message": "已登出该设备", "logged_out": is_current}
 
 
 @router.post("/security/sessions/revoke-others", name="accounts.sessions_revoke_others")
 def sessions_revoke_others(request: Request):
     count = login_sessions.revoke_all(except_token=current_session_token(request))
     audit.record_request(request, "sessions_revoked_all", f"其他 {count} 台设备")
-    return _security_redirect(request, f"已登出其他 {count} 台设备")
+    return _result(True, f"已登出其他 {count} 台设备")
 
 
 @router.post("/security/sessions/revoke-all", name="accounts.sessions_revoke_all")
@@ -484,78 +485,86 @@ def sessions_revoke_all(request: Request):
     count = login_sessions.revoke_all()
     audit.record_request(request, "sessions_revoked_all", f"全部 {count} 台设备（含本机）")
     request.session.clear()
-    return RedirectResponse(url=request.url_for("auth.login_form"), status_code=303)
+    return {"ok": True, "logged_out": True}
 
 
 # ---- 设置 › 安全：IP 黑名单 ---------------------------------------------------
+class IpBody(BaseModel):
+    ip: str = ""
+
+
 @router.post("/security/ip-ban", name="accounts.ip_ban")
-def ip_ban(request: Request, ip: str = Form(""), audit_page: Optional[int] = Form(None)):
+def ip_ban(request: Request, body: IpBody):
     """一键永久拉黑 IP：之后该 IP 访问任何页面都返回 403，已登录的设备立即登出。"""
-    ip_norm = web_auth.normalize_ip(ip)
+    ip_norm = web_auth.normalize_ip(body.ip)
     if not ip_norm:
-        return _security_redirect(request, "IP 地址格式不正确", "error", audit_page=audit_page)
+        return _result(False, "IP 地址格式不正确")
     if ip_norm == web_auth.get_client_ip(request):
-        return _security_redirect(request, "不能拉黑自己当前的 IP", "error", audit_page=audit_page)
+        return _result(False, "不能拉黑自己当前的 IP")
     if not web_auth.ban_ip(ip_norm):
-        return _security_redirect(request, f"{ip_norm} 已在黑名单中", "error", audit_page=audit_page)
+        return _result(False, f"{ip_norm} 已在黑名单中")
     audit.record_request(request, "ip_banned", ip_norm)
-    return _security_redirect(request, f"已永久拉黑 {ip_norm}", audit_page=audit_page)
+    return _result(True, f"已永久拉黑 {ip_norm}")
 
 
 @router.post("/security/ip-unban", name="accounts.ip_unban")
-def ip_unban(request: Request, ip: str = Form("")):
-    ip_norm = web_auth.normalize_ip(ip)
+def ip_unban(request: Request, body: IpBody):
+    ip_norm = web_auth.normalize_ip(body.ip)
     if not ip_norm or not web_auth.unban_ip(ip_norm):
-        return _security_redirect(request, "该 IP 不在黑名单中", "error")
+        return _result(False, "该 IP 不在黑名单中")
     audit.record_request(request, "ip_unbanned", ip_norm)
-    return _security_redirect(request, f"已解除 {ip_norm} 的封禁")
+    return _result(True, f"已解除 {ip_norm} 的封禁")
 
 
 # ---- 设置 › 安全：备份 -------------------------------------------------------
 @router.post("/security/backup", name="accounts.backup_now")
-def backup_now(request: Request):
+def backup_now():
     submit_bg(backup.safe_run_backup)
-    return _security_redirect(request, "已开始备份，稍后刷新本页查看结果")
+    return _result(True, "已开始备份，稍后刷新查看结果")
 
 
 # ---- 设置 › 审计日志 ---------------------------------------------------------
 _AUDIT_PAGE_SIZE = 50
 
 
-@router.get("/security/audit", response_class=HTMLResponse, name="accounts.audit_log")
+@router.get("/security/audit", name="accounts.audit_log")
 def audit_log(request: Request, page: int = 1):
     page = max(1, page)
-    flash = request.session.pop(_SECURITY_FLASH_KEY, None)
     rows, total = audit.recent(limit=_AUDIT_PAGE_SIZE, offset=(page - 1) * _AUDIT_PAGE_SIZE)
-    return templates.TemplateResponse(
-        request,
-        "audit_log.html",
-        {
-            "rows": rows,
-            "total": total,
-            "page": page,
-            "has_next": page * _AUDIT_PAGE_SIZE < total,
-            "labels": audit.EVENT_LABELS,
-            "warn_events": audit.WARN_EVENTS,
-            "source_labels": audit.SOURCE_LABELS,
-            "current_ip": web_auth.get_client_ip(request),
-            "banned_ips": {b.ip_address for b in web_auth.list_banned_ips()},
-            "flash": flash[0] if flash else None,
-            "flash_level": flash[1] if flash else "ok",
-        },
-    )
+    banned = {b.ip_address for b in web_auth.list_banned_ips()}
+    return {
+        "rows": [
+            {
+                "id": int(r.id),
+                "created_at": ser.iso_utc(r.created_at),
+                "event": r.event,
+                "event_label": audit.EVENT_LABELS.get(r.event, r.event),
+                "warn": r.event in audit.WARN_EVENTS,
+                "source": audit.SOURCE_LABELS.get(r.source, r.source),
+                "ip_address": r.ip_address or "",
+                "ip_banned": bool(r.ip_address) and r.ip_address in banned,
+                "detail": r.detail or "",
+            }
+            for r in rows
+        ],
+        "total": total,
+        "page": page,
+        "page_size": _AUDIT_PAGE_SIZE,
+        "has_next": page * _AUDIT_PAGE_SIZE < total,
+        "current_ip": web_auth.get_client_ip(request),
+    }
 
 
 # ---- 用 Google 账号授权添加（OAuth2） ------------------------------------------
-_ACCOUNTS_FLASH_KEY = "accounts_flash"
 _OAUTH_STATE_KEY = "oauth_state"
 _OAUTH_VERIFIER_KEY = "oauth_verifier"
+_ACCOUNTS_PAGE = "/accounts/"
 
 
 def _accounts_redirect(request: Request, message: str, level: str = "success") -> RedirectResponse:
-    # 提示放在会话里而不是 URL 参数，避免被人构造成钓鱼链接
+    # 提示放在会话里而不是 URL 参数，避免被人构造成钓鱼链接；设置页加载时取出显示
     request.session[_ACCOUNTS_FLASH_KEY] = [message, level]
-    return RedirectResponse(url=request.url_for("accounts.list"), status_code=303)
+    return RedirectResponse(url=_ACCOUNTS_PAGE, status_code=303)
 
 
 def _oauth_redirect_uri(request: Request) -> str:
@@ -565,10 +574,10 @@ def _oauth_redirect_uri(request: Request) -> str:
 
 # 用 GET 链接而不是表单：页面 CSP 的 form-action 'self' 会拦截「提交表单后重定向到 Google」；
 # 发起授权只是在会话中记下随机 state，回调时校验，无 CSRF 风险。
-@router.get("/oauth/start", name="accounts.oauth_start")
+@oauth_router.get("/start", name="accounts.oauth_start")
 def oauth_start(request: Request, login_hint: Optional[str] = None):
     if not google_oauth.is_configured():
-        return _accounts_redirect(request, "未配置 Google OAuth 客户端", "danger")
+        return _accounts_redirect(request, "未配置 Google OAuth 客户端", "error")
     import secrets as _secrets
 
     state = _secrets.token_urlsafe(32)
@@ -581,7 +590,7 @@ def oauth_start(request: Request, login_hint: Optional[str] = None):
     return RedirectResponse(url=url, status_code=303)
 
 
-@router.get("/oauth/callback", name="accounts.oauth_callback")
+@oauth_router.get("/callback", name="accounts.oauth_callback")
 def oauth_callback(
     request: Request,
     code: Optional[str] = None,
@@ -597,12 +606,12 @@ def oauth_callback(
         return _accounts_redirect(request, f"Google 授权未完成：{error}", "warning")
     if not expected or not state or not verifier or not _secrets.compare_digest(expected, state):
         # state 不匹配：可能是伪造的回调（CSRF），或者授权页面停留太久会话已变
-        return _accounts_redirect(request, "授权请求已失效", "danger")
+        return _accounts_redirect(request, "授权请求已失效", "error")
     try:
         email, refresh_token = google_oauth.exchange_code(code or "", _oauth_redirect_uri(request), verifier)
     except google_oauth.OAuthError as exc:
         logger.warning("OAuth code exchange failed: %s", exc)
-        return _accounts_redirect(request, f"授权失败：{exc}", "danger")
+        return _accounts_redirect(request, f"授权失败：{exc}", "error")
 
     secret = encrypt_password(google_oauth.make_secret(refresh_token))
     account = db.execute(select(Account).where(func.lower(Account.email) == email)).scalar_one_or_none()
@@ -622,4 +631,3 @@ def oauth_callback(
     reconcile_idle()   # 凭据变化：IDLE 连接用新的方式重连
     submit_bg(sync_then_backfill, int(account.id))
     return _accounts_redirect(request, message)
-

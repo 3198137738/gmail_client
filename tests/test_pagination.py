@@ -1,7 +1,6 @@
 """游标分页：结果与 OFFSET 分页一致（含日期为空、日期相同的情况）。"""
 from __future__ import annotations
 
-import re
 from datetime import datetime, timedelta
 
 from sqlalchemy import select
@@ -79,9 +78,8 @@ def test_cursor_decode_rejects_garbage():
     assert Cursor.decode("~5") == Cursor(date=None, id=5)
 
 
-def _subjects(html: str) -> list[str]:
-    # 只取主题链接里的文字：整页搜索会误中随机 CSRF token 里的「m+三位数字」
-    return re.findall(r'class="rcm-subject-link[^"]*" href="[^"]*">(m\d{3})<', html)
+def _subjects(data: dict) -> list[str]:
+    return [m["subject"] for m in data["items"]]
 
 
 def test_list_endpoint_pages(client):
@@ -89,17 +87,21 @@ def test_list_endpoint_pages(client):
     acc = _seed(60)
     params = {"kind": "inbox", "account_id": acc, "page_size": 25}
 
-    p1 = client.get("/messages/", params=params)
+    p1 = client.get("/api/messages", params=params)
     assert p1.status_code == 200
-    first = _subjects(p1.text)
-    next_link = re.search(r'href="([^"]*page=2[^"]*after=[^"]*)"', p1.text)
-    assert next_link, "下一页链接应带游标"
+    d1 = p1.json()
+    first = _subjects(d1)
+    assert d1["next_cursor"], "下一页应带游标"
 
-    p2 = client.get(next_link.group(1).replace("&amp;", "&"))
-    second = _subjects(p2.text)
+    d2 = client.get("/api/messages", params={**params, "page": 2, "after": d1["next_cursor"]}).json()
+    second = _subjects(d2)
     assert second and not set(first) & set(second)
 
+    # 较新：带第 2 页首封的游标回到上一页
+    d1b = client.get("/api/messages", params={**params, "page": 1, "before": d2["prev_cursor"]}).json()
+    assert _subjects(d1b) == first
+
     # 末页（不带游标）与按页码 OFFSET 的结果一致
-    p3 = client.get("/messages/", params={**params, "page": 3})
-    assert "第 51-60 封，共 60 封" in p3.text
-    assert len(set(_subjects(p3.text))) == 10
+    d3 = client.get("/api/messages", params={**params, "page": 3}).json()
+    assert (d3["first_index"], d3["last_index"], d3["total"]) == (51, 60, 60)
+    assert len(set(_subjects(d3))) == 10

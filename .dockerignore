@@ -29,6 +29,12 @@ Dockerfile
 .dockerignore
 README.md
 
+# 前端：依赖和构建产物在镜像的前端构建阶段重新生成
+# （本机的旧构建产物不能混进镜像，否则旧版本的带哈希文件会一直留在里面）
+node_modules
+frontend/node_modules
+app/static/dist
+
 # 测试
 tests/
 pytest.ini

@@ -1,20 +1,17 @@
 """草稿：自动保存（新建 / 更新 / 清空即删除）、打开继续编辑、发送成功后删除、失败保留。"""
 from __future__ import annotations
 
-import json
 import re
 
 import app.routes.send as send_routes
 from app.database import session_scope
 from app.models import Draft
 from app.services.smtp_service import SendResult, SMTPSendError
-from tests.helpers import create_account, create_message, login
-
-FETCH = {"X-Requested-With": "fetch"}
+from tests.helpers import api_post, create_account, create_message, login
 
 
 def _save(client, token, **fields):
-    return client.post("/compose/draft", data=fields, headers={**FETCH, "X-CSRF-Token": token})
+    return api_post(client, "/api/drafts", token, fields)
 
 
 def _draft(draft_id):
@@ -49,7 +46,7 @@ def test_clearing_everything_deletes_draft(client):
 def test_save_requires_csrf(client):
     login(client)
     acc = create_account()
-    resp = client.post("/compose/draft", data={"account_id": acc, "subject": "x"}, headers=FETCH)
+    resp = client.post("/api/drafts", json={"account_id": acc, "subject": "x"})
     assert resp.status_code == 403
 
 
@@ -59,31 +56,35 @@ def test_open_draft_prefills_compose_and_keeps_reply_context(client):
     original = create_message(acc, subject="原邮件")
     did = _save(client, token, account_id=acc, to="b@example.com", subject="Re: 原邮件",
                 body_text="回复内容", in_reply_to="<orig@example.com>", references="<orig@example.com>",
-                forward_message_id="").json()["id"]
-    page = client.get(f"/compose/?draft={did}").text
-    assert f'name="draft_id" id="gc-draft-id" value="{did}"' in page
-    assert 'value="&lt;orig@example.com&gt;"' in page
-    data = json.loads(re.search(r'id="gc-compose-data">(.*?)</script>', page, re.S).group(1))
-    assert data["to"] == "b@example.com" and data["is_reply"] is True
-    assert data["draft_url"].endswith("/compose/draft")
+                forward_message_id=None).json()["id"]
+    data = client.get("/api/compose", params={"draft": did}).json()
+    pf = data["prefill"]
+    assert pf["draft_id"] == did
+    assert pf["in_reply_to"] == "<orig@example.com>" and pf["references"] == "<orig@example.com>"
+    assert pf["to"] == "b@example.com" and pf["is_reply"] is True
+    assert any(a["id"] == acc for a in data["accounts"])
     assert original  # 仅用于建立回复上下文
 
 
-def test_drafts_page_and_sidebar_count(client):
+def test_drafts_list_and_sidebar_count(client):
     token = login(client)
     acc = create_account()
     _save(client, token, account_id=acc, to="c@example.com", subject="列表里的草稿")
-    page = client.get("/compose/drafts").text
-    assert "列表里的草稿" in page
-    assert re.search(r"草稿</span>\s*<span class=\"gm-nav-count\">\d+</span>", page)
+    items = client.get("/api/drafts").json()["items"]
+    assert any(d["subject"] == "列表里的草稿" for d in items)
+    assert client.get("/api/messages/nav").json()["drafts"] >= 1
 
 
 def test_delete_draft_from_list(client):
     token = login(client)
     acc = create_account()
     did = _save(client, token, account_id=acc, subject="要删的").json()["id"]
-    resp = client.post(f"/compose/draft/{did}/delete", data={"csrf_token": token}, follow_redirects=False)
-    assert resp.status_code == 303 and _draft(did) is None
+    resp = api_post(client, f"/api/drafts/{did}/delete", token)
+    assert resp.status_code == 200 and _draft(did) is None
+
+
+def _send(client, token, **fields):
+    return client.post("/api/compose/send", data=fields, headers={"X-CSRF-Token": token})
 
 
 def test_successful_send_deletes_draft(client, monkeypatch):
@@ -91,10 +92,8 @@ def test_successful_send_deletes_draft(client, monkeypatch):
     acc = create_account()
     did = _save(client, token, account_id=acc, to="d@example.com", subject="要发的").json()["id"]
     monkeypatch.setattr(send_routes, "send_email", lambda **kw: SendResult("<id@example.com>"))
-    client.post("/compose/", data={
-        "account_id": acc, "to": "d@example.com", "subject": "要发的", "body_text": "x",
-        "draft_id": did, "csrf_token": token,
-    }, follow_redirects=False)
+    resp = _send(client, token, account_id=acc, to="d@example.com", subject="要发的", body_text="x", draft_id=did)
+    assert resp.status_code == 200 and resp.json()["status"] == "sent"
     assert _draft(did) is None
 
 
@@ -107,12 +106,9 @@ def test_failed_send_keeps_draft(client, monkeypatch):
         raise SMTPSendError("连接失败")
 
     monkeypatch.setattr(send_routes, "send_email", boom)
-    page = client.post("/compose/", data={
-        "account_id": acc, "to": "e@example.com", "subject": "会失败", "body_text": "x",
-        "draft_id": did, "csrf_token": token,
-    }).text
-    assert _draft(did) is not None
-    assert f'id="gc-draft-id" value="{did}"' in page   # 重新显示的写邮件页继续沿用这个草稿
+    resp = _send(client, token, account_id=acc, to="e@example.com", subject="会失败", body_text="x", draft_id=did)
+    assert resp.status_code == 400 and "连接失败" in resp.json()["detail"]
+    assert _draft(did) is not None   # 前端保留内容并继续沿用这个草稿
 
 
 def test_draft_html_is_sanitized_before_refill(client):
@@ -121,8 +117,7 @@ def test_draft_html_is_sanitized_before_refill(client):
     body = ('<div class="gmail_quote" onmouseover="steal()">hi<script>evil()</script>'
             '<img src="x" onerror="alert(1)"><a href="javascript:alert(1)">l</a></div>')
     did = _save(client, token, account_id=acc, to="a@example.com", body_text="hi", body_html=body).json()["id"]
-    page = client.get(f"/compose/?draft={did}").text
-    data = json.loads(re.search(r'<script type="application/json"[^>]*>(.*?)</script>', page, re.S).group(1))
-    assert "gmail_quote" in data["body_html"]
+    html = client.get("/api/compose", params={"draft": did}).json()["prefill"]["body_html"]
+    assert "gmail_quote" in html
     for bad in ("evil()", "onerror", "onmouseover", "javascript:"):
-        assert bad not in data["body_html"]
+        assert bad not in html

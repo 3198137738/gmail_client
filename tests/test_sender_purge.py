@@ -10,7 +10,7 @@ import app.routes.senders as senders_routes
 from app.database import session_scope
 from app.models import AuditLog, BlockedSender, Message
 from app.services import imap_purge
-from tests.helpers import create_account, create_message, login
+from tests.helpers import api_post, create_account, create_message, login
 
 SENDER = "spam@bad.example"
 
@@ -193,21 +193,13 @@ def test_purge_route_keeps_block_and_shows_result(client, monkeypatch):
                 "folders": {"[Gmail]/已删除邮件": {"count": 5, "error": None}}, "error": None}
 
     monkeypatch.setattr(senders_routes, "purge_sender_messages", fake_purge)
-    page = client.get("/messages/blocked-senders", params={"account_id": acc}).text
-    assert f"/messages/blocked-senders/{bid}/purge" in page and "永久删除" in page
+    listing = client.get("/api/senders", params={"account_id": acc}).json()
+    assert bid in [row["id"] for row in listing["blocked"]]
 
-    resp = client.post(
-        f"/messages/blocked-senders/{bid}/purge",
-        data={"csrf_token": token, "next": f"/messages/blocked-senders?account_id={acc}"},
-        follow_redirects=False,
-    )
-    assert resp.status_code == 303
-    assert resp.headers["location"] == f"/messages/blocked-senders?account_id={acc}"
+    resp = api_post(client, f"/api/senders/blocked/{bid}/purge", token)
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "message": f"{SENDER}：已永久删除 5 封"}
     assert calls == [(acc, SENDER)]
-
-    page = client.get(f"/messages/blocked-senders?account_id={acc}").text
-    assert f"{SENDER}：已永久删除 5 封" in page
-    assert "is-success" in page
     with session_scope() as db:
         assert db.get(BlockedSender, bid) is not None   # 不是解除屏蔽
         last = db.execute(select(AuditLog).order_by(AuditLog.id.desc()).limit(1)).scalar_one()
@@ -224,8 +216,8 @@ def test_purge_route_busy_shows_error_without_audit(client, monkeypatch):
     )
     with session_scope() as db:
         before = db.execute(select(AuditLog.id).order_by(AuditLog.id.desc()).limit(1)).scalar()
-    page = client.post(f"/messages/blocked-senders/{bid}/purge", data={"csrf_token": token}).text
-    assert "账号正在同步" in page and "is-danger" in page
+    data = api_post(client, f"/api/senders/blocked/{bid}/purge", token).json()
+    assert data["ok"] is False and "账号正在同步" in data["message"]
     with session_scope() as db:
         after = db.execute(select(AuditLog.id).order_by(AuditLog.id.desc()).limit(1)).scalar()
     assert before == after
@@ -233,5 +225,5 @@ def test_purge_route_busy_shows_error_without_audit(client, monkeypatch):
 
 def test_purge_route_404_for_unknown_row(client):
     token = login(client)
-    resp = client.post("/messages/blocked-senders/999999/purge", data={"csrf_token": token}, follow_redirects=False)
+    resp = api_post(client, "/api/senders/blocked/999999/purge", token)
     assert resp.status_code == 404

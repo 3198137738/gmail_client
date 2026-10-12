@@ -95,8 +95,12 @@ def test_oauth_flow_creates_account(client, configured, monkeypatch, _no_backgro
         acc = db.execute(select(Account).where(Account.email == "oauth-user@gmail.com")).scalar_one()
         assert decrypt_password(acc.encrypted_password) == "oauth2:refresh-abc"
     assert any(name == "sync_then_backfill" for name, *_ in _no_background_network)
-    page = client.get("/accounts/").text
-    assert "已通过 Google 授权添加" in page and "Google 授权" in page
+    assert resp.headers["location"] == "/accounts/"
+    data = client.get("/api/accounts").json()
+    assert data["flash"] == {"message": "已通过 Google 授权添加 oauth-user@gmail.com", "level": "success"}
+    assert next(a for a in data["accounts"] if a["email"] == "oauth-user@gmail.com")["oauth"] is True
+    # 提示只显示一次
+    assert client.get("/api/accounts").json()["flash"] is None
 
 
 def test_callback_rejects_wrong_state(client, configured, monkeypatch):
@@ -104,7 +108,7 @@ def test_callback_rejects_wrong_state(client, configured, monkeypatch):
     client.get("/accounts/oauth/start", follow_redirects=False)
     monkeypatch.setattr(google_oauth, "exchange_code", lambda *a: pytest.fail("must not exchange"))
     client.get("/accounts/oauth/callback", params={"code": "x", "state": "forged"}, follow_redirects=False)
-    assert "授权请求已失效" in client.get("/accounts/").text
+    assert client.get("/api/accounts").json()["flash"]["message"] == "授权请求已失效"
 
 
 def test_reauthorize_switches_existing_password_account(client, configured, monkeypatch):
@@ -113,7 +117,7 @@ def test_reauthorize_switches_existing_password_account(client, configured, monk
     resp = client.get("/accounts/oauth/start", follow_redirects=False)
     state = parse_qs(urlparse(resp.headers["location"]).query)["state"][0]
     monkeypatch.setattr(google_oauth, "exchange_code", lambda *a: ("switch@gmail.com", "rt-switch"))
-    client.get("/accounts/oauth/callback", params={"code": "c", "state": state})
+    client.get("/accounts/oauth/callback", params={"code": "c", "state": state}, follow_redirects=False)
     with session_scope() as db:
         assert decrypt_password(db.get(Account, acc).encrypted_password) == "oauth2:rt-switch"
 
@@ -197,13 +201,17 @@ def test_smtp_uses_xoauth2(monkeypatch):
     assert seen["to"] == ["you@example.com"]
 
 
-def test_settings_page_shows_oauth_link_when_configured(client, configured):
+def test_settings_reports_oauth_configured(client, configured):
     login(client)
-    page = client.get("/accounts/").text
-    assert 'href="http://testserver/accounts/oauth/start"' in page
+    assert client.get("/api/accounts").json()["oauth_configured"] is True
 
 
-def test_settings_page_hint_when_not_configured(client):
+def test_settings_reports_oauth_not_configured(client):
     login(client)
-    page = client.get("/accounts/").text
-    assert "GOOGLE_OAUTH_CLIENT_ID" in page
+    assert client.get("/api/accounts").json()["oauth_configured"] is False
+
+
+def test_oauth_start_requires_login(client, configured):
+    resp = client.get("/accounts/oauth/start", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"].startswith("/login")

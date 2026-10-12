@@ -10,7 +10,7 @@ from app.database import session_scope
 from app.models import Message, PendingOp, SyncState
 from app.services import outbox
 from app.timeutil import utcnow
-from tests.helpers import create_account, create_message, csrf_token, login
+from tests.helpers import api_post, create_account, create_message, login
 
 
 def _ops(account_id: int) -> list[PendingOp]:
@@ -35,17 +35,13 @@ def _set_validity(account_id: int, folder: str, value: int) -> None:
 
 
 def test_batch_delete_enqueues_remote_op_with_local_delete(client, _no_background_network):
-    login(client)
+    token = login(client)
     acc = create_account()
     _set_validity(acc, "INBOX", 7)
     m1 = create_message(acc, uid=501)
     m2 = create_message(acc, uid=502)
-    resp = client.post(
-        "/messages/batch-delete",
-        data={"message_ids": [m1, m2], "csrf_token": csrf_token(client)},
-        follow_redirects=False,
-    )
-    assert resp.status_code == 303
+    resp = api_post(client, "/api/messages/actions", token, {"action": "delete", "ids": [m1, m2]})
+    assert resp.status_code == 200
     with session_scope() as db:
         assert db.get(Message, m1) is None and db.get(Message, m2) is None
     ops = _ops(acc)
@@ -54,14 +50,10 @@ def test_batch_delete_enqueues_remote_op_with_local_delete(client, _no_backgroun
 
 
 def test_mark_read_enqueues_flag_op(client):
-    login(client)
+    token = login(client)
     acc = create_account()
     mid = create_message(acc, uid=601, is_read=False)
-    client.post(
-        "/messages/batch-mark-read",
-        data={"message_ids": [mid], "csrf_token": csrf_token(client)},
-        follow_redirects=False,
-    )
+    assert api_post(client, "/api/messages/actions", token, {"action": "read", "ids": [mid]}).status_code == 200
     ops = _ops(acc)
     assert [(o.op, o.uids, o.arg) for o in ops] == [("add_flags", "601", "\\Seen")]
 
