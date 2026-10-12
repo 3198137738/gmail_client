@@ -15,6 +15,7 @@ from ..config import TELEGRAM_CHAT_ID, TELEGRAM_NOTIFY_SENT
 from ..crypto import decrypt_password, encrypt_password
 from ..database import get_db
 from ..models import Account, Message, SyncState
+from .. import auth as web_auth
 from ..auth import current_session_token
 from ..config import BACKUP_PUBLIC_KEY
 from ..services import audit, backup, google_oauth, login_sessions, telegram_service
@@ -362,11 +363,17 @@ _SETUP_SECRET_KEY = "2fa_setup_secret"
 _SECURITY_FLASH_KEY = "security_flash"
 
 
-def _security_redirect(request: Request, message: Optional[str] = None, level: str = "ok") -> RedirectResponse:
+def _security_redirect(
+    request: Request, message: Optional[str] = None, level: str = "ok", *, audit_page: Optional[int] = None
+) -> RedirectResponse:
     # 提示放在会话里而不是 URL 参数，避免被人构造成钓鱼链接
     if message:
         request.session[_SECURITY_FLASH_KEY] = [message, level]
-    return RedirectResponse(url=request.url_for("accounts.security"), status_code=303)
+    if audit_page:
+        url = request.url_for("accounts.audit_log").include_query_params(page=max(1, audit_page))
+    else:
+        url = request.url_for("accounts.security")
+    return RedirectResponse(url=str(url), status_code=303)
 
 
 @router.get("/security", response_class=HTMLResponse, name="accounts.security")
@@ -387,6 +394,8 @@ def security(request: Request):
             "setup_secret": totp.format_secret(setup_secret) if setup_secret else None,
             "setup_uri": totp.provisioning_uri(setup_secret, request.url.hostname or "mail") if setup_secret else None,
             "sessions": login_sessions.list_active(current_session_token(request)),
+            "current_ip": web_auth.get_client_ip(request),
+            "banned_ips": web_auth.list_banned_ips(),
             "backup_encrypted": bool(BACKUP_PUBLIC_KEY),
             "backup_targets": backup.upload_targets(),
             "backup_status": backup.last_status(),
@@ -469,6 +478,30 @@ def sessions_revoke_all(request: Request):
     return RedirectResponse(url=request.url_for("auth.login_form"), status_code=303)
 
 
+# ---- 设置 › 安全：IP 黑名单 ---------------------------------------------------
+@router.post("/security/ip-ban", name="accounts.ip_ban")
+def ip_ban(request: Request, ip: str = Form(""), audit_page: Optional[int] = Form(None)):
+    """一键永久拉黑 IP：之后该 IP 访问任何页面都返回 403，已登录的设备立即登出。"""
+    ip_norm = web_auth.normalize_ip(ip)
+    if not ip_norm:
+        return _security_redirect(request, "IP 地址格式不正确", "error", audit_page=audit_page)
+    if ip_norm == web_auth.get_client_ip(request):
+        return _security_redirect(request, "不能拉黑自己当前的 IP", "error", audit_page=audit_page)
+    if not web_auth.ban_ip(ip_norm):
+        return _security_redirect(request, f"{ip_norm} 已在黑名单中", "error", audit_page=audit_page)
+    audit.record_request(request, "ip_banned", ip_norm)
+    return _security_redirect(request, f"已永久拉黑 {ip_norm}", audit_page=audit_page)
+
+
+@router.post("/security/ip-unban", name="accounts.ip_unban")
+def ip_unban(request: Request, ip: str = Form("")):
+    ip_norm = web_auth.normalize_ip(ip)
+    if not ip_norm or not web_auth.unban_ip(ip_norm):
+        return _security_redirect(request, "该 IP 不在黑名单中", "error")
+    audit.record_request(request, "ip_unbanned", ip_norm)
+    return _security_redirect(request, f"已解除 {ip_norm} 的封禁")
+
+
 # ---- 设置 › 安全：备份 -------------------------------------------------------
 @router.post("/security/backup", name="accounts.backup_now")
 def backup_now(request: Request):
@@ -483,6 +516,7 @@ _AUDIT_PAGE_SIZE = 50
 @router.get("/security/audit", response_class=HTMLResponse, name="accounts.audit_log")
 def audit_log(request: Request, page: int = 1):
     page = max(1, page)
+    flash = request.session.pop(_SECURITY_FLASH_KEY, None)
     rows, total = audit.recent(limit=_AUDIT_PAGE_SIZE, offset=(page - 1) * _AUDIT_PAGE_SIZE)
     return templates.TemplateResponse(
         request,
@@ -495,6 +529,10 @@ def audit_log(request: Request, page: int = 1):
             "labels": audit.EVENT_LABELS,
             "warn_events": audit.WARN_EVENTS,
             "source_labels": audit.SOURCE_LABELS,
+            "current_ip": web_auth.get_client_ip(request),
+            "banned_ips": {b.ip_address for b in web_auth.list_banned_ips()},
+            "flash": flash[0] if flash else None,
+            "flash_level": flash[1] if flash else "ok",
         },
     )
 

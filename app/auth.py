@@ -10,7 +10,7 @@ from ipaddress import ip_address, ip_network
 from urllib.parse import urlencode, urlparse
 
 from fastapi import Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse
 from sqlalchemy import select
 
 from .config import (
@@ -40,6 +40,11 @@ LOGOUT_PATH = "/logout"
 PUBLIC_PATH_PREFIXES = ("/static/", "/healthz")
 LOGIN_2FA_PATH = "/login/2fa"
 PUBLIC_PATHS = {LOGIN_PATH, LOGOUT_PATH, LOGIN_2FA_PATH}
+# 被永久封禁的 IP 也放行健康检查（Docker 从本机调用）
+BAN_EXEMPT_PATHS = {"/healthz"}
+# 永久封禁名单在内存里缓存这么久（秒），避免每个请求都查库；本进程内封禁/解封会立即刷新
+_BAN_CACHE_TTL = 30.0
+_ban_cache: tuple[float, frozenset[str]] | None = None
 
 
 @dataclass
@@ -253,6 +258,92 @@ def get_login_throttle_status(ip_address: str) -> LoginThrottleStatus:
         )
 
 
+def _banned_ips_from_db() -> frozenset[str]:
+    global _ban_cache
+    cached = _ban_cache
+    now = time.monotonic()
+    if cached is not None and now - cached[0] < _BAN_CACHE_TTL:
+        return cached[1]
+    with session_scope() as db:
+        ips = frozenset(
+            db.execute(
+                select(LoginThrottle.ip_address).where(LoginThrottle.is_permanent_blocked.is_(True))
+            ).scalars()
+        )
+    _ban_cache = (now, ips)
+    return ips
+
+
+def invalidate_ban_cache() -> None:
+    global _ban_cache
+    _ban_cache = None
+
+
+def is_ip_banned(ip_address: str) -> bool:
+    """IP 是否被永久封禁（.env 黑名单、手动拉黑或多次输错密码自动永久封禁）。"""
+    if not ip_address or ip_address == "unknown":
+        return False
+    return is_explicitly_blocked_ip(ip_address) or ip_address in _banned_ips_from_db()
+
+
+def normalize_ip(value: str | None) -> str | None:
+    """把用户输入的 IP 规范化，不是合法 IP 返回 None。"""
+    return _normalize_ip(value)
+
+
+def ban_ip(ip_address: str) -> bool:
+    """永久拉黑 IP，并登出该 IP 上已登录的设备。返回 False 表示原本就已永久封禁。"""
+    if is_explicitly_blocked_ip(ip_address):
+        return False
+    with session_scope() as db:
+        state = _get_or_create_throttle(db, ip_address)
+        if state.is_permanent_blocked:
+            return False
+        state.is_permanent_blocked = True
+        state.blocked_until = None
+    invalidate_ban_cache()
+    login_sessions.revoke_by_ip(ip_address)
+    logger.warning("Manually banned IP %s", ip_address)
+    return True
+
+
+def unban_ip(ip_address: str) -> bool:
+    """解除数据库中的封禁（.env 里的 WEB_AUTH_BLOCKED_IPS 只能改配置解除）。"""
+    with session_scope() as db:
+        state = db.execute(
+            select(LoginThrottle).where(LoginThrottle.ip_address == ip_address)
+        ).scalar_one_or_none()
+        if state is None or not (state.is_permanent_blocked or state.blocked_until):
+            return False
+        _reset_state(state)
+    invalidate_ban_cache()
+    logger.warning("Unbanned IP %s", ip_address)
+    return True
+
+
+@dataclass
+class BannedIp:
+    ip_address: str
+    since: datetime | None
+    from_env: bool
+
+
+def list_banned_ips() -> list[BannedIp]:
+    with session_scope() as db:
+        rows = db.execute(
+            select(LoginThrottle)
+            .where(LoginThrottle.is_permanent_blocked.is_(True))
+            .order_by(LoginThrottle.updated_at.desc())
+        ).scalars().all()
+        result = [
+            BannedIp(ip_address=r.ip_address, since=r.updated_at, from_env=False)
+            for r in rows
+            if r.ip_address not in WEB_AUTH_BLOCKED_IPS
+        ]
+    result.extend(BannedIp(ip_address=ip, since=None, from_env=True) for ip in sorted(WEB_AUTH_BLOCKED_IPS))
+    return result
+
+
 def register_failed_login(ip_address: str) -> LoginThrottleStatus:
     if is_explicitly_blocked_ip(ip_address):
         return LoginThrottleStatus(
@@ -280,6 +371,7 @@ def register_failed_login(ip_address: str) -> LoginThrottleStatus:
             if WEB_AUTH_PERMANENT_BLOCK_AFTER_FAILURES:
                 state.is_permanent_blocked = True
                 state.blocked_until = None
+                invalidate_ban_cache()
                 logger.warning(
                     "Permanently blocked login IP %s after %s failed attempts",
                     ip_address,
@@ -338,6 +430,9 @@ def safe_next_url(next_url: str | None, fallback: str = "/messages/") -> str:
 
 async def require_app_password(request: Request, call_next):
     """Redirect unauthenticated users to the login page when enabled."""
+    # 永久封禁的 IP 什么页面都不给看（包括登录页），已登录的会话也一并拒绝
+    if request.url.path not in BAN_EXEMPT_PATHS and is_ip_banned(get_client_ip(request)):
+        return PlainTextResponse("Forbidden", status_code=403)
     if not WEB_AUTH_ENABLED or is_public_path(request.url.path) or is_authenticated(request):
         return await call_next(request)
 

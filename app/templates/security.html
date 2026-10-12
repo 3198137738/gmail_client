@@ -95,6 +95,14 @@
                         {{ csrf_input() }}
                         <button type="submit" class="gm-link-btn is-danger">登出</button>
                     </form>
+                    {% if s.ip_address and s.ip_address != current_ip %}
+                    <form method="post" action="{{ url_for('accounts.ip_ban') }}"
+                          data-confirm="确定永久拉黑 {{ s.ip_address }} 吗？该 IP 上的设备会立即登出，之后无法访问任何页面。">
+                        {{ csrf_input() }}
+                        <input type="hidden" name="ip" value="{{ s.ip_address }}">
+                        <button type="submit" class="gm-link-btn is-danger">拉黑 IP</button>
+                    </form>
+                    {% endif %}
                 </li>
                 {% else %}
                 <li class="gm-settings-empty">没有登录中的设备</li>
@@ -115,6 +123,43 @@
         </div>
     </section>
     {% endif %}
+
+    <section class="gm-settings-row">
+        <div class="gm-settings-label">
+            IP 黑名单：
+            <div class="gm-settings-hint">被永久拉黑的 IP 访问任何页面都返回 403，该 IP 上已登录的设备立即登出。你当前的 IP：{{ current_ip }}</div>
+        </div>
+        <div class="gm-settings-content">
+            <ul class="gm-session-list">
+                {% for b in banned_ips %}
+                <li class="gm-session">
+                    <div class="gm-session-main">
+                        <div class="gm-session-device"><code>{{ b.ip_address }}</code></div>
+                        <div class="gm-session-meta">
+                            {% if b.from_env %}来自 .env 的 WEB_AUTH_BLOCKED_IPS，需修改配置并重启才能解除{% else %}封禁于 {{ b.since | utc_to_local | fmt_dt }}{% endif %}
+                        </div>
+                    </div>
+                    {% if not b.from_env %}
+                    <form method="post" action="{{ url_for('accounts.ip_unban') }}"
+                          data-confirm="确定解除 {{ b.ip_address }} 的封禁吗？">
+                        {{ csrf_input() }}
+                        <input type="hidden" name="ip" value="{{ b.ip_address }}">
+                        <button type="submit" class="gm-link-btn">解除</button>
+                    </form>
+                    {% endif %}
+                </li>
+                {% else %}
+                <li class="gm-settings-empty">没有被拉黑的 IP</li>
+                {% endfor %}
+            </ul>
+            <form method="post" action="{{ url_for('accounts.ip_ban') }}" class="gm-ip-ban-form"
+                  data-confirm="确定永久拉黑该 IP 吗？">
+                {{ csrf_input() }}
+                <input type="text" name="ip" class="gm-input" required placeholder="要拉黑的 IP，如 203.0.113.5">
+                <button type="submit" class="gm-btn gm-btn-outlined">拉黑</button>
+            </form>
+        </div>
+    </section>
 
     <section class="gm-settings-row">
         <div class="gm-settings-label">

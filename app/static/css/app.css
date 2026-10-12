@@ -2062,3 +2062,9 @@ body[data-win-state="max"] .gc-icon-restore { display: inline-block !important; 
 .gm-audit-time { white-space: nowrap; color: var(--gm-text-3); }
 .gm-audit-detail { overflow-wrap: anywhere; }
 .gm-audit-pager { margin-top: 12px; }
+.gm-audit-ip { white-space: nowrap; }
+.gm-audit-ip form { display: inline; margin: 0 0 0 6px; }
+
+/* 设置 › 安全：IP 黑名单 */
+.gm-ip-ban-form { display: flex; gap: 8px; align-items: center; max-width: 420px; }
+.gm-ip-ban-form .gm-input { flex: 1 1 auto; min-width: 0; }

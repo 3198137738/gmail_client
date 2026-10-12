@@ -26,6 +26,8 @@ EVENT_LABELS = {
     "login_failed": "密码错误",
     "login_2fa_failed": "验证码错误",
     "ip_blocked": "IP 被封禁",
+    "ip_banned": "拉黑 IP",
+    "ip_unbanned": "解除 IP 封禁",
     "logout": "退出登录",
     "session_revoked": "登出设备",
     "sessions_revoked_all": "全部登出",
@@ -49,7 +51,7 @@ EVENT_LABELS = {
 
 # 需要在页面上突出显示的事件
 WARN_EVENTS = {
-    "login_failed", "login_2fa_failed", "ip_blocked", "password_changed",
+    "login_failed", "login_2fa_failed", "ip_blocked", "ip_banned", "password_changed",
     "2fa_disabled", "mail_send_failed", "backup_failed", "backup_upload_failed",
     "sessions_revoked_all",
 }

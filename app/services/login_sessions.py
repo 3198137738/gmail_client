@@ -105,6 +105,17 @@ def revoke_all(*, except_token: Optional[str] = None) -> int:
         return int(result.rowcount or 0)
 
 
+def revoke_by_ip(ip: str) -> int:
+    """撤销某个 IP 上的所有有效会话（拉黑 IP 时用），返回撤销数量。"""
+    with session_scope() as db:
+        result = db.execute(
+            update(LoginSession)
+            .where(LoginSession.ip_address == ip, LoginSession.revoked_at.is_(None))
+            .values(revoked_at=utcnow())
+        )
+        return int(result.rowcount or 0)
+
+
 @dataclass
 class SessionView:
     id: int
