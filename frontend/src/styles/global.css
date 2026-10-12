@@ -13,10 +13,10 @@
     --gm-border: rgb(224, 224, 230);
     --gm-divider: rgb(239, 239, 245);
     --gm-hover: rgb(243, 243, 245);
-    --gm-primary: #18a058;
-    --gm-primary-hover: #36ad6a;
-    --gm-primary-soft: rgba(24, 160, 88, .1);
-    --gm-selected: rgba(24, 160, 88, .14);
+    --gm-primary: #2080f0;
+    --gm-primary-hover: #4098fc;
+    --gm-primary-soft: rgba(32, 128, 240, .1);
+    --gm-selected: rgba(32, 128, 240, .14);
     --gm-error: #d03050;
     --gm-error-soft: rgba(208, 48, 80, .12);
     --gm-warning: #f0a020;

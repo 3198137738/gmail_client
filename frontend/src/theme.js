@@ -1,12 +1,24 @@
-// Naive UI 主题：使用组件库默认配色（浅色 / 深色），只统一字体。
+// Naive UI 主题：组件库默认风格，主色改为蓝色，侧栏菜单更紧凑。
 // 页面自己的样式通过 CSS 变量（--gm-*）取主题颜色，由 components/ThemeVars.vue 写入，切换深浅色时随之变化。
 const font = 'system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", "Helvetica Neue", Arial, sans-serif';
 
-export const themeOverrides = {
-  common: {
-    fontFamily: font,
-  },
+// 主色：浅色 / 深色模式各一套（深色背景上用更亮的蓝）
+const PRIMARY = {
+  light: { primaryColor: "#2080f0", primaryColorHover: "#4098fc", primaryColorPressed: "#1060c9", primaryColorSuppl: "#4098fc" },
+  dark: { primaryColor: "#70c0e8", primaryColorHover: "#8acbec", primaryColorPressed: "#66afd3", primaryColorSuppl: "#8acbec" },
 };
+
+export function themeOverrides(dark) {
+  return {
+    common: {
+      fontFamily: font,
+      ...PRIMARY[dark ? "dark" : "light"],
+    },
+    Menu: {
+      itemHeight: "34px",
+    },
+  };
+}
 
 // "#18a058" / "rgb(24, 160, 88)" / "rgba(...)" → "rgba(r, g, b, alpha)"
 export function withAlpha(color, alpha) {

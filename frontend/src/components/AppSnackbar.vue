@@ -54,13 +54,13 @@ function onLink() {
 .gm-snackbar-btn {
     border: 0;
     background: none;
-    color: #63e2b7;
+    color: #70c0e8;
     font: 500 14px var(--gm-font);
     padding: 8px 12px;
     border-radius: 4px;
     cursor: pointer;
 }
-.gm-snackbar-btn:hover { background: rgba(99, 226, 183, .12); }
+.gm-snackbar-btn:hover { background: rgba(112, 192, 232, .12); }
 .gm-snackbar-close {
     border: 0;
     background: none;

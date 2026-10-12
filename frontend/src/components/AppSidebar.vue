@@ -211,7 +211,7 @@ const mobileMenu = computed(() =>
       :collapsed-width="72"
       :collapsed-icon-size="22"
       :icon-size="20"
-      :indent="26"
+      :indent="20"
       @update:value="onFolder"
     />
 
@@ -224,7 +224,7 @@ const mobileMenu = computed(() =>
         :collapsed-width="72"
         :collapsed-icon-size="22"
         :icon-size="20"
-        :indent="26"
+        :indent="20"
         @update:value="onFolder"
       />
     </template>
@@ -243,7 +243,7 @@ const mobileMenu = computed(() =>
       :collapsed-width="72"
       :collapsed-icon-size="22"
       :icon-size="20"
-      :indent="26"
+      :indent="20"
       @update:value="onAccount"
     />
     <div v-else-if="nav && !collapsed" class="gm-nav-empty">
@@ -252,7 +252,7 @@ const mobileMenu = computed(() =>
 
     <template v-if="mobile">
       <div class="gm-nav-divider" />
-      <NMenu :options="mobileMenu" :value="null" :indent="26" :icon-size="20" @update:value="onMobile" />
+      <NMenu :options="mobileMenu" :value="null" :indent="20" :icon-size="20" @update:value="onMobile" />
     </template>
   </aside>
 </template>
@@ -267,7 +267,7 @@ const mobileMenu = computed(() =>
     font-size: 17px;
     font-weight: 600;
 }
-.gm-nav-compose { padding: 16px 16px 8px; }
+.gm-nav-compose { padding: 12px 12px 6px; }
 .gm-nav.is-collapsed .gm-nav-compose { padding: 16px 0 8px; display: flex; justify-content: center; }
 .gm-nav :deep(.gm-nav-label) { display: flex; align-items: center; gap: 8px; width: 100%; }
 .gm-nav :deep(.gm-nav-text) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -286,7 +286,7 @@ const mobileMenu = computed(() =>
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 16px 12px 4px 24px;
+    padding: 12px 12px 2px 20px;
     font-size: 12px;
     color: var(--gm-text-3);
 }

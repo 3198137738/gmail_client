@@ -26,7 +26,7 @@ const dark = computed(() => (store.themeMode === "auto" ? osTheme.value === "dar
     :theme="dark ? darkTheme : null"
     :locale="zhCN"
     :date-locale="dateZhCN"
-    :theme-overrides="themeOverrides"
+    :theme-overrides="themeOverrides(dark)"
     abstract
   >
     <NLoadingBarProvider>
