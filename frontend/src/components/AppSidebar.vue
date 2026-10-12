@@ -269,6 +269,8 @@ const mobileMenu = computed(() =>
 }
 .gm-nav-compose { padding: 12px 12px 6px; }
 .gm-nav.is-collapsed .gm-nav-compose { padding: 16px 0 8px; display: flex; justify-content: center; }
+/* 折叠时图标居中：(64 - 22) / 2；Naive 菜单默认算出的左边距偏大，图标会偏右 */
+.gm-nav.is-collapsed :deep(.n-menu-item-content) { padding-left: 21px !important; padding-right: 21px !important; }
 .gm-nav :deep(.gm-nav-label) { display: flex; align-items: center; gap: 8px; width: 100%; }
 .gm-nav :deep(.gm-nav-text) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .gm-nav :deep(.gm-nav-count) {

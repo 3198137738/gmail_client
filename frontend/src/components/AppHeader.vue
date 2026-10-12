@@ -119,7 +119,7 @@ const themeOptions = [
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 0 16px;
+    padding: 0 16px 0 15px;   /* 菜单按钮与折叠侧栏的图标在同一条中线上 */
 }
 .gm-brand {
     display: flex;
