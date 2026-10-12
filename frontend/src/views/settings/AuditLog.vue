@@ -87,7 +87,7 @@ const rowClassName = (row) => (row.warn ? "is-warn" : "");
 .gm-settings-page { overflow-y: auto; background: var(--gm-bg); }
 .gm-audit-hint { margin: 16px 0 12px; }
 .gm-audit-pager { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
-:deep(.is-warn td) { background: #fef7e0 !important; }
+:deep(.is-warn td) { background: var(--gm-warning-soft) !important; }
 :deep(.gm-audit-ip) { display: inline-flex; align-items: center; gap: 8px; }
 @media (max-width: 768px) {
     .gm-settings-page { border-radius: 0; }
