@@ -196,6 +196,8 @@ class LoginThrottle(Base):
     last_failed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     is_permanent_blocked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     blocked_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
+    # 封禁来源（迁移 0012 加入，目前仅保留字段，未使用）
+    blocked_by: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=_now, onupdate=_now, nullable=False
