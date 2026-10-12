@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from ..config import ATTACHMENTS_DIR
 from ..database import get_db
 from ..models import Attachment, Message
+from ..services.attachment_restore import find_message, restore_message_files
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +78,14 @@ def _attachment_response(
     )
 
 
+def _ensure_file(target: Path, account_id: int, kind: str, uid: int) -> bool:
+    """文件不在本机（如数据库从别的机器迁移、附件目录没拷过来）时，从 Gmail 重新下载补回。"""
+    if target.is_file():
+        return True
+    message_id = find_message(account_id, kind, uid)
+    return message_id is not None and restore_message_files(message_id) and target.is_file()
+
+
 def _validate_kind(kind: str) -> str:
     if kind not in ALLOWED_KINDS:
         raise HTTPException(status_code=400, detail="Invalid folder kind")
@@ -96,7 +105,7 @@ def get_inline(
     target = _safe_join(
         ATTACHMENTS_DIR, str(account_id), kind, str(uid), "inline", filename
     )
-    if not target.is_file():
+    if not _ensure_file(target, account_id, kind, uid):
         raise HTTPException(status_code=404, detail="Inline image not found")
 
     download_name = target.name
@@ -131,7 +140,7 @@ def get_file(
     target = _safe_join(
         ATTACHMENTS_DIR, str(account_id), kind, str(uid), "files", filename
     )
-    if not target.is_file():
+    if not _ensure_file(target, account_id, kind, uid):
         raise HTTPException(status_code=404, detail="Attachment not found")
 
     record = db.execute(

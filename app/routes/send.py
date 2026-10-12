@@ -28,6 +28,7 @@ from ..services.mail_body import (
     request_origin,
 )
 from ..services import audit
+from ..services.attachment_restore import local_path, restore_message_files
 from ..services.html_sanitizer import sanitize_compose_html
 from ..services.smtp_service import SMTPSendError, send_email
 from ..navigation import sidebar_data
@@ -482,8 +483,10 @@ def send(
                     Attachment.is_inline.is_(False),
                 )
             ).scalars().all()
+            if any(not (local_path(a) and local_path(a).is_file()) for a in originals):
+                restore_message_files(fwd_id)   # 原邮件附件不在本机：先从 Gmail 补回
             for att in originals:
-                src = Path(att.file_path)
+                src = local_path(att) or Path(att.file_path)
                 if not src.is_file():
                     logger.warning("Forwarded attachment missing on disk: %s", att.file_path)
                     continue
