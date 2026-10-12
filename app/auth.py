@@ -25,12 +25,15 @@ from .config import (
 )
 from .database import session_scope
 from .models import LoginThrottle
+from .services import login_sessions
 from .timeutil import utcnow
 
 logger = logging.getLogger(__name__)
 
 AUTH_SESSION_KEY = "authenticated"
 AUTH_AT_SESSION_KEY = "authenticated_at"
+# 服务端登录会话的令牌（见 services/login_sessions.py），撤销后该设备立即登出
+AUTH_SID_SESSION_KEY = "sid"
 AUTH_ERROR_SESSION_KEY = "auth_error"
 LOGIN_PATH = "/login"
 LOGOUT_PATH = "/logout"
@@ -65,7 +68,8 @@ class LoginThrottleStatus:
 
 
 def is_authenticated(request: Request) -> bool:
-    """会话有效：已登录且未超过绝对有效期（旧版本没有登录时间的会话视为过期）。"""
+    """会话有效：已登录、未超过绝对有效期，且服务端登录记录未被撤销
+    （旧版本没有登录时间或令牌的会话视为过期）。"""
     auth_at = request.session.get(AUTH_AT_SESSION_KEY)
     if not request.session.get(AUTH_SESSION_KEY) or not isinstance(auth_at, (int, float)):
         return False
@@ -73,7 +77,15 @@ def is_authenticated(request: Request) -> bool:
     if age < 0 or age > SESSION_MAX_AGE_SEC:
         clear_auth(request)
         return False
+    if not login_sessions.validate(request.session.get(AUTH_SID_SESSION_KEY), get_client_ip(request)):
+        clear_auth(request, revoke=False)
+        return False
     return True
+
+
+def current_session_token(request: Request) -> str | None:
+    token = request.session.get(AUTH_SID_SESSION_KEY)
+    return token if isinstance(token, str) else None
 
 
 def mark_authenticated(request: Request) -> None:
@@ -81,9 +93,15 @@ def mark_authenticated(request: Request) -> None:
     request.session.clear()
     request.session[AUTH_SESSION_KEY] = True
     request.session[AUTH_AT_SESSION_KEY] = int(time.time())
+    request.session[AUTH_SID_SESSION_KEY] = login_sessions.create(
+        get_client_ip(request), request.headers.get("user-agent")
+    )
 
 
-def clear_auth(request: Request) -> None:
+def clear_auth(request: Request, *, revoke: bool = True) -> None:
+    token = request.session.pop(AUTH_SID_SESSION_KEY, None)
+    if revoke:
+        login_sessions.revoke_token(token)
     request.session.pop(AUTH_SESSION_KEY, None)
     request.session.pop(AUTH_AT_SESSION_KEY, None)
 

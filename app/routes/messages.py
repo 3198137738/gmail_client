@@ -26,7 +26,7 @@ from ..services.mail_body import (
 )
 from ..services.imap_client import is_account_busy
 from ..services import labels as gmail_labels
-from ..services import outbox, threads
+from ..services import audit, outbox, threads
 from ..services.message_actions import (
     delete_local_messages as _delete_local_messages,
     set_starred as _set_starred,
@@ -645,6 +645,8 @@ def batch_delete(
 ):
     account_id_int = _coerce_int(account_id)
     messages = _load_for_action(request, db, message_ids)
+    if messages:
+        audit.record_request(request, "mail_deleted", audit.summarize_subjects([m.subject for m in messages]))
     touched = _enqueue_remote_delete(db, messages)
     deleted = _delete_local_messages(db, messages)
     outbox.kick(touched)
@@ -696,6 +698,7 @@ def delete_one(
         raise HTTPException(status_code=404, detail="Message not found")
 
     targets = threads.expand(db, [message]) if threads.conversation_mode(request) else [message]
+    audit.record_request(request, "mail_deleted", audit.summarize_subjects([m.subject for m in targets]))
     touched = _enqueue_remote_delete(db, targets)
     _delete_local_messages(db, targets)
     outbox.kick(touched)

@@ -24,6 +24,7 @@ from .config import (
     SYNC_JUNK_ENABLED,
     SYNC_SENT_ENABLED,
     WEB_AUTH_ENABLED,
+    WEB_AUTH_PASSWORD,
     load_session_secret,
     setup_logging,
 )
@@ -33,10 +34,12 @@ from .routes import auth as auth_routes
 from .routes import accounts as accounts_routes
 from .routes import attachments as attachments_routes
 from .routes import events as events_routes
+from .routes import image_proxy as image_proxy_routes
 from .routes import messages as messages_routes
 from .routes import senders as senders_routes
 from .routes import send as send_routes
 from .routes import sync as sync_routes
+from .services import login_sessions
 from .services.background import shutdown_executor
 from .services.imap_backfill import shutdown_backfill, start_backfill
 from .services.idle_service import shutdown_idle, start_idle
@@ -61,6 +64,9 @@ def check_auth_configured(enabled: bool = WEB_AUTH_ENABLED, allow_no_auth: bool 
 async def lifespan(app: FastAPI):
     check_auth_configured()
     init_db()
+    if WEB_AUTH_ENABLED:
+        # 访问密码改过（.env 修改后重启）：撤销所有登录会话
+        login_sessions.check_password_change(WEB_AUTH_PASSWORD)
     start_backfill()
     start_scheduler()
     start_idle()
@@ -204,6 +210,7 @@ app.include_router(events_routes.router)
 app.include_router(sync_routes.router)
 app.include_router(send_routes.router)
 app.include_router(attachments_routes.router)
+app.include_router(image_proxy_routes.router)
 
 
 @app.get("/", include_in_schema=False)

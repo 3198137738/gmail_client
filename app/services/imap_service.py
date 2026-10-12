@@ -82,6 +82,7 @@ from .imap_client import (
 )
 from .email_parser import _message_base_dir, parse_email
 from .events import publish_mail_changed, publish_new_mail, publish_sync_done
+from . import image_proxy
 from .telegram_service import notify_new_mail
 from ..timeutil import utcnow
 
@@ -882,6 +883,13 @@ def _sync_one_folder(
         new_last_uid=new_last_uid,
     )
     _move_rescued_to_inbox(account_id, folder, result.rescue_uids)
+    if saved and last_uid > 0 and folder_kind == "inbox":
+        # 新到的收件箱邮件：预先下载外部图片，追踪像素记录到的只是收信时间而不是打开时间。
+        # 首次同步拉的是历史邮件、垃圾邮件可能借此确认地址有效，都不预取。
+        try:
+            image_proxy.schedule_prefetch(account_id, folder, uids)
+        except Exception:
+            logger.exception("Failed to schedule image prefetch account=%s", account_id)
     elapsed = perf_counter() - started
     # 仅增量同步时统计延迟；首次同步拉的是历史邮件，延迟无意义。
     # INTERNALDATE 由 IMAPClient 转换为本地时间（无时区），与 datetime.now() 直接比较；精度为秒。

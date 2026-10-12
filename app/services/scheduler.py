@@ -21,6 +21,7 @@ from ..config import (
 )
 from ..database import session_scope
 from ..models import Account
+from . import audit, image_proxy, login_sessions
 from .background import submit_bg
 from .backup import safe_run_backup
 from .imap_backfill import schedule_all_backfills
@@ -52,6 +53,16 @@ def sync_all_accounts() -> None:
     schedule_all_backfills()
 
     logger.info("Background sync tick: queued %d accounts", len(account_ids))
+
+
+def daily_maintenance() -> None:
+    """清理过期的审计日志、登录会话记录和外部图片缓存。"""
+    audit.safe_prune()
+    try:
+        login_sessions.prune()
+    except Exception:
+        logger.exception("Login session prune failed")
+    image_proxy.safe_prune_cache()
 
 
 def start_scheduler() -> BackgroundScheduler:
@@ -86,6 +97,18 @@ def start_scheduler() -> BackgroundScheduler:
         run_date=datetime.now(timezone.utc) + timedelta(seconds=60),
         id="initial-backfill",
         replace_existing=True,
+    )
+    sched.add_job(
+        daily_maintenance,
+        "cron",
+        hour=3,
+        minute=41,
+        timezone=LOCAL_TIMEZONE,
+        id="daily-maintenance",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
     )
     if BACKUP_ENABLED:
         sched.add_job(

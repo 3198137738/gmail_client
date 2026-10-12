@@ -165,6 +165,7 @@ def send_document(
     filename: Optional[str] = None,
     caption: Optional[str] = None,
     chat_id: Optional[str] = None,
+    timeout: Optional[int] = None,
 ) -> tuple[bool, str]:
     """Upload one document so Telegram users can download attachments."""
     targets = [chat_id] if chat_id else list(TELEGRAM_CHAT_IDS)
@@ -204,7 +205,7 @@ def send_document(
             headers={"Content-Type": content_type_header},
         )
         try:
-            with urllib.request.urlopen(req, timeout=TELEGRAM_API_TIMEOUT_SEC) as resp:
+            with urllib.request.urlopen(req, timeout=timeout or TELEGRAM_API_TIMEOUT_SEC) as resp:
                 raw = resp.read().decode("utf-8", "replace")
             parsed = json.loads(raw or "{}")
             ok = bool(parsed.get("ok"))

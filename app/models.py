@@ -341,3 +341,36 @@ class MessageLabel(Base):
         ForeignKey("labels.id", ondelete="CASCADE"), primary_key=True, index=True
     )
 
+
+
+class LoginSession(Base):
+    """一次登录（一台设备 / 一个浏览器）。cookie 里只放随机令牌，这里存它的 SHA-256；
+    撤销后该 cookie 立即失效，用于「登录设备管理」和「全部登出」。"""
+
+    __tablename__ = "login_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    ip_address: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    user_agent: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class AuditLog(Base):
+    """审计日志：登录、删信、发信、账号变更等操作记录。"""
+
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False, index=True)
+    event: Mapped[str] = mapped_column(String(48), nullable=False)
+    # web / telegram / system
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="web")
+    ip_address: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_audit_logs_event_ip", "event", "ip_address"),
+    )

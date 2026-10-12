@@ -70,5 +70,88 @@
             {% endif %}
         </div>
     </section>
+
+    {% if auth_enabled %}
+    <section class="gm-settings-row">
+        <div class="gm-settings-label">
+            登录设备：
+            <div class="gm-settings-hint">登录过本客户端、尚未登出的设备。修改访问密码（.env 中的 WEB_AUTH_PASSWORD）并重启后，所有设备自动登出</div>
+        </div>
+        <div class="gm-settings-content">
+            <ul class="gm-session-list">
+                {% for s in sessions %}
+                <li class="gm-session">
+                    <div class="gm-session-main">
+                        <div class="gm-session-device">
+                            {{ s.device }}
+                            {% if s.is_current %}<span class="gm-badge is-info">本机</span>{% endif %}
+                        </div>
+                        <div class="gm-session-meta">
+                            IP {{ s.ip_address or '未知' }} · 登录于 {{ s.created_at | utc_to_local | fmt_dt }} · 最近活动 {{ s.last_seen_at | utc_to_local | fmt_dt }}
+                        </div>
+                    </div>
+                    <form method="post" action="{{ url_for('accounts.session_revoke', session_id=s.id) }}"
+                          data-confirm="{{ '确定登出本机吗？' if s.is_current else '确定登出该设备吗？' }}">
+                        {{ csrf_input() }}
+                        <button type="submit" class="gm-link-btn is-danger">登出</button>
+                    </form>
+                </li>
+                {% else %}
+                <li class="gm-settings-empty">没有登录中的设备</li>
+                {% endfor %}
+            </ul>
+            <div class="gm-settings-actions">
+                <form method="post" action="{{ url_for('accounts.sessions_revoke_others') }}"
+                      data-confirm="确定登出除本机以外的所有设备吗？">
+                    {{ csrf_input() }}
+                    <button type="submit" class="gm-btn gm-btn-outlined">登出其他所有设备</button>
+                </form>
+                <form method="post" action="{{ url_for('accounts.sessions_revoke_all') }}"
+                      data-confirm="确定登出所有设备（包括本机）吗？">
+                    {{ csrf_input() }}
+                    <button type="submit" class="gm-btn gm-btn-text">全部登出（含本机）</button>
+                </form>
+            </div>
+        </div>
+    </section>
+    {% endif %}
+
+    <section class="gm-settings-row">
+        <div class="gm-settings-label">
+            备份：
+            <div class="gm-settings-hint">每天自动备份数据库和密钥。设置公钥后先加密再保存，并自动传到服务器以外的地方</div>
+        </div>
+        <div class="gm-settings-content">
+            <div class="gm-settings-status">
+                {% if backup_encrypted %}<span class="gm-badge is-ok">已加密</span>{% else %}<span class="gm-badge is-warn">未加密</span>{% endif %}
+                {% for t in backup_targets %}
+                    <span class="gm-badge is-info">异地：{{ {'telegram': 'Telegram', 'webdav': 'WebDAV'}[t] }}</span>
+                {% else %}
+                    <span class="gm-badge is-warn">未配置异地备份</span>
+                {% endfor %}
+            </div>
+            {% if not backup_encrypted %}
+            <p class="gm-settings-hint">备份里有解密账号密码用的密钥。请在服务器执行
+                <code>docker compose exec gmail-client python -m app.services.backup_crypto keygen</code>，
+                私钥保存在自己电脑上，公钥写入 <code>.env</code> 的 <code>BACKUP_PUBLIC_KEY</code> 后重启。未加密的备份不会上传到异地。</p>
+            {% endif %}
+            {% if backup_status %}
+            <p>上次备份：{{ backup_status.at }}
+                {% if backup_status.ok %}
+                    · {{ backup_status.file }}（{{ '%.1f' | format((backup_status.size or 0) / 1048576) }} MB）
+                    {% for t, err in (backup_status.uploads or {}).items() %}
+                        · {{ t }} {% if err %}<span class="gm-badge is-error" title="{{ err }}">上传失败</span>{% else %}<span class="gm-badge is-ok">已上传</span>{% endif %}
+                    {% endfor %}
+                {% else %}
+                    · <span class="gm-badge is-error">失败</span> {{ backup_status.error }}
+                {% endif %}
+            </p>
+            {% endif %}
+            <form method="post" action="{{ url_for('accounts.backup_now') }}">
+                {{ csrf_input() }}
+                <button type="submit" class="gm-btn gm-btn-outlined">立即备份</button>
+            </form>
+        </div>
+    </section>
 </div>
 {% endblock %}

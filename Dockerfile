@@ -1,6 +1,8 @@
 # syntax=docker/dockerfile:1.7
 
-FROM python:3.12-slim AS base
+# 基础镜像按 digest 固定：标签可以被重新指向，digest 不会。升级时取新 digest：
+#   docker pull python:3.12-slim && docker inspect --format '{{index .RepoDigests 0}}' python:3.12-slim
+FROM python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1 AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -24,8 +26,10 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# 依赖按 requirements.lock 安装：每个包（含间接依赖）都锁定版本和 sha256，
+# PyPI 上的包被替换或投毒时 hash 对不上，构建直接失败
+COPY requirements.lock ./
+RUN pip install --no-cache-dir --require-hashes --no-deps -r requirements.lock  && pip check
 
 COPY app ./app
 COPY run.py ./run.py

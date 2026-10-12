@@ -1,8 +1,10 @@
 # Web framework
-fastapi==0.115.6
+fastapi==0.143.0
+# FastAPI 只要求 starlette>=0.46，显式锁定到无已知漏洞的版本
+starlette==1.7.0
 uvicorn[standard]==0.32.1
-python-multipart==0.0.20
-jinja2==3.1.4
+python-multipart==0.0.32
+jinja2==3.1.6
 markupsafe==3.0.2
 itsdangerous==2.2.0
 
@@ -10,7 +12,7 @@ itsdangerous==2.2.0
 SQLAlchemy==2.0.36
 
 # Encryption
-cryptography==43.0.3
+cryptography==50.0.2
 
 # IMAP / SMTP
 IMAPClient==3.0.1

@@ -41,11 +41,26 @@ def test_remote_images_load_automatically_by_default(client):
 
     resp = client.get(f"/messages/{mid}/body")
     csp = resp.headers["content-security-policy"]
-    assert "img-src 'self' data: https: http:" in csp
+    # 默认经图片代理加载：浏览器只访问本站，CSP 不放开外部图片
+    assert "img-src 'self' data:;" in csp
+    assert "/mail-image?u=" in resp.text and "t.example" not in resp.text
     assert "script-src" not in csp and "default-src 'none'" in csp  # 脚本仍然禁止
 
     detail = client.get(f"/messages/{mid}").text
     assert "显示图片" not in detail  # 不再显示拦截提示
+
+
+def test_remote_images_load_directly_when_proxy_disabled(client, monkeypatch):
+    import app.services.mail_body as mail_body
+
+    monkeypatch.setattr(mail_body, "IMAGE_PROXY_ENABLED", False)
+    login(client)
+    acc = create_account()
+    mid = create_message(acc, body_html='<p>hi</p><img src="https://t.example/p.gif">')
+
+    resp = client.get(f"/messages/{mid}/body")
+    assert "img-src 'self' data: https: http:" in resp.headers["content-security-policy"]
+    assert 'src="https://t.example/p.gif"' in resp.text
 
 
 def test_body_document_blocks_remote_images_when_disabled(client, monkeypatch):
@@ -62,9 +77,12 @@ def test_body_document_blocks_remote_images_when_disabled(client, monkeypatch):
     assert "img-src 'self' data:;" in csp
     assert "script-src" not in csp and "default-src 'none'" in csp
     assert "<p>hi</p>" in resp.text
+    assert "/mail-image" not in resp.text  # 被拦截时也不经代理加载
 
+    # 点「显示图片」后经代理加载，CSP 依旧不放开外部地址
     resp = client.get(f"/messages/{mid}/body?images=1")
-    assert "https:" in resp.headers["content-security-policy"]
+    assert "https:" not in resp.headers["content-security-policy"]
+    assert "/mail-image?u=" in resp.text
 
 
 def test_detail_page_uses_sandboxed_iframe(client, monkeypatch):

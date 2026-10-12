@@ -15,7 +15,9 @@ from ..config import TELEGRAM_CHAT_ID, TELEGRAM_NOTIFY_SENT
 from ..crypto import decrypt_password, encrypt_password
 from ..database import get_db
 from ..models import Account, Message, SyncState
-from ..services import google_oauth, telegram_service
+from ..auth import current_session_token
+from ..config import BACKUP_PUBLIC_KEY
+from ..services import audit, backup, google_oauth, login_sessions, telegram_service
 from ..services.idle_service import reconcile_idle
 from ..services.background import submit_bg
 from ..services.imap_backfill import is_backfilling, sync_then_backfill
@@ -152,6 +154,7 @@ def create_account(
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail="Account already exists") from None
+    audit.record_request(request, "account_added", email_norm)
     reconcile_idle()
     # 首次同步后立即开始回填全部历史邮件
     submit_bg(sync_then_backfill, int(account.id))
@@ -225,6 +228,7 @@ def batch_create_accounts(
             skipped_dup += 1
             continue
         added += 1
+        audit.record_request(request, "account_added", f"{email_norm}（批量添加）")
         submit_bg(sync_then_backfill, int(account.id))
 
     if added:
@@ -261,6 +265,7 @@ def batch_delete_accounts(
     if ids:
         accounts = db.execute(select(Account).where(Account.id.in_(ids))).scalars().all()
         for account in accounts:
+            audit.record_request(request, "account_deleted", account.email)
             db.delete(account)
             deleted += 1
         db.commit()
@@ -311,6 +316,8 @@ def update_account(
         if len(cleaned) < 8:
             raise HTTPException(status_code=400, detail="App password is too short")
         account.encrypted_password = encrypt_password(cleaned)
+    changes = [c for c, on in (("显示名称", display_name is not None), ("应用专用密码", bool(password))) if on]
+    audit.record_request(request, "account_updated", f"{account.email}：{'、'.join(changes) or '无变化'}")
     db.commit()
     reconcile_idle()
     return RedirectResponse(url=request.url_for("accounts.list"), status_code=303)
@@ -322,6 +329,7 @@ def toggle_account(request: Request, account_id: int, db: Session = Depends(get_
     if account is None:
         raise HTTPException(status_code=404, detail="Account not found")
     account.enabled = not account.enabled
+    audit.record_request(request, "account_enabled" if account.enabled else "account_disabled", account.email)
     db.commit()
     reconcile_idle()
     return RedirectResponse(url=request.url_for("accounts.list"), status_code=303)
@@ -342,6 +350,7 @@ def delete_account(request: Request, account_id: int, db: Session = Depends(get_
     account = db.get(Account, account_id)
     if account is None:
         raise HTTPException(status_code=404, detail="Account not found")
+    audit.record_request(request, "account_deleted", account.email)
     db.delete(account)
     db.commit()
     reconcile_idle()
@@ -377,6 +386,10 @@ def security(request: Request):
             "reset_active": WEB_AUTH_2FA_RESET,
             "setup_secret": totp.format_secret(setup_secret) if setup_secret else None,
             "setup_uri": totp.provisioning_uri(setup_secret, request.url.hostname or "mail") if setup_secret else None,
+            "sessions": login_sessions.list_active(current_session_token(request)),
+            "backup_encrypted": bool(BACKUP_PUBLIC_KEY),
+            "backup_targets": backup.upload_targets(),
+            "backup_status": backup.last_status(),
             "flash": flash[0] if flash else None,
             "flash_level": flash[1] if flash else "ok",
         },
@@ -403,6 +416,7 @@ def security_enable(request: Request, code: str = Form("")):
     if totp.verify(secret, code) is None:
         return _security_redirect(request, "验证码不正确", "error")
     two_factor.enable(secret)
+    audit.record_request(request, "2fa_enabled")
     request.session.pop(_SETUP_SECRET_KEY, None)
     return _security_redirect(request, "两步验证已开启")
 
@@ -421,7 +435,68 @@ def security_disable(request: Request, code: str = Form("")):
     if not two_factor.verify_and_consume(code):
         return _security_redirect(request, "验证码不正确", "error")
     two_factor.disable()
+    audit.record_request(request, "2fa_disabled")
     return _security_redirect(request, "两步验证已关闭")
+
+
+# ---- 设置 › 安全：登录设备 ---------------------------------------------------
+@router.post("/security/sessions/{session_id}/revoke", name="accounts.session_revoke")
+def session_revoke(request: Request, session_id: int):
+    is_current = any(
+        s.id == session_id and s.is_current
+        for s in login_sessions.list_active(current_session_token(request))
+    )
+    if not login_sessions.revoke(session_id):
+        return _security_redirect(request, "该设备已登出", "error")
+    audit.record_request(request, "session_revoked", "本机" if is_current else f"会话 #{session_id}")
+    if is_current:
+        return RedirectResponse(url=request.url_for("auth.login_form"), status_code=303)
+    return _security_redirect(request, "已登出该设备")
+
+
+@router.post("/security/sessions/revoke-others", name="accounts.sessions_revoke_others")
+def sessions_revoke_others(request: Request):
+    count = login_sessions.revoke_all(except_token=current_session_token(request))
+    audit.record_request(request, "sessions_revoked_all", f"其他 {count} 台设备")
+    return _security_redirect(request, f"已登出其他 {count} 台设备")
+
+
+@router.post("/security/sessions/revoke-all", name="accounts.sessions_revoke_all")
+def sessions_revoke_all(request: Request):
+    count = login_sessions.revoke_all()
+    audit.record_request(request, "sessions_revoked_all", f"全部 {count} 台设备（含本机）")
+    request.session.clear()
+    return RedirectResponse(url=request.url_for("auth.login_form"), status_code=303)
+
+
+# ---- 设置 › 安全：备份 -------------------------------------------------------
+@router.post("/security/backup", name="accounts.backup_now")
+def backup_now(request: Request):
+    submit_bg(backup.safe_run_backup)
+    return _security_redirect(request, "已开始备份，稍后刷新本页查看结果")
+
+
+# ---- 设置 › 审计日志 ---------------------------------------------------------
+_AUDIT_PAGE_SIZE = 50
+
+
+@router.get("/security/audit", response_class=HTMLResponse, name="accounts.audit_log")
+def audit_log(request: Request, page: int = 1):
+    page = max(1, page)
+    rows, total = audit.recent(limit=_AUDIT_PAGE_SIZE, offset=(page - 1) * _AUDIT_PAGE_SIZE)
+    return templates.TemplateResponse(
+        request,
+        "audit_log.html",
+        {
+            "rows": rows,
+            "total": total,
+            "page": page,
+            "has_next": page * _AUDIT_PAGE_SIZE < total,
+            "labels": audit.EVENT_LABELS,
+            "warn_events": audit.WARN_EVENTS,
+            "source_labels": audit.SOURCE_LABELS,
+        },
+    )
 
 
 # ---- 用 Google 账号授权添加（OAuth2） ------------------------------------------
@@ -488,11 +563,14 @@ def oauth_callback(
         account = Account(email=email, encrypted_password=secret, enabled=True)
         db.add(account)
         message = f"已通过 Google 授权添加 {email}"
+        event = "account_added"
     else:
         account.encrypted_password = secret
         account.enabled = True
         message = f"{email} 已改为使用 Google 授权登录"
+        event = "account_updated"
     db.commit()
+    audit.record_request(request, event, f"{email}（Google 授权）")
     logger.info("OAuth account linked email=%s account_id=%s", email, account.id)
     reconcile_idle()   # 凭据变化：IDLE 连接用新的方式重连
     submit_bg(sync_then_backfill, int(account.id))

@@ -19,7 +19,8 @@ services:
       - ./attachments:/app/attachments
       - ./secrets:/app/secrets
       - ./logs:/app/logs
-      # 每日自动备份（数据库快照 + 密钥），请定期拷到服务器以外的地方
+      # 每日自动备份（数据库快照 + 密钥）。在 .env 设置 BACKUP_PUBLIC_KEY 后加密保存，
+      # 并可按 BACKUP_UPLOAD_TELEGRAM / BACKUP_WEBDAV_URL 自动上传到异地
       - ./backups:/app/backups
 
     environment:

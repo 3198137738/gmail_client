@@ -25,6 +25,7 @@ from ..services.mail_body import (
     body_has_remote_images,
     remote_images_allowed,
 )
+from ..services import audit
 from ..services.smtp_service import SMTPSendError, send_email
 from ..navigation import sidebar_data
 from ..templating import templates, utc_to_local
@@ -527,6 +528,11 @@ def send(
             error=error,
         )
         db.add(record)
+        recipients = ", ".join(x for x in (to, cc, bcc) if x)[:300]
+        if status == "sent":
+            audit.record_request(request, "mail_sent", f"{account.email} → {recipients}：「{(subject or '(无主题)')[:80]}」")
+        else:
+            audit.record_request(request, "mail_send_failed", f"{account.email} → {recipients}：{(error or '')[:200]}")
         draft_record = db.get(Draft, _coerce_int(draft_id)) if _coerce_int(draft_id) else None
         if status == "sent" and draft_record is not None:
             db.delete(draft_record)   # 已发出，草稿不再需要
@@ -721,6 +727,7 @@ def sent_delete(
     record = db.get(SentMessage, sent_id)
     if record is None:
         raise HTTPException(status_code=404, detail="Sent message not found")
+    audit.record_request(request, "sent_record_deleted", f"「{(record.subject or '(无主题)')[:80]}」→ {(record.to_addr or '')[:120]}")
     db.delete(record)
     db.commit()
     logger.info("Deleted sent record id=%s account_id=%s", sent_id, record.account_id)

@@ -3,9 +3,10 @@
 正文不再直接插入主页面，而是由单独的地址输出，并附带严格的 CSP：
 
 * 不允许任何脚本（iframe 也不给 allow-scripts）；
-* 外部图片：默认（MAIL_LOAD_REMOTE_IMAGES=true）直接加载；关闭该配置后
-  只允许本站图片（内嵌图片）和 data: 图片，外部图片、CSS 背景图由浏览器
-  拦截，防止跟踪像素泄露 IP 和打开时间，用户点「显示图片」才放开；
+* 外部图片：默认（MAIL_LOAD_REMOTE_IMAGES=true）自动加载；关闭该配置后
+  外部图片、CSS 背景图由浏览器拦截，用户点「显示图片」才放开；
+  开启图片代理（IMAGE_PROXY_ENABLED，默认）时，放开的外部图片也改写成本站
+  /mail-image 代理地址，CSP 仍只允许本站和 data: 图片，浏览器永远不直连对方服务器；
 * 不发送 Referer，链接一律在新窗口打开。
 """
 from __future__ import annotations
@@ -15,7 +16,8 @@ from html import escape
 
 from fastapi.responses import HTMLResponse
 
-from ..config import MAIL_LOAD_REMOTE_IMAGES
+from ..config import IMAGE_PROXY_ENABLED, MAIL_LOAD_REMOTE_IMAGES
+from . import image_proxy
 from .html_sanitizer import has_remote_resources, sanitize_html
 
 _SANITIZE_CACHE_SIZE = 64
@@ -64,8 +66,8 @@ def body_has_remote_images(body_html: str | None) -> bool:
     return bool(body_html) and has_remote_resources(_sanitize_cached(body_html))
 
 
-def _csp(allow_remote_images: bool) -> str:
-    img_src = "'self' data: https: http:" if allow_remote_images else "'self' data:"
+def _csp(allow_direct_images: bool) -> str:
+    img_src = "'self' data: https: http:" if allow_direct_images else "'self' data:"
     return "; ".join(
         [
             "default-src 'none'",
@@ -84,8 +86,13 @@ def body_document_response(
     body_text: str | None,
     *,
     allow_remote_images: bool,
+    proxy_images: bool | None = None,
 ) -> HTMLResponse:
+    if proxy_images is None:
+        proxy_images = IMAGE_PROXY_ENABLED
     content = safe_body_html(body_html, body_text)
+    if allow_remote_images and proxy_images:
+        content = image_proxy.rewrite_html(content)
     document = (
         "<!doctype html><html><head><meta charset=\"utf-8\">"
         "<meta name=\"referrer\" content=\"no-referrer\">"
@@ -96,7 +103,7 @@ def body_document_response(
     return HTMLResponse(
         document,
         headers={
-            "Content-Security-Policy": _csp(allow_remote_images),
+            "Content-Security-Policy": _csp(allow_remote_images and not proxy_images),
             "Referrer-Policy": "no-referrer",
             "X-Content-Type-Options": "nosniff",
             "X-Frame-Options": "SAMEORIGIN",

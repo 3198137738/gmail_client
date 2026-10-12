@@ -27,7 +27,7 @@ from ..config import (
     WEB_AUTH_PASSWORD,
     WEB_AUTH_PERMANENT_BLOCK_AFTER_FAILURES,
 )
-from ..services import two_factor
+from ..services import audit, two_factor
 from ..templating import templates
 
 router = APIRouter(tags=["auth"])
@@ -113,7 +113,9 @@ def login_submit(
 
     if not password_matches(password, WEB_AUTH_PASSWORD):
         throttle = register_failed_login(ip_address)
+        audit.record("login_failed", f"第 {throttle.failed_attempts} 次", ip=ip_address)
         if throttle.is_blocked:
+            audit.on_ip_blocked(ip_address, throttle.is_permanent_blocked)
             error = "该 IP 已被永久封禁" if throttle.is_permanent_blocked else "该 IP 已被临时封禁"
         else:
             error = "密码不正确"
@@ -127,9 +129,14 @@ def login_submit(
         request.session[TWO_FACTOR_PENDING_KEY] = int(time.time())
         request.session[TWO_FACTOR_NEXT_KEY] = next_url
         return RedirectResponse(url=request.url_for("auth.login_2fa_form"), status_code=303)
-    clear_failed_logins(ip_address)
-    mark_authenticated(request)
+    _complete_login(request, ip_address)
     return RedirectResponse(url=next_url, status_code=303)
+
+
+def _complete_login(request: Request, ip_address: str) -> None:
+    clear_failed_logins(ip_address)
+    mark_authenticated(request)   # 会清空会话（含两步验证的待验证状态）
+    audit.on_login_success(ip_address, request.headers.get("user-agent"))
 
 
 # ---- 两步验证（第二步：输入认证器 App 中的 6 位验证码） ------------------------
@@ -169,6 +176,7 @@ def login_2fa_submit(request: Request, code: str = Form("")):
     if not two_factor.verify_and_consume(code):
         # 验证码输错不计入失败次数、不封禁 IP
         attempts = int(request.session.get(TWO_FACTOR_ATTEMPTS_KEY) or 0) + 1
+        audit.record("login_2fa_failed", f"本次登录第 {attempts} 次", ip=ip_address)
         if attempts >= TWO_FACTOR_MAX_ATTEMPTS:
             request.session.clear()
             return _redirect_to_login(
@@ -177,12 +185,13 @@ def login_2fa_submit(request: Request, code: str = Form("")):
         request.session[TWO_FACTOR_ATTEMPTS_KEY] = attempts
         set_auth_error(request, "验证码不正确")
         return RedirectResponse(url=request.url_for("auth.login_2fa_form"), status_code=303)
-    clear_failed_logins(ip_address)
-    mark_authenticated(request)   # 会清空会话（含待验证状态）
+    _complete_login(request, ip_address)
     return RedirectResponse(url=next_url, status_code=303)
 
 
 @router.post("/logout", name="auth.logout")
 def logout(request: Request):
+    if request.session.get("authenticated"):
+        audit.record_request(request, "logout")
     clear_auth(request)
     return RedirectResponse(url="/login", status_code=303)

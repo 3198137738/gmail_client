@@ -2044,3 +2044,21 @@ body[data-win-state="max"] .gc-icon-restore { display: inline-block !important; 
 /* 设置：Google 授权添加账号 */
 .gm-oauth-box { margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--gm-divider); }
 .gm-oauth-form { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+
+/* 设置 › 安全：登录设备 */
+.gm-session-list { margin: 0 0 12px; padding: 0; list-style: none; border-top: 1px solid #f1f3f4; }
+.gm-session { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid #f1f3f4; }
+.gm-session form { margin: 0; }
+.gm-session-main { flex: 1 1 auto; min-width: 0; }
+.gm-session-device { display: flex; align-items: center; gap: 8px; }
+.gm-session-meta { margin-top: 2px; color: var(--gm-text-3); font-size: 12px; overflow-wrap: anywhere; }
+
+/* 设置 › 审计日志 */
+.gm-audit-table-wrap { overflow-x: auto; }
+.gm-audit-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.gm-audit-table th, .gm-audit-table td { padding: 8px 12px 8px 0; border-bottom: 1px solid #f1f3f4; text-align: left; vertical-align: top; }
+.gm-audit-table th { color: var(--gm-text-3); font-weight: 500; white-space: nowrap; }
+.gm-audit-table tr.is-warn td { color: #7a4a00; background: #fffbea; }
+.gm-audit-time { white-space: nowrap; color: var(--gm-text-3); }
+.gm-audit-detail { overflow-wrap: anywhere; }
+.gm-audit-pager { margin-top: 12px; }

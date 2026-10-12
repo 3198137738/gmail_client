@@ -22,6 +22,7 @@ from ..config import (
     TELEGRAM_CHAT_IDS,
     TELEGRAM_POLL_TIMEOUT_SEC,
 )
+from . import audit
 from . import telegram_service as tg
 from .message_actions import (
     count_unread,
@@ -161,6 +162,8 @@ class TelegramBot(threading.Thread):
             done_note = "\u2713 已标记已读"
         elif action == "del":
             ok, info = delete_by_id(target_id)
+            if ok:
+                audit.record("mail_deleted", f"「{info[:80]}」", source="telegram")
             toast = "已删除" if ok else f"失败：{info}"
             done_note = "\U0001F5D1 已删除"
         elif action == "notspam":

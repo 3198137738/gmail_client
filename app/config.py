@@ -45,11 +45,12 @@ DATA_DIR = DATA_ROOT / "data"
 ATTACHMENTS_DIR = DATA_ROOT / "attachments"
 SECRETS_DIR = DATA_ROOT / "secrets"
 LOGS_DIR = DATA_ROOT / "logs"
+IMAGE_CACHE_DIR = DATA_ROOT / "data" / "image-cache"
 BACKUPS_DIR = DATA_ROOT / "backups"
 TEMPLATES_DIR = BASE_DIR / "app" / "templates"
 STATIC_DIR = BASE_DIR / "app" / "static"
 
-for _d in (DATA_DIR, ATTACHMENTS_DIR, SECRETS_DIR, LOGS_DIR, BACKUPS_DIR):
+for _d in (DATA_DIR, ATTACHMENTS_DIR, SECRETS_DIR, LOGS_DIR, BACKUPS_DIR, IMAGE_CACHE_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
 DATABASE_URL = f"sqlite:///{(DATA_DIR / 'gmail_client.db').as_posix()}"
@@ -158,6 +159,18 @@ SYNC_SENT_ENABLED = _get_bool("SYNC_SENT_ENABLED", True)
 # 同步垃圾邮件文件夹（带 \Junk 标记的文件夹）。默认关闭；垃圾邮件不发送 Telegram 通知。
 SYNC_JUNK_ENABLED = _get_bool("SYNC_JUNK_ENABLED", False)
 
+# 外部图片代理：邮件里的外部图片改由服务器下载后再显示，浏览器不直接连对方服务器，
+# 追踪像素拿不到你的 IP；新邮件同步时就预先下载（见 IMAGE_PROXY_PREFETCH），
+# 对方看到的「打开时间」只是收信时间。关闭后恢复浏览器直接加载。
+IMAGE_PROXY_ENABLED = _get_bool("IMAGE_PROXY_ENABLED", True)
+# 新邮件（收件箱，不含垃圾邮件）同步入库时预先下载其中的外部图片
+IMAGE_PROXY_PREFETCH = _get_bool("IMAGE_PROXY_PREFETCH", True)
+IMAGE_PROXY_MAX_MB = _get_positive_int("IMAGE_PROXY_MAX_MB", 10)
+IMAGE_PROXY_TIMEOUT_SEC = _get_positive_int("IMAGE_PROXY_TIMEOUT_SEC", 10)
+# 图片缓存总大小上限与保留天数，每天清理一次
+IMAGE_CACHE_MAX_MB = _get_positive_int("IMAGE_CACHE_MAX_MB", 500)
+IMAGE_CACHE_DAYS = _get_positive_int("IMAGE_CACHE_DAYS", 30)
+
 # 打开邮件时自动加载外部图片。关闭后外部图片默认被拦截（防止跟踪像素获知
 # 打开时间和 IP），需要在邮件中点「显示图片」才加载。
 MAIL_LOAD_REMOTE_IMAGES = _get_bool("MAIL_LOAD_REMOTE_IMAGES", True)
@@ -254,6 +267,26 @@ if not 0 <= BACKUP_HOUR <= 23:
 BACKUP_KEEP = _get_positive_int("BACKUP_KEEP", 7)
 # 附件目录可能很大且能从 Gmail 重新同步，默认不打包
 BACKUP_INCLUDE_ATTACHMENTS = _get_bool("BACKUP_INCLUDE_ATTACHMENTS", False)
+# 备份加密公钥（X25519，base64）。设置后备份先加密再落盘，服务器上只有公钥，
+# 解密用的私钥由你离线保管：拿到备份文件（或整台服务器）也解不开。生成密钥对：
+#   docker compose exec gmail-client python -m app.services.backup_crypto keygen
+BACKUP_PUBLIC_KEY = os.getenv("BACKUP_PUBLIC_KEY", "").strip()
+# 异地备份：加密后的备份自动上传到服务器以外的地方（只上传加密备份）。
+# 1) Telegram：发到 TELEGRAM_CHAT_ID（Bot API 单文件上限 50 MB）
+BACKUP_UPLOAD_TELEGRAM = _get_bool("BACKUP_UPLOAD_TELEGRAM", False)
+# 2) WebDAV：坚果云、Nextcloud、Alist 等，填目录地址（以 / 结尾），文件直接 PUT 到该目录
+BACKUP_WEBDAV_URL = os.getenv("BACKUP_WEBDAV_URL", "").strip()
+BACKUP_WEBDAV_USER = os.getenv("BACKUP_WEBDAV_USER", "").strip()
+BACKUP_WEBDAV_PASSWORD = os.getenv("BACKUP_WEBDAV_PASSWORD", "").strip()
+BACKUP_UPLOAD_TIMEOUT_SEC = _get_positive_int("BACKUP_UPLOAD_TIMEOUT_SEC", 300)
+
+# --- 审计日志与异常告警 ---------------------------------------------------------
+# 审计日志保留天数，超过的每天清理一次
+AUDIT_RETENTION_DAYS = _get_positive_int("AUDIT_RETENTION_DAYS", 180)
+# 从没登录成功过的 IP 登录成功时，用 Telegram 提醒（需配置 TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID）
+AUDIT_ALERT_NEW_IP = _get_bool("AUDIT_ALERT_NEW_IP", True)
+# IP 因密码错误次数过多被封禁时也提醒
+AUDIT_ALERT_IP_BLOCKED = _get_bool("AUDIT_ALERT_IP_BLOCKED", True)
 LOCAL_TIMEZONE = os.getenv("TZ", "").strip() or "Asia/Shanghai"
 
 LOG_MAX_MB = _get_positive_int("LOG_MAX_MB", 10)
