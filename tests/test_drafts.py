@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 
 import app.routes.send as send_routes
+import app.services.outgoing as outgoing
 from app.database import session_scope
 from app.models import Draft
 from app.services.smtp_service import SendResult, SMTPSendError
@@ -91,7 +92,7 @@ def test_successful_send_deletes_draft(client, monkeypatch):
     token = login(client)
     acc = create_account()
     did = _save(client, token, account_id=acc, to="d@example.com", subject="要发的").json()["id"]
-    monkeypatch.setattr(send_routes, "send_email", lambda **kw: SendResult("<id@example.com>"))
+    monkeypatch.setattr(outgoing, "send_email", lambda **kw: SendResult("<id@example.com>"))
     resp = _send(client, token, account_id=acc, to="d@example.com", subject="要发的", body_text="x", draft_id=did)
     assert resp.status_code == 200 and resp.json()["status"] == "sent"
     assert _draft(did) is None
@@ -105,7 +106,7 @@ def test_failed_send_keeps_draft(client, monkeypatch):
     def boom(**kw):
         raise SMTPSendError("连接失败")
 
-    monkeypatch.setattr(send_routes, "send_email", boom)
+    monkeypatch.setattr(outgoing, "send_email", boom)
     resp = _send(client, token, account_id=acc, to="e@example.com", subject="会失败", body_text="x", draft_id=did)
     assert resp.status_code == 400 and "连接失败" in resp.json()["detail"]
     assert _draft(did) is not None   # 前端保留内容并继续沿用这个草稿

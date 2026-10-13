@@ -273,6 +273,7 @@ def nav_payload(request: Request) -> dict:
         "unread_inbox": nav.unread_inbox,
         "unread_junk": nav.unread_junk,
         "drafts": nav.drafts,
+        "scheduled": nav.scheduled,
         "labels": [
             {"id": lb.id, "account_id": lb.account_id, "name": lb.name, "short": lb.short}
             for lb in nav.labels

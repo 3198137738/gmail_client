@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 import app.routes.send as send_routes
+import app.services.outgoing as outgoing
 from app import serializers as ser
 from app.services.smtp_service import SendResult, SMTPSendError
 from tests.helpers import create_account, create_message, login
@@ -72,7 +73,7 @@ def test_send_failure_returns_error(client, monkeypatch):
     def fail(**kwargs):
         raise SMTPSendError("SMTP authentication failed")
 
-    monkeypatch.setattr(send_routes, "send_email", fail)
+    monkeypatch.setattr(outgoing, "send_email", fail)
     resp = _send(client, token, _send_form(acc))
     # 失败时返回 400 和原因；已填写的内容（含附件）由前端保留
     assert resp.status_code == 400
@@ -82,7 +83,7 @@ def test_send_failure_returns_error(client, monkeypatch):
 def test_send_success_returns_sent_record(client, monkeypatch):
     token = login(client)
     acc = create_account()
-    monkeypatch.setattr(send_routes, "send_email", lambda **kwargs: SendResult("<id@example.com>"))
+    monkeypatch.setattr(outgoing, "send_email", lambda **kwargs: SendResult("<id@example.com>"))
 
     resp = _send(client, token, _send_form(acc))
     assert resp.status_code == 200
@@ -108,7 +109,7 @@ def test_partially_refused_send_is_reported(client, monkeypatch):
     token = login(client)
     acc = create_account()
     monkeypatch.setattr(
-        send_routes, "send_email",
+        outgoing, "send_email",
         lambda **kwargs: SendResult("<p@example.com>", refused={"bad@example.com": "550 No such user"}),
     )
     resp = _send(client, token, _send_form(acc))
@@ -161,7 +162,7 @@ def test_same_name_uploads_are_both_attached(client, monkeypatch):
         seen["files"] = [(p.name, p.read_bytes()) for p in kwargs["attachments"]]
         return SendResult("<a@example.com>")
 
-    monkeypatch.setattr(send_routes, "send_email", fake_send)
+    monkeypatch.setattr(outgoing, "send_email", fake_send)
     files = [
         ("attachments", ("image.png", b"first", "image/png")),
         ("attachments", ("image.png", b"second", "image/png")),

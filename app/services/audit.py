@@ -36,6 +36,8 @@ EVENT_LABELS = {
     "2fa_disabled": "关闭两步验证",
     "mail_sent": "发送邮件",
     "mail_send_failed": "发送失败",
+    "mail_scheduled": "定时发送",
+    "mail_schedule_cancelled": "取消定时发送",
     "mail_deleted": "删除邮件",
     "sender_purged": "永久删除发件人邮件",
     "sent_record_deleted": "删除发件记录",

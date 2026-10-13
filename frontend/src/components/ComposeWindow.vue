@@ -4,8 +4,22 @@
 // - 撤销发送：点发送后先隐藏窗口并提示「正在发送… 撤销」，几秒后才真正发送；撤销则恢复窗口。
 import { computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import { NAlert, NButton, NCheckbox, NIcon, NInput, NPopover, NRadio, NRadioGroup, NSelect, NSpin } from "naive-ui";
 import {
+  NAlert,
+  NButton,
+  NButtonGroup,
+  NCheckbox,
+  NDropdown,
+  NIcon,
+  NInput,
+  NPopover,
+  NRadio,
+  NRadioGroup,
+  NSelect,
+  NSpin,
+} from "naive-ui";
+import {
+  ArrowDropDownOutlined,
   AttachFileOutlined,
   CloseFullscreenOutlined,
   CloseOutlined,
@@ -26,7 +40,8 @@ import { formatAddress, isValidEmail, parseAddressList } from "../address";
 import { closeCompose, store } from "../store";
 import { confirm, toast, ui } from "../ui";
 import { isMobile, refreshNav } from "../composables/common";
-import { fileSize } from "../format";
+import { cnTime, fileSize } from "../format";
+import TimePicker from "./TimePicker.vue";
 
 const props = defineProps({
   params: { type: Object, default: () => ({}) },
@@ -292,13 +307,8 @@ function undoSend() {
   if (unsaved) saveDraft();
 }
 
-async function commitSend() {
-  clearTimeout(pendingTimer);
-  closeToast?.();
-  phase.value = "sending";
-  store.composePending = true;
-  // 等进行中的草稿保存结束（拿到草稿 id），服务端发送成功后才能把它删掉
-  await (savingPromise || Promise.resolve());
+// 发送 / 定时发送的表单内容（含附件）
+function buildFormData() {
   const p = prefill.value;
   const data = new FormData();
   const fields = {
@@ -314,6 +324,52 @@ async function commitSend() {
   };
   for (const [key, value] of Object.entries(fields)) data.append(key, value ?? "");
   for (const f of files.value) data.append("attachments", f, f.name);
+  return data;
+}
+
+// ---- 定时发送 ----
+const scheduleOpen = ref(false);
+const sendMenu = [{ key: "schedule", label: "定时发送…" }];
+
+function openSchedule() {
+  if (phase.value !== "ready" || !validate()) return;
+  error.value = "";
+  scheduleOpen.value = true;
+}
+
+async function scheduleAt(ms) {
+  clearTimeout(saveTimer);
+  phase.value = "sending";
+  store.composePending = true;
+  await (savingPromise || Promise.resolve());
+  const data = buildFormData();
+  data.append("send_at_ms", String(ms));
+  try {
+    await api("/api/compose/schedule", { method: "POST", form: data });
+    unsaved = false;
+    closeCompose();
+    refreshNav();
+    const when = new Date(ms);
+    toast(`已安排在 ${when.getMonth() + 1}月${when.getDate()}日 ${cnTime(when)} 发送`, {
+      linkText: "查看",
+      onLink: () => router.push("/compose/scheduled"),
+      duration: 6000,
+    });
+  } catch (err) {
+    phase.value = "ready";
+    store.composePending = false;
+    error.value = err.message;
+  }
+}
+
+async function commitSend() {
+  clearTimeout(pendingTimer);
+  closeToast?.();
+  phase.value = "sending";
+  store.composePending = true;
+  // 等进行中的草稿保存结束（拿到草稿 id），服务端发送成功后才能把它删掉
+  await (savingPromise || Promise.resolve());
+  const data = buildFormData();
   const sendingToast = toast("正在发送…", { duration: 0 });
   try {
     const result = await api("/api/compose/send", { method: "POST", form: data });
@@ -518,9 +574,14 @@ const fullScreen = computed(() => isMobile.value || winState.value === "max");
         </div>
 
         <footer class="gm-compose-foot">
-          <NButton type="primary" class="gm-send-btn" :disabled="phase !== 'ready'" title="发送（Ctrl+Enter）" @click="send">
-            发送
-          </NButton>
+          <NButtonGroup class="gm-send-btn">
+            <NButton type="primary" :disabled="phase !== 'ready'" title="发送（Ctrl+Enter）" @click="send">发送</NButton>
+            <NDropdown trigger="click" placement="top-start" :options="sendMenu" @select="openSchedule">
+              <NButton type="primary" :disabled="phase !== 'ready'" title="更多发送选项" class="gm-send-more">
+                <template #icon><NIcon :component="ArrowDropDownOutlined" /></template>
+              </NButton>
+            </NDropdown>
+          </NButtonGroup>
           <IconBtn
             :icon="TextFormatOutlined"
             title="格式选项"
@@ -548,6 +609,7 @@ const fullScreen = computed(() => isMobile.value || winState.value === "max");
           <span class="gm-draft-status" aria-live="polite">{{ draftStatus }}</span>
           <IconBtn :icon="DeleteOutlined" title="舍弃草稿" @click="discard" />
         </footer>
+        <TimePicker v-model:show="scheduleOpen" title="定时发送" confirm-text="安排发送" @pick="scheduleAt" />
 
         <div v-if="dragging" class="gm-drop-overlay">
           <NIcon :component="UploadFileOutlined" :size="40" />
@@ -655,6 +717,7 @@ const fullScreen = computed(() => isMobile.value || winState.value === "max");
 
 .gm-compose-foot { display: flex; align-items: center; gap: 2px; padding: 10px 0; border-top: 1px solid var(--gm-divider); flex: none; }
 .gm-send-btn { margin-right: 8px; }
+.gm-send-more { padding: 0 6px !important; }
 .gm-foot-spacer { flex: 1; }
 .gm-draft-status { color: var(--gm-text-3); font-size: 12px; margin-right: 4px; white-space: nowrap; }
 .gm-more-menu { display: flex; flex-direction: column; gap: 6px; min-width: 180px; }

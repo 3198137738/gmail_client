@@ -12,7 +12,7 @@ from fastapi import Request
 from sqlalchemy import func, select
 
 from .database import session_scope
-from .models import Account, Draft, Label, Message
+from .models import Account, Draft, Label, Message, ScheduledSend
 
 # 与 routes/messages.py 中记住所选账号的 cookie 一致
 PREFERRED_ACCOUNT_COOKIE = "gc_preferred_account"
@@ -45,6 +45,7 @@ class Sidebar:
     unread_inbox: int = 0
     unread_junk: int = 0
     drafts: int = 0
+    scheduled: int = 0
     labels: list[NavLabel] = field(default_factory=list)
     # 从 cookie 中记住的账号（列表页之外的页面用它来决定文件夹链接指向哪个账号）
     preferred_account_id: Optional[int] = None
@@ -80,10 +81,11 @@ def _load(request: Request) -> Sidebar:
             .group_by(Message.account_id, Message.folder_kind)
         ).all()
         draft_count = db.execute(select(func.count(Draft.id))).scalar() or 0
+        scheduled_count = db.execute(select(func.count(ScheduledSend.id))).scalar() or 0
         label_rows = db.execute(select(Label.id, Label.account_id, Label.name).order_by(Label.name)).all()
 
     by_id = {a.id: a for a in accounts}
-    nav = Sidebar(accounts=accounts, drafts=int(draft_count))
+    nav = Sidebar(accounts=accounts, drafts=int(draft_count), scheduled=int(scheduled_count))
     nav.labels = [
         NavLabel(id=int(i), account_id=int(a), name=n, short=n.rsplit("/", 1)[-1]) for i, a, n in label_rows
     ]

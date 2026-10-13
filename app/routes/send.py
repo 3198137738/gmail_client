@@ -2,10 +2,9 @@
 from __future__ import annotations
 
 import logging
-import shutil
 import uuid
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from html import escape
 from email.utils import getaddresses
 from pathlib import Path
@@ -20,7 +19,7 @@ from sqlalchemy.orm import Session, selectinload
 from .. import serializers as ser
 from ..config import ATTACHMENTS_DIR, SYNC_SENT_ENABLED
 from ..database import get_db
-from ..models import Account, Attachment, Draft, Message, SentMessage
+from ..models import Account, Draft, Message, ScheduledSend, SentMessage
 from ..services.mail_body import (
     body_document_response,
     body_has_remote_images,
@@ -28,11 +27,12 @@ from ..services.mail_body import (
     request_origin,
 )
 from ..services import audit
-from ..services.attachment_restore import local_path, restore_message_files
+from ..services.background import submit_bg
+from ..services.outgoing import deliver, remove_files, stage_attachments
+from ..services.scheduled import SCHEDULED_DIR, process_due
 from ..services.html_sanitizer import sanitize_compose_html
-from ..services.smtp_service import SMTPSendError, send_email
 from ..navigation import sidebar_data
-from ..timeutil import utc_to_local
+from ..timeutil import utc_to_local, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -422,16 +422,6 @@ def drafts_list(db: Session = Depends(get_db)):
     }
 
 
-def _unique_path(directory: Path, name: str) -> Path:
-    """同名附件（如两个 image.png）依次改名为 image_1.png、image_2.png，不能互相覆盖。"""
-    dest = directory / (name or "attachment")
-    n = 1
-    while dest.exists():
-        dest = directory / f"{Path(name).stem}_{n}{Path(name).suffix}"
-        n += 1
-    return dest
-
-
 @router.post("/compose/send", name="compose.send")
 # 必须是普通 def：smtplib 发信和保存附件都是阻塞调用（最长 30 秒），FastAPI 会把
 # 同步路由放进线程池；写成 async def 会卡住事件循环，期间所有请求和 SSE 都无响应。
@@ -460,113 +450,141 @@ def send(
     if not (to or cc or bcc):
         raise HTTPException(status_code=400, detail="At least one recipient is required")
 
+    session_dir = OUTBOX_DIR / uuid.uuid4().hex
     saved_paths: list[Path] = []
-    session_id = uuid.uuid4().hex
-    session_dir = OUTBOX_DIR / session_id
-    session_dir.mkdir(parents=True, exist_ok=True)
-
     try:
-        for upload in attachments or []:
-            if not upload or not upload.filename:
-                continue
-            dest = _unique_path(session_dir, Path(upload.filename).name)
-            with dest.open("wb") as out:
-                shutil.copyfileobj(upload.file, out)
-            saved_paths.append(dest)
-
-        # 转发时把原邮件的附件（不含内嵌图片）按原文件名复制进本次发送一起发出
-        fwd_id = _coerce_int(forward_message_id)
-        if fwd_id:
-            originals = db.execute(
-                select(Attachment).where(
-                    Attachment.message_id == fwd_id,
-                    Attachment.is_inline.is_(False),
-                )
-            ).scalars().all()
-            if any(not (local_path(a) and local_path(a).is_file()) for a in originals):
-                restore_message_files(fwd_id)   # 原邮件附件不在本机：先从 Gmail 补回
-            for att in originals:
-                src = local_path(att) or Path(att.file_path)
-                if not src.is_file():
-                    logger.warning("Forwarded attachment missing on disk: %s", att.file_path)
-                    continue
-                copy_name = Path(att.display_name or att.filename).name or src.name
-                dest = _unique_path(session_dir, copy_name)
-                try:
-                    shutil.copyfile(src, dest)
-                except OSError:
-                    logger.warning("Failed to copy forwarded attachment: %s", att.file_path)
-                    continue
-                saved_paths.append(dest)
-
-        try:
-            result = send_email(
-                from_email=account.email,
-                encrypted_password=account.encrypted_password,
-                from_name=account.display_name,
-                to=to,
-                cc=cc,
-                bcc=bcc,
-                subject=subject,
-                body_text=body_text,
-                body_html=body_html,
-                attachments=saved_paths,
-                use_ssl=(use_ssl == "on"),
-                in_reply_to=(in_reply_to or None),
-                references=(references or None),
-            )
-            message_id = result.message_id
-            if result.refused:
-                # 邮件已发给其余收件人；记为「部分退回」，在发件记录里提示哪些地址没收到
-                status = "partial"
-                error = "以下收件人被拒收：" + "；".join(
-                    f"{addr}（{reason}）" for addr, reason in sorted(result.refused.items())
-                )
-            else:
-                status = "sent"
-                error = None
-        except SMTPSendError as exc:
-            status = "failed"
-            error = str(exc)
-            message_id = None
-            logger.warning("SMTP send failed for account=%s: %s", account_id, exc)
-
-        record = SentMessage(
-            account_id=account_id,
-            to_addr=to,
-            cc_addr=cc,
-            bcc_addr=bcc,
-            subject=subject,
-            body_text=body_text,
-            body_html=body_html,
-            message_id=message_id,
-            status=status,
-            error=error,
+        saved_paths = stage_attachments(db, session_dir, attachments, _coerce_int(forward_message_id))
+        record = deliver(
+            db, account,
+            to=to, cc=cc, bcc=bcc, subject=subject, body_text=body_text, body_html=body_html,
+            use_ssl=(use_ssl == "on"), in_reply_to=in_reply_to, references=references,
+            attachments=saved_paths, draft_id=_coerce_int(draft_id), audit_ip=audit.request_ip(request),
         )
-        db.add(record)
-        recipients = ", ".join(x for x in (to, cc, bcc) if x)[:300]
-        if status != "failed":
-            audit.record_request(request, "mail_sent", f"{account.email} → {recipients}：「{(subject or '(无主题)')[:80]}」")
-        else:
-            audit.record_request(request, "mail_send_failed", f"{account.email} → {recipients}：{(error or '')[:200]}")
-        draft_record = db.get(Draft, _coerce_int(draft_id)) if _coerce_int(draft_id) else None
-        if status != "failed" and draft_record is not None:
-            db.delete(draft_record)   # 已发出，草稿不再需要
-        db.commit()
-
-        if status == "failed":
-            raise HTTPException(status_code=400, detail=f"发送失败：{error}")
-        return {"ok": True, "sent_id": int(record.id), "status": status, "error": error}
+        if record.status == "failed":
+            raise HTTPException(status_code=400, detail=f"发送失败：{record.error}")
+        return {"ok": True, "sent_id": int(record.id), "status": record.status, "error": record.error}
     finally:
-        for p in saved_paths:
-            try:
-                p.unlink(missing_ok=True)
-            except OSError:
-                pass
-        try:
-            session_dir.rmdir()
-        except OSError:
-            pass
+        remove_files(saved_paths, session_dir)
+
+
+# ---- 定时发送 -----------------------------------------------------------------
+# 最晚能安排到多久以后
+_SCHEDULE_MAX_AHEAD = timedelta(days=366)
+
+
+@router.post("/compose/schedule", name="compose.schedule")
+def schedule_send(
+    request: Request,
+    send_at_ms: int = Form(...),
+    account_id: int = Form(...),
+    to: str = Form(""),
+    cc: Optional[str] = Form(None),
+    bcc: Optional[str] = Form(None),
+    subject: str = Form(""),
+    body_text: Optional[str] = Form(None),
+    body_html: Optional[str] = Form(None),
+    use_ssl: Optional[str] = Form("on"),
+    in_reply_to: Optional[str] = Form(None),
+    references: Optional[str] = Form(None),
+    forward_message_id: Optional[str] = Form(None),
+    draft_id: Optional[str] = Form(None),
+    attachments: List[UploadFile] = File(default=[]),
+    db: Session = Depends(get_db),
+):
+    """安排在 send_at_ms（浏览器给出的毫秒时间戳）发送。附件现在就保存下来，草稿随之删除。"""
+    account = db.get(Account, account_id)
+    if account is None or not account.enabled:
+        raise HTTPException(status_code=400, detail="Selected account is not available")
+    if not (to or cc or bcc):
+        raise HTTPException(status_code=400, detail="At least one recipient is required")
+    send_at = datetime.fromtimestamp(send_at_ms / 1000, tz=timezone.utc).replace(tzinfo=None)
+    now = utcnow()
+    if send_at < now - timedelta(minutes=1) or send_at > now + _SCHEDULE_MAX_AHEAD:
+        raise HTTPException(status_code=400, detail="发送时间需在现在到一年之内")
+
+    item = ScheduledSend(
+        account_id=account_id, to_addr=to, cc_addr=cc, bcc_addr=bcc, subject=subject,
+        body_text=body_text, body_html=body_html, in_reply_to=in_reply_to or None,
+        references=references or None, forward_message_id=_coerce_int(forward_message_id),
+        use_ssl=(use_ssl == "on"), send_at=send_at, status="pending",
+    )
+    db.add(item)
+    db.flush()
+    directory = SCHEDULED_DIR / str(item.id)
+    paths = stage_attachments(db, directory, attachments, item.forward_message_id)
+    item.attachments_dir = str(directory)
+    item.attachment_names = "\n".join(p.name for p in paths) or None
+    draft = db.get(Draft, _coerce_int(draft_id)) if _coerce_int(draft_id) else None
+    if draft is not None:
+        db.delete(draft)
+    db.commit()
+    audit.record_request(
+        request, "mail_scheduled",
+        f"{account.email} → {', '.join(x for x in (to, cc, bcc) if x)[:200]}：「{(subject or '(无主题)')[:80]}」",
+    )
+    return {"ok": True, "id": int(item.id), "send_at": ser.iso_utc(send_at)}
+
+
+@router.get("/scheduled", name="compose.scheduled_list")
+def scheduled_list(db: Session = Depends(get_db)):
+    items = db.execute(select(ScheduledSend).order_by(ScheduledSend.send_at)).scalars().all()
+    return {
+        "items": [
+            {
+                "id": int(it.id),
+                "account_id": int(it.account_id),
+                "to": it.to_addr or "",
+                "to_short": ser.recipients(it.to_addr),
+                "to_name": ser.addr_name(it.to_addr),
+                "subject": it.subject or "",
+                "snippet": ser.snippet(it.body_text),
+                "send_at": ser.iso_utc(it.send_at),
+                "status": it.status,
+                "error": it.error,
+                "attachments": [n for n in (it.attachment_names or "").split("\n") if n],
+            }
+            for it in items
+        ]
+    }
+
+
+def _get_scheduled(db: Session, item_id: int) -> ScheduledSend:
+    item = db.get(ScheduledSend, item_id)
+    if item is None or item.status == "sending":
+        raise HTTPException(status_code=404, detail="该定时邮件不存在或正在发送")
+    return item
+
+
+@router.post("/scheduled/{item_id}/cancel", name="compose.scheduled_cancel")
+def scheduled_cancel(request: Request, item_id: int, db: Session = Depends(get_db)):
+    """取消定时发送，内容转为草稿（附件不能保存在草稿里，需要重新添加）。"""
+    item = _get_scheduled(db, item_id)
+    draft = Draft(
+        account_id=item.account_id, to_addr=item.to_addr, cc_addr=item.cc_addr, bcc_addr=item.bcc_addr,
+        subject=item.subject, body_text=item.body_text, body_html=item.body_html,
+        in_reply_to=item.in_reply_to, references=item.references, forward_message_id=item.forward_message_id,
+    )
+    db.add(draft)
+    directory = Path(item.attachments_dir) if item.attachments_dir else None
+    had_files = bool(item.attachment_names)
+    db.delete(item)
+    db.commit()
+    if directory is not None:
+        remove_files([], directory)
+    audit.record_request(request, "mail_schedule_cancelled", f"「{(item.subject or '(无主题)')[:80]}」")
+    return {"ok": True, "draft_id": int(draft.id), "attachments_dropped": had_files}
+
+
+@router.post("/scheduled/{item_id}/send-now", name="compose.scheduled_send_now")
+def scheduled_send_now(item_id: int, db: Session = Depends(get_db)):
+    """立即发送（也用于发送失败后重试）：改为现在发送，交给后台任务处理。"""
+    item = _get_scheduled(db, item_id)
+    item.send_at = utcnow()
+    item.status = "pending"
+    item.error = None
+    db.commit()
+    submit_bg(process_due)
+    return {"ok": True}
 
 
 # ---- 发件记录 -----------------------------------------------------------------

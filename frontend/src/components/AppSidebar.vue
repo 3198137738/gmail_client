@@ -11,6 +11,7 @@ import {
   LightModeOutlined,
   BlockOutlined,
   DraftsOutlined,
+  ScheduleSendOutlined,
   EditOutlined,
   InboxOutlined,
   LabelFilled,
@@ -77,6 +78,7 @@ const folderOptions = computed(() => {
   items.push(
     { key: listUrl("all", accId), kind: "all", label: "所有邮件", icon: icon(MailOutlined) },
     { key: "/compose/drafts", section: "drafts", label: itemLabel("草稿", n?.drafts || 0), icon: icon(DraftsOutlined) },
+    { key: "/compose/scheduled", section: "scheduled", label: itemLabel("定时发送", n?.scheduled || 0), icon: icon(ScheduleSendOutlined) },
     { key: "/compose/sent", section: "sent_log", label: "发件记录", icon: icon(OutboxOutlined) },
     { key: "/messages/blocked-senders", section: "blocked", label: "屏蔽的发件人", icon: icon(BlockOutlined) },
   );

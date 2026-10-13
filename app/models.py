@@ -54,6 +54,9 @@ class Account(Base):
         "PendingOp", back_populates="account", cascade="all, delete-orphan"
     )
     drafts = relationship("Draft", back_populates="account", cascade="all, delete-orphan")
+    scheduled_sends = relationship(
+        "ScheduledSend", back_populates="account", cascade="all, delete-orphan"
+    )
     labels = relationship("Label", back_populates="account", cascade="all, delete-orphan")
 
 
@@ -303,6 +306,37 @@ class Draft(Base):
     )
 
     account = relationship("Account", back_populates="drafts")
+
+
+class ScheduledSend(Base):
+    """定时发送：到 send_at 时由后台任务发出。附件在安排时就保存到 attachments_dir。"""
+
+    __tablename__ = "scheduled_sends"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    to_addr: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    cc_addr: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    bcc_addr: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    subject: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    body_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    body_html: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    in_reply_to: Mapped[Optional[str]] = mapped_column(String(998), nullable=True)
+    references: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    forward_message_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    use_ssl: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # 计划发送时间（UTC，无时区）
+    send_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    # pending（等待中）/ sending（正在发送）/ failed（发送失败）；发送成功后记录直接删除
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    attachment_names: Mapped[Optional[str]] = mapped_column(Text, nullable=True)   # 换行分隔，列表显示用
+    attachments_dir: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
+
+    account = relationship("Account", back_populates="scheduled_sends")
 
 
 class AppSetting(Base):

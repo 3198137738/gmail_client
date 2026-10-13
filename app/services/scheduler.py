@@ -27,6 +27,7 @@ from .backup import safe_run_backup
 from .imap_backfill import schedule_all_backfills
 from .imap_service import safe_sync_account
 from .outbox import process_all_due
+from .scheduled import safe_process_due
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,17 @@ def start_scheduler() -> BackgroundScheduler:
         minutes=1,
         next_run_time=datetime.now(timezone.utc) + timedelta(seconds=5),
         id="outbox",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    # 定时发送：每分钟发出到时间的邮件
+    sched.add_job(
+        safe_process_due,
+        "interval",
+        minutes=1,
+        next_run_time=datetime.now(timezone.utc) + timedelta(seconds=20),
+        id="scheduled-sends",
         replace_existing=True,
         max_instances=1,
         coalesce=True,
