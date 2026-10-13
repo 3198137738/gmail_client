@@ -29,6 +29,7 @@ class NavAccount:
     color: str
     unread_inbox: int = 0
     unread_junk: int = 0
+    group: str = ""
 
 
 @dataclass
@@ -73,6 +74,7 @@ def _load(request: Request) -> Sidebar:
                 email=a.email,
                 name=a.display_name or a.email,
                 color=LABEL_COLORS[(int(a.id) - 1) % len(LABEL_COLORS)],
+                group=a.group_name or "",
             )
             for a in rows
         ]

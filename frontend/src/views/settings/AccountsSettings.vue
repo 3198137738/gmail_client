@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import {
   NAlert,
+  NAutoComplete,
   NButton,
   NCheckbox,
   NForm,
@@ -27,7 +28,13 @@ import { onRealtime } from "../../realtime";
 const data = ref(null);
 const selected = ref([]);
 const editing = ref(null);
-const editForm = reactive({ display_name: "", password: "" });
+const editForm = reactive({ display_name: "", password: "", group_name: "" });
+// 已有的分组名，填写分组时作为候选
+const groupOptions = computed(() => {
+  const names = [...new Set((data.value?.accounts || []).map((a) => a.group_name).filter(Boolean))].sort();
+  const typed = (editForm.group_name || "").trim();
+  return names.filter((n) => !typed || n.includes(typed)).map((n) => ({ label: n, value: n }));
+});
 // 正在编辑的账号的签名编辑器（列表里同时只编辑一个账号）
 let sigEditor = null;
 const single = reactive({ email: "", display_name: "", password: "", verify: false });
@@ -84,11 +91,12 @@ async function batchDelete() {
 function startEdit(a) {
   editing.value = editing.value === a.id ? null : a.id;
   editForm.display_name = a.display_name;
+  editForm.group_name = a.group_name;
   editForm.password = "";
 }
 
 async function saveEdit(a) {
-  const body = { display_name: editForm.display_name };
+  const body = { display_name: editForm.display_name, group_name: editForm.group_name || "" };
   if (editForm.password) body.password = editForm.password;
   if (sigEditor) body.signature_html = sigEditor.getInnerHtml();
   if (await run(post(`/api/accounts/${a.id}/update`, body), "已保存")) {
@@ -186,6 +194,7 @@ function oauthStart() {
                   <span v-if="a.display_name" class="gm-acct-email">&lt;{{ a.email }}&gt;</span>
                 </div>
                 <div class="gm-acct-badges">
+                  <NTag v-if="a.group_name" size="small" type="info" :bordered="false">{{ a.group_name }}</NTag>
                   <NTag v-if="!a.enabled" size="small" :bordered="false">已停用</NTag>
                   <NTag v-if="a.oauth" size="small" type="success" :bordered="false" title="通过 Google 账号授权登录（OAuth2）">Google 授权</NTag>
                   <NTag v-else size="small" :bordered="false" title="使用应用专用密码登录">应用专用密码</NTag>
@@ -213,6 +222,9 @@ function oauthStart() {
                   <span v-if="!a.sync_states.length" class="gm-acct-sync-item">尚未同步</span>
                 </div>
                 <NForm v-if="editing === a.id" class="gm-acct-edit" label-placement="top" @submit.prevent="saveEdit(a)">
+                  <NFormItem label="分组（可选，侧栏按分组折叠显示）">
+                    <NAutoComplete v-model:value="editForm.group_name" :options="groupOptions" placeholder="如：工作、注册用" clearable />
+                  </NFormItem>
                   <NFormItem label="显示名">
                     <NInput v-model:value="editForm.display_name" />
                   </NFormItem>

@@ -22,3 +22,14 @@ def test_signature_saved_sanitized_and_returned_for_compose(client):
     api_post(client, f"/api/accounts/{acc}/update", token, {"signature_html": "  "})
     account = next(a for a in client.get("/api/accounts").json()["accounts"] if a["id"] == acc)
     assert account["signature_html"] == ""
+
+
+def test_account_group_saved_and_in_nav(client):
+    token = login(client)
+    acc = create_account()
+    api_post(client, f"/api/accounts/{acc}/update", token, {"group_name": "  注册用  "})
+    nav = client.get("/api/messages/nav").json()
+    assert next(a for a in nav["accounts"] if a["id"] == acc)["group"] == "注册用"
+    api_post(client, f"/api/accounts/{acc}/update", token, {"group_name": ""})
+    nav = client.get("/api/messages/nav").json()
+    assert next(a for a in nav["accounts"] if a["id"] == acc)["group"] == ""

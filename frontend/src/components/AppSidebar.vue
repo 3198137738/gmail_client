@@ -1,7 +1,7 @@
 <script setup>
 // 左侧导航（Gmail 式）：写邮件按钮、文件夹、标签、账号。
 // 文件夹 / 标签 / 账号是三个独立的菜单：可以同时高亮「收件箱」和某个账号。
-import { computed, h } from "vue";
+import { computed, h, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { NButton, NIcon, NMenu } from "naive-ui";
 import {
@@ -14,6 +14,7 @@ import {
   DraftsOutlined,
   ScheduleSendOutlined,
   EditOutlined,
+  FolderOutlined,
   InboxOutlined,
   LabelFilled,
   LabelOutlined,
@@ -122,21 +123,69 @@ const accountKind = computed(() =>
   ["inbox", "sent", "junk", "all", "starred", "snoozed"].includes(activeKind.value) ? activeKind.value : "inbox",
 );
 
+function accountItem(a) {
+  return {
+    key: `acc-${a.id}`,
+    label: () =>
+      h("span", { class: "gm-nav-label", title: a.email }, [
+        h("span", { class: "gm-nav-text" }, a.name),
+        a.unread_inbox ? h("span", { class: "gm-nav-count" }, String(a.unread_inbox)) : null,
+      ]),
+    icon: icon(LabelFilled, a.color),
+  };
+}
+
+// 设置了分组的账号放进可折叠的分组里（显示组内未读合计），没有分组的排在后面
 const accountOptions = computed(() => {
   const items = [{ key: "all", label: "全部账号", icon: icon(LayersOutlined) }];
+  const groups = new Map();
+  const ungrouped = [];
   for (const a of nav.value?.accounts || []) {
+    if (a.group) {
+      if (!groups.has(a.group)) groups.set(a.group, []);
+      groups.get(a.group).push(a);
+    } else {
+      ungrouped.push(a);
+    }
+  }
+  for (const [name, members] of [...groups].sort(([x], [y]) => x.localeCompare(y, "zh-CN"))) {
+    const unread = members.reduce((n, a) => n + a.unread_inbox, 0);
     items.push({
-      key: `acc-${a.id}`,
+      key: `grp-${name}`,
       label: () =>
-        h("span", { class: "gm-nav-label", title: a.email }, [
-          h("span", { class: "gm-nav-text" }, a.name),
-          a.unread_inbox ? h("span", { class: "gm-nav-count" }, String(a.unread_inbox)) : null,
+        h("span", { class: "gm-nav-label", title: `${name}（${members.length} 个账号）` }, [
+          h("span", { class: "gm-nav-text" }, name),
+          unread ? h("span", { class: "gm-nav-count" }, String(unread)) : null,
         ]),
-      icon: icon(LabelFilled, a.color),
+      icon: icon(FolderOutlined),
+      children: members.map(accountItem),
     });
   }
+  items.push(...ungrouped.map(accountItem));
   return items;
 });
+const groupKeys = computed(() => accountOptions.value.filter((o) => o.children).map((o) => o.key));
+
+// 分组默认展开；用户折叠过的分组记在 localStorage
+const COLLAPSED_KEY = "gm:collapsed-groups";
+function storedCollapsed() {
+  try {
+    const keys = JSON.parse(localStorage.getItem(COLLAPSED_KEY) || "[]");
+    return new Set(Array.isArray(keys) ? keys : []);
+  } catch {
+    return new Set();
+  }
+}
+const collapsedGroups = ref(storedCollapsed());
+const expandedGroups = computed(() => groupKeys.value.filter((k) => !collapsedGroups.value.has(k)));
+function onGroupsExpanded(keys) {
+  collapsedGroups.value = new Set(groupKeys.value.filter((k) => !keys.includes(k)));
+  try {
+    localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...collapsedGroups.value]));
+  } catch {
+    /* 隐私模式等情况下忽略 */
+  }
+}
 
 const accountValue = computed(() => {
   if (!activeKind.value) return null;
@@ -244,6 +293,8 @@ const mobileMenu = computed(() =>
     <NMenu
       v-if="nav && nav.accounts.length"
       :options="accountOptions"
+      :expanded-keys="expandedGroups"
+      @update:expanded-keys="onGroupsExpanded"
       :value="accountValue"
       :collapsed="collapsed"
       :collapsed-width="72"

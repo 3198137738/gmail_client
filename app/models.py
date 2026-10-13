@@ -33,6 +33,8 @@ class Account(Base):
     display_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     # 签名（HTML，已清洗）：写邮件时自动插入
     signature_html: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # 分组名（如「工作」「注册用」），侧栏按分组折叠显示；为空表示不分组
+    group_name: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
     encrypted_password: Mapped[str] = mapped_column(Text, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     notify_enabled: Mapped[bool] = mapped_column(

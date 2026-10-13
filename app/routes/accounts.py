@@ -122,6 +122,7 @@ def list_accounts(request: Request, db: Session = Depends(get_db)):
                 "email": a.email,
                 "display_name": a.display_name or "",
                 "signature_html": a.signature_html or "",
+                "group_name": a.group_name or "",
                 "color": LABEL_COLORS[(int(a.id) - 1) % len(LABEL_COLORS)],
                 "enabled": bool(a.enabled),
                 "notify_enabled": bool(a.notify_enabled),
@@ -307,6 +308,7 @@ class AccountUpdateBody(BaseModel):
     display_name: Optional[str] = None
     password: Optional[str] = None
     signature_html: Optional[str] = None
+    group_name: Optional[str] = None
 
 
 @router.post("/accounts/{account_id}/update", name="accounts.update")
@@ -319,6 +321,8 @@ def update_account(request: Request, account_id: int, body: AccountUpdateBody, d
         if len(cleaned) < 8:
             raise HTTPException(status_code=400, detail="App password is too short")
         account.encrypted_password = encrypt_password(cleaned)
+    if body.group_name is not None:
+        account.group_name = body.group_name.strip()[:60] or None
     if body.signature_html is not None:
         # 签名会插入写邮件编辑器，与草稿一样先清洗
         account.signature_html = sanitize_compose_html(body.signature_html).strip() or None
@@ -327,6 +331,7 @@ def update_account(request: Request, account_id: int, body: AccountUpdateBody, d
             ("显示名称", body.display_name is not None),
             ("应用专用密码", bool(body.password)),
             ("签名", body.signature_html is not None),
+            ("分组", body.group_name is not None),
         ) if on
     ]
     audit.record_request(request, "account_updated", f"{account.email}：{'、'.join(changes) or '无变化'}")

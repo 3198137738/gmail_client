@@ -277,6 +277,7 @@ def nav_payload(request: Request) -> dict:
                 "color": a.color,
                 "unread_inbox": a.unread_inbox,
                 "unread_junk": a.unread_junk,
+                "group": a.group,
             }
             for a in nav.accounts
         ],
