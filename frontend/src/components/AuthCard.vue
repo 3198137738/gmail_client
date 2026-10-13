@@ -15,7 +15,7 @@ const THEME_TEXT = { light: "浅色", dark: "深色", auto: "跟随系统" };
 <template>
   <main class="gm-auth">
     <div class="gm-auth-brand">
-      <img src="/img/logo.svg" alt="" width="36" height="27" />
+      <img src="/img/logo.svg" alt="" width="40" height="40" />
       <span>Roundcube</span>
     </div>
     <NCard class="gm-auth-card" :bordered="true" size="large">

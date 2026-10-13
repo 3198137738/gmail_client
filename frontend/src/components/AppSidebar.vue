@@ -194,7 +194,7 @@ const mobileMenu = computed(() =>
 <template>
   <aside class="gm-nav" :class="{ 'is-collapsed': collapsed, 'is-mobile': mobile }" aria-label="导航">
     <div v-if="mobile" class="gm-nav-brand">
-      <img src="/img/logo.svg" alt="" width="32" height="24" />
+      <img src="/img/logo.svg" alt="" width="28" height="28" />
       <span>Roundcube</span>
     </div>
     <div class="gm-nav-compose">

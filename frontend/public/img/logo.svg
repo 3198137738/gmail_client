@@ -1,12 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 30" width="40" height="30">
-  <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#4285f4"/>
-      <stop offset=".45" stop-color="#ea4335"/>
-      <stop offset=".7" stop-color="#fbbc04"/>
-      <stop offset="1" stop-color="#34a853"/>
-    </linearGradient>
-  </defs>
-  <rect x="2" y="2" width="36" height="26" rx="4" fill="none" stroke="url(#g)" stroke-width="3.6"/>
-  <path d="M4 5.5 20 17 36 5.5" fill="none" stroke="url(#g)" stroke-width="3.6" stroke-linejoin="round" stroke-linecap="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <!-- Roundcube：等距视角的圆角立方体（Cube），正面的白色 V 形折线是信封封口，交点处一枚圆形封蜡（Round） -->
+  <g stroke-linejoin="round" stroke-width="4.4">
+    <path d="M24 5.5 40 14.75 24 24 8 14.75Z" fill="#5aa7fd" stroke="#5aa7fd"/>
+    <path d="M8 14.75 24 24V42.5L8 33.25Z" fill="#2080f0" stroke="#2080f0"/>
+    <path d="M40 14.75 24 24V42.5L40 33.25Z" fill="#1462c4" stroke="#1462c4"/>
+  </g>
+  <path d="M10.6 21.4 24 29.2l13.4-7.8" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="24" cy="29.2" r="4.1" fill="#fff"/>
+  <circle cx="24" cy="29.2" r="2.1" fill="#f0a020"/>
 </svg>

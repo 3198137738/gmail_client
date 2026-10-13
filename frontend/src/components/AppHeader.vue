@@ -69,7 +69,7 @@ const themeOptions = [
   <div class="gm-header-inner">
     <IconBtn :icon="MenuOutlined" :title="isMobile ? '主菜单' : '折叠 / 展开侧栏'" @click="toggleMenu" />
     <RouterLink v-if="!isMobile" class="gm-brand" to="/messages/" title="收件箱">
-      <img src="/img/logo.svg" alt="" width="28" height="21" />
+      <img src="/img/logo.svg" alt="" width="28" height="28" />
       <span>Roundcube</span>
     </RouterLink>
 
