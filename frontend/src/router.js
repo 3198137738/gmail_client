@@ -51,6 +51,12 @@ const routes = [
         meta: { title: "设置 - 账号和导入", settings: "accounts", section: "settings" },
       },
       {
+        path: "accounts/templates",
+        name: "templates",
+        component: () => import("./views/settings/TemplatesSettings.vue"),
+        meta: { title: "设置 - 模板", settings: "templates", section: "settings" },
+      },
+      {
         path: "accounts/security",
         name: "security",
         component: () => import("./views/settings/SecuritySettings.vue"),

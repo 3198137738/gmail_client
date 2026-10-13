@@ -51,8 +51,21 @@ function onInput() {
   emit("change");
 }
 
+// 编辑器里最近一次的光标 / 选区：点菜单、弹出对话框后编辑器会失去焦点，插入内容时回到这里
+let savedRange = null;
+
+function restoreSelection() {
+  editor.value.focus();
+  if (!savedRange) return;
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(savedRange);
+}
+
 function updateStates() {
   if (document.activeElement !== editor.value) return;
+  const sel = window.getSelection();
+  if (sel && sel.rangeCount && editor.value.contains(sel.anchorNode)) savedRange = sel.getRangeAt(0).cloneRange();
   const next = {};
   for (const b of BUTTONS.concat(BUTTONS2)) {
     if (b.cmd === "formatBlock") continue;
@@ -72,7 +85,15 @@ function exec(cmd, value) {
   updateStates();
 }
 
+// 在光标处插入一段 HTML（模板、签名）；没有光标时插到开头
+function insertHtml(html) {
+  restoreSelection();
+  document.execCommand("insertHTML", false, html);
+  onInput();
+}
+
 function insertLink(url) {
+  restoreSelection();
   const selection = window.getSelection();
   if (selection && selection.toString() && editor.value.contains(selection.anchorNode)) {
     exec("createLink", url);
@@ -103,7 +124,14 @@ onBeforeUnmount(() => document.removeEventListener("selectionchange", updateStat
 defineExpose({
   focus: () => editor.value?.focus(),
   insertLink,
+  insertHtml,
   isEmpty,
+  // 当前内容（不加外层 div），保存为模板用
+  getInnerHtml: () => (isEmpty() ? "" : editor.value.innerHTML),
+  // 编辑区 DOM：切换发件账号时替换其中的签名块
+  editorEl: () => editor.value,
+  // 直接改了编辑区 DOM 后调用，更新占位提示并通知修改
+  changed: onInput,
   getHtml: () => (isEmpty() ? "" : `<div dir="ltr">${editor.value.innerHTML}</div>`),
   getText: () => editor.value?.innerText || "",
   setText(text) {

@@ -25,6 +25,7 @@ import {
   CloseOutlined,
   DeleteOutlined,
   LinkOutlined,
+  TextSnippetOutlined,
   MinimizeOutlined,
   MoreVertOutlined,
   OpenInFullOutlined,
@@ -246,6 +247,76 @@ function promptLink() {
       if (!value || value === "https://") return;
       if (!/^(https?:|mailto:)/i.test(value)) value = `https://${value}`;
       editor.value.insertLink(value);
+    },
+  });
+}
+
+// ---- 模板（快捷回复） ----
+const templates = ref([]);
+
+async function loadTemplates() {
+  try {
+    templates.value = (await get("/api/templates")).items;
+  } catch {
+    /* 菜单里仍可保存、管理 */
+  }
+}
+
+const templateMenu = computed(() => {
+  const items = templates.value.map((t) => ({ key: `t-${t.id}`, label: t.name }));
+  if (!items.length) items.push({ key: "none", label: "还没有模板", disabled: true });
+  return [
+    { type: "group", key: "g", label: "插入模板", children: items },
+    { type: "divider", key: "d" },
+    { key: "save", label: "将当前正文保存为模板…" },
+    { key: "manage", label: "管理模板" },
+  ];
+});
+
+function htmlToText(html) {
+  const div = document.createElement("div");
+  div.innerHTML = html;
+  return div.innerText;
+}
+
+function onTemplateMenu(key) {
+  if (key === "save") return saveAsTemplate();
+  if (key === "manage") return router.push("/accounts/templates");
+  const t = templates.value.find((x) => `t-${x.id}` === key);
+  if (!t) return;
+  if (form.plain) form.plainText = `${form.plainText}${form.plainText ? "\n" : ""}${htmlToText(t.body_html)}`;
+  else editor.value?.insertHtml(t.body_html);
+  markDirty();
+}
+
+function saveAsTemplate() {
+  const body = form.plain
+    ? form.plainText.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/\n/g, "<br>")
+    : editor.value?.getInnerHtml() || "";
+  if (!body.trim()) {
+    ui.message.warning("正文是空的，先写点内容再保存为模板");
+    return;
+  }
+  const name = ref(form.subject.trim().slice(0, 60));
+  ui.dialog.create({
+    title: "保存为模板",
+    showIcon: false,
+    content: () =>
+      h(NInput, { value: name.value, "onUpdate:value": (v) => (name.value = v), placeholder: "模板名称", autofocus: true }),
+    positiveText: "保存",
+    negativeText: "取消",
+    onPositiveClick: async () => {
+      if (!name.value.trim()) {
+        ui.message.warning("请填写模板名称");
+        return false;
+      }
+      try {
+        await post("/api/templates", { name: name.value, body_html: body });
+        ui.message.success("已保存为模板");
+      } catch (err) {
+        ui.message.error(err.message);
+        return false;
+      }
     },
   });
 }
@@ -591,6 +662,17 @@ const fullScreen = computed(() => isMobile.value || winState.value === "max");
           <IconBtn :icon="AttachFileOutlined" title="添加附件（也可以直接拖放文件）" @click="fileInput.click()" />
           <input ref="fileInput" type="file" multiple hidden @change="onFilePicked" />
           <IconBtn :icon="LinkOutlined" title="插入链接" :disabled="form.plain" @click="promptLink" />
+          <NDropdown
+            trigger="click"
+            placement="top-start"
+            :options="templateMenu"
+            scrollable
+            style="max-height: 360px"
+            @update:show="(v) => v && loadTemplates()"
+            @select="onTemplateMenu"
+          >
+            <IconBtn :icon="TextSnippetOutlined" title="模板（快捷回复）" />
+          </NDropdown>
           <NPopover trigger="click" placement="top-start">
             <template #trigger>
               <IconBtn :icon="MoreVertOutlined" title="更多选项" />

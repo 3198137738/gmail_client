@@ -416,3 +416,15 @@ class AuditLog(Base):
     __table_args__ = (
         Index("ix_audit_logs_event_ip", "event", "ip_address"),
     )
+
+
+class MailTemplate(Base):
+    """邮件模板（快捷回复）：写邮件时一键插入的常用内容。"""
+
+    __tablename__ = "mail_templates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    body_html: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now, nullable=False)
