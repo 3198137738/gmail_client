@@ -1,43 +1,21 @@
 <script setup>
-import { computed, h, ref, watch } from "vue";
-import { useRoute, useRouter } from "vue-router";
-import { NAvatar, NBadge, NButton, NDropdown, NIcon, NInput, NTooltip } from "naive-ui";
+import { computed, h } from "vue";
+import { NAvatar, NBadge, NDropdown, NIcon, NTooltip } from "naive-ui";
 import {
   BrightnessAutoOutlined,
   DarkModeOutlined,
   LightModeOutlined,
   LogOutOutlined,
   MenuOutlined,
-  SearchOutlined,
   SettingsOutlined,
   SyncOutlined,
 } from "@vicons/material";
 import IconBtn from "./IconBtn.vue";
+import SearchBox from "./SearchBox.vue";
 import { navAccount, setNavCollapsed, setThemeMode, store } from "../store";
 import { isMobile } from "../composables/common";
 import { syncAll, logout } from "../actions";
 import { initial } from "../format";
-
-const route = useRoute();
-const router = useRouter();
-
-const search = ref("");
-watch(
-  () => route.fullPath,
-  () => {
-    search.value = route.name === "list" ? String(route.query.q || "") : "";
-  },
-  { immediate: true },
-);
-
-function submitSearch() {
-  const q = search.value.trim();
-  // 在列表页搜索时保留当前文件夹、账号、每页封数和「仅看未读」
-  const base = route.name === "list" ? route.query : { kind: store.view.kind || "inbox" };
-  const query = { ...base, q, page: undefined, after: undefined, before: undefined };
-  if (!q) delete query.q;
-  router.push({ path: "/messages/", query });
-}
 
 // 电脑端折叠 / 展开侧栏，手机端打开导航抽屉
 function toggleMenu() {
@@ -73,18 +51,7 @@ const themeOptions = [
       <span>Roundcube</span>
     </RouterLink>
 
-    <form class="gm-search" role="search" @submit.prevent="submitSearch">
-      <NInput
-        v-model:value="search"
-        placeholder="搜索邮件（发件人、主题、正文）"
-        clearable
-        :input-props="{ 'aria-label': '搜索邮件', autocomplete: 'off', 'data-search': '' }"
-        @clear="search = ''; submitSearch()"
-        @keydown.esc="($event.target).blur()"
-      >
-        <template #prefix><NIcon :component="SearchOutlined" /></template>
-      </NInput>
-    </form>
+    <SearchBox />
 
     <div class="gm-header-end">
       <NTooltip v-if="realtimeEnabled && !isMobile">
@@ -132,7 +99,6 @@ const themeOptions = [
     font-weight: 600;
 }
 .gm-brand:hover { color: var(--gm-text); }
-.gm-search { flex: 0 1 480px; min-width: 0; }
 .gm-header-end { display: flex; align-items: center; gap: 4px; margin-left: auto; }
 .gm-rt { margin-right: 8px; }
 .gm-rt-label { font-size: 12px; color: var(--gm-text-3); padding-right: 4px; }
@@ -142,6 +108,5 @@ const themeOptions = [
 
 @media (max-width: 768px) {
     .gm-header-inner { padding: 0 8px; gap: 8px; }
-    .gm-search { flex: 1 1 auto; }
 }
 </style>
