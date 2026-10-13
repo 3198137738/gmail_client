@@ -361,6 +361,12 @@ usePageShortcuts({
           </div>
 
           <div v-show="expanded[m.id] || !threaded" class="gm-msg-content">
+            <NAlert v-if="m.phishing?.length" type="warning" title="这封邮件可能是钓鱼邮件" class="gm-phishing-banner">
+              <ul>
+                <li v-for="w in m.phishing" :key="w">{{ w }}</li>
+              </ul>
+              请勿点击其中的链接或输入密码；如有疑问，直接打开官方网站或 App 核实。
+            </NAlert>
             <div v-if="m.otp_code" class="gm-otp-banner">
               <span>验证码</span>
               <code class="gm-otp-code">{{ m.otp_code }}</code>
@@ -438,6 +444,9 @@ usePageShortcuts({
 .gm-msg-clip { color: var(--gm-text-3); }
 .gm-msg-content { padding: 12px 16px 16px; }
 .gm-images-banner { margin-bottom: 12px; }
+.gm-phishing-banner { margin-bottom: 12px; }
+.gm-phishing-banner ul { margin: 4px 0 6px; padding-left: 20px; }
+.gm-phishing-banner li { word-break: break-all; }
 .gm-otp-banner {
     display: flex;
     align-items: center;

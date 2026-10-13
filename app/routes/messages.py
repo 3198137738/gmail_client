@@ -32,7 +32,7 @@ from ..services.mail_body import (
 from ..services.imap_client import is_account_busy
 from ..timeutil import utcnow
 from ..services import labels as gmail_labels
-from ..services import audit, outbox, threads
+from ..services import audit, outbox, phishing, threads
 from ..services import remote_search as remote_search_service
 from ..services.message_actions import (
     delete_local_messages as _delete_local_messages,
@@ -720,6 +720,8 @@ def _thread_item(m: Message, expanded: bool) -> dict:
         # 正文中有被拦下的外部图片（前端显示「显示图片」提示条）；默认就加载外部图片时不拦
         "remote_images": body_has_remote_images(m.body_html) and not remote_images_allowed(),
         "otp_code": m.otp_code,
+        # 自己发出的邮件不检查
+        "phishing": [] if m.folder_kind == "sent" else phishing.check(m.from_addr, m.body_html),
         "attachments": [ser.attachment(a) for a in sorted(m.attachments, key=lambda a: (a.is_inline, a.id))],
     }
 
