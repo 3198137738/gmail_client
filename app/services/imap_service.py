@@ -83,6 +83,7 @@ from .imap_client import (
 from .email_parser import _message_base_dir, parse_email
 from .events import publish_mail_changed, publish_new_mail, publish_sync_done
 from . import image_proxy
+from .otp import extract_code
 from .telegram_service import notify_new_mail
 from ..timeutil import utcnow
 
@@ -368,6 +369,8 @@ def _parse_fetched_messages(
                 "thread_id": _int_or_none(data.get(b"X-GM-THRID")),
                 "labels": gmail_labels.parse_labels(data.get(b"X-GM-LABELS")),
                 "has_attachments": parsed.has_attachments,
+                # 自己发出的邮件不识别验证码
+                "otp_code": extract_code(parsed.subject, parsed.body_text) if folder_kind != "sent" else None,
                 "attachments": parsed.attachments,
             }
         )
@@ -398,6 +401,7 @@ def _persist_parsed_messages(records: list[dict]) -> int:
                 is_starred=record.get("is_starred", False),
                 thread_id=record.get("thread_id"),
                 has_attachments=record["has_attachments"],
+                otp_code=record.get("otp_code"),
             )
             db.add(message)
             db.flush()

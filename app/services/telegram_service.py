@@ -33,6 +33,7 @@ from ..config import (
 )
 from ..database import session_scope
 from ..models import Account, Message
+from .attachment_restore import local_path
 
 logger = logging.getLogger(__name__)
 
@@ -381,8 +382,11 @@ def _notify_message_detail(msg: Message, safe_email: str, *, junk: bool = False)
     sent_at = escape(_msg_datetime(msg.date))
     body = _full_body(msg) or "(正文为空)"
     title = "\u26A0 <b>垃圾邮件</b>" if junk else "\U0001F4EC <b>新邮件</b>"
+    # 验证码放在最前面，<code> 在 Telegram 里点一下即可复制
+    otp = f"\U0001F511 验证码：<code>{escape(msg.otp_code)}</code>\n" if msg.otp_code else ""
     header = (
         f"{title}\n"
+        f"{otp}"
         f"\U0001F4E5 账号：<code>{safe_email}</code>\n"
         f"\U0001F3F7 主题：<b>{subject}</b>\n"
         f"\U0001F4E7 发件人：{sender}\n"
@@ -407,7 +411,7 @@ def _notify_message_detail(msg: Message, safe_email: str, *, junk: bool = False)
             f"<b>{escape(att.display_name or att.filename)}</b>"
         )
         ok, detail = send_document(
-            att.file_path,
+            str(local_path(att) or att.file_path),
             filename=(att.display_name or att.filename),
             caption=caption,
         )

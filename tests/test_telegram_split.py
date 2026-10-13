@@ -43,6 +43,7 @@ def test_huge_recipient_list_keeps_header_within_limit(monkeypatch):
         body_text = "hello"
         body_html = None
         attachments = []
+        otp_code = None
 
     telegram_service._notify_message_detail(Msg(), "me@example.com")
     assert len(sent) == 1 and len(sent[0]) <= 4096 and _valid_html(sent[0])

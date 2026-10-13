@@ -12,6 +12,7 @@ import {
   FolderZipOutlined,
   ImageOutlined,
   MarkEmailUnreadOutlined,
+  KeyOutlined,
   PictureAsPdfOutlined,
   SnoozeOutlined,
   StarFilled,
@@ -20,6 +21,7 @@ import {
 } from "@vicons/material";
 import IconBtn from "./IconBtn.vue";
 import { attachmentKind, avatarColor, fullDate, futureDate, initial, listDate } from "../format";
+import { copyText } from "../ui";
 
 const props = defineProps({
   item: { type: Object, required: true },
@@ -191,6 +193,15 @@ const rowStyle = computed(() =>
             :style="{ '--label': account.color }"
             :title="account.email"
           >{{ account.name }}</span>
+          <button
+            v-if="item.otp_code"
+            type="button"
+            class="gm-otp"
+            :title="`验证码 ${item.otp_code}，点击复制`"
+            @click.stop="copyText(item.otp_code, `已复制验证码 ${item.otp_code}`)"
+          >
+            <NIcon :component="KeyOutlined" :size="13" />{{ item.otp_code }}
+          </button>
           <span class="gm-row-subject">{{ item.subject || "(无主题)" }}</span>
           <span v-if="item.snippet" class="gm-row-snippet"><span class="gm-row-dash"> — </span>{{ item.snippet }}</span>
         </div>
@@ -299,6 +310,23 @@ const rowStyle = computed(() =>
 .gm-row-date { font-size: 12px; color: var(--gm-text-3); white-space: nowrap; min-width: 52px; text-align: right; }
 .gm-row.is-unread .gm-row-date { color: var(--gm-text); font-weight: 600; }
 .gm-row-clip { color: var(--gm-text-3); }
+.gm-otp {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    flex: none;
+    height: 20px;
+    margin-right: 8px;
+    padding: 0 6px;
+    border: 1px solid var(--gm-primary);
+    border-radius: var(--gm-radius);
+    background: var(--gm-primary-soft);
+    color: var(--gm-primary);
+    font: 600 12px/1 ui-monospace, Consolas, monospace;
+    letter-spacing: .5px;
+    cursor: pointer;
+}
+.gm-otp:hover { background: var(--gm-selected); }
 .gm-row-date.is-snoozed { display: inline-flex; align-items: center; justify-content: flex-end; gap: 3px; color: var(--gm-primary); font-weight: 600; }
 .gm-row-star {
     grid-area: star;

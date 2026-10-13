@@ -32,7 +32,7 @@ import TimePicker from "../components/TimePicker.vue";
 import { snoozeMessages } from "../actions";
 import { get, post } from "../api";
 import { openCompose, store } from "../store";
-import { confirm, run, toast } from "../ui";
+import { confirm, copyText, run, toast } from "../ui";
 import { isMobile, refreshNav } from "../composables/common";
 import { usePageShortcuts } from "../composables/shortcuts";
 import { avatarColor, fullDate, initial, listDate, longDate, dateTime } from "../format";
@@ -361,6 +361,11 @@ usePageShortcuts({
           </div>
 
           <div v-show="expanded[m.id] || !threaded" class="gm-msg-content">
+            <div v-if="m.otp_code" class="gm-otp-banner">
+              <span>验证码</span>
+              <code class="gm-otp-code">{{ m.otp_code }}</code>
+              <NButton size="small" type="primary" secondary @click.stop="copyText(m.otp_code, `已复制验证码 ${m.otp_code}`)">复制</NButton>
+            </div>
             <NAlert v-if="m.remote_images && !showImages" type="info" :show-icon="false" class="gm-images-banner no-print">
               为保护隐私，下方的外部图片未显示。
               <a href="#" @click.prevent="showImages = true">显示图片</a>
@@ -433,6 +438,18 @@ usePageShortcuts({
 .gm-msg-clip { color: var(--gm-text-3); }
 .gm-msg-content { padding: 12px 16px 16px; }
 .gm-images-banner { margin-bottom: 12px; }
+.gm-otp-banner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+    padding: 10px 14px;
+    border: 1px solid var(--gm-primary);
+    border-radius: var(--gm-radius);
+    background: var(--gm-primary-soft);
+    color: var(--gm-text-2);
+}
+.gm-otp-code { font: 700 22px/1.2 ui-monospace, Consolas, monospace; letter-spacing: 3px; color: var(--gm-primary); background: none; padding: 0; }
 .gm-reply-row { display: flex; flex-wrap: wrap; gap: 12px; padding-top: 8px; }
 
 .gm-label-menu { min-width: 200px; max-height: 360px; overflow-y: auto; }

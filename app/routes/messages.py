@@ -326,6 +326,7 @@ def _list_item(m: Message, snippets, attachments_by_message, message_labels, thr
         "thread_count": int(stats.get("count", 1)),
         "thread_unread": int(stats.get("unread", 0)),
         "snoozed_until": ser.iso_utc(m.snoozed_until),
+        "otp_code": m.otp_code,
     }
 
 
@@ -717,6 +718,7 @@ def _thread_item(m: Message, expanded: bool) -> dict:
         "expanded": expanded,
         # 正文中有被拦下的外部图片（前端显示「显示图片」提示条）；默认就加载外部图片时不拦
         "remote_images": body_has_remote_images(m.body_html) and not remote_images_allowed(),
+        "otp_code": m.otp_code,
         "attachments": [ser.attachment(a) for a in sorted(m.attachments, key=lambda a: (a.is_inline, a.id))],
     }
 

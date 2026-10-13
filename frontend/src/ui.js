@@ -69,3 +69,20 @@ export function toast(text, { actionText, onAction, linkText, onLink, duration =
   if (duration > 0) snackTimer = setTimeout(close, duration);
   return close;
 }
+
+// 复制到剪贴板（非 HTTPS 页面没有 navigator.clipboard 时用旧方法兜底）
+export async function copyText(text, successText = "已复制") {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand("copy");
+    area.remove();
+  }
+  ui.message?.success(successText);
+}

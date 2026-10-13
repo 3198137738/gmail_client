@@ -97,6 +97,8 @@ class Message(Base):
     thread_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     # 稍后提醒：延后到这个时间（UTC）之前不在收件箱中显示，到时间后回到收件箱最上面
     snoozed_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
+    # 邮件中识别出的验证码（见 services/otp.py）
+    otp_code: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
 
