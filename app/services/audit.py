@@ -41,6 +41,7 @@ EVENT_LABELS = {
     "rule_saved": "保存自动规则",
     "rule_deleted": "删除自动规则",
     "rule_applied": "执行自动规则",
+    "mail_cleanup": "批量清理邮件",
     "mail_deleted": "删除邮件",
     "sender_purged": "永久删除发件人邮件",
     "sent_record_deleted": "删除发件记录",

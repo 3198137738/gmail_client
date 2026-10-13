@@ -7,6 +7,7 @@ import { NButton, NIcon, NMenu } from "naive-ui";
 import {
   AddOutlined,
   AttachFileOutlined,
+  CleaningServicesOutlined,
   BrightnessAutoOutlined,
   DarkModeOutlined,
   LightModeOutlined,
@@ -85,6 +86,7 @@ const folderOptions = computed(() => {
     { key: "/compose/scheduled", section: "scheduled", label: itemLabel("定时发送", n?.scheduled || 0), icon: icon(ScheduleSendOutlined) },
     { key: "/compose/sent", section: "sent_log", label: "发件记录", icon: icon(OutboxOutlined) },
     { key: "/files", section: "files", label: "附件", icon: icon(AttachFileOutlined) },
+    { key: "/cleanup", section: "cleanup", label: "批量清理", icon: icon(CleaningServicesOutlined) },
     { key: "/messages/blocked-senders", section: "blocked", label: "屏蔽的发件人", icon: icon(BlockOutlined) },
   );
   return items;
