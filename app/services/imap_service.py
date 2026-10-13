@@ -638,12 +638,18 @@ def _ingest_uids(
     folder: str,
     folder_kind: str,
     uids: list[int],
+    *,
+    apply_rules: bool = False,
 ) -> IngestResult:
-    """下载、解析并保存指定 UID 的邮件（已入库的跳过）。增量同步与历史回填共用。"""
+    """下载、解析并保存指定 UID 的邮件（已入库的跳过）。增量同步与历史回填共用。
+
+    ``apply_rules``：对新入库的邮件执行自动规则（只用于增量同步收到的新邮件）。
+    """
     blocked_senders = _load_blocked_sender_emails(account_id)
     trusted_senders = _load_trusted_sender_emails(account_id) if folder_kind == "junk" else set()
     rescue_uids: list[int] = []
     saved = 0
+    persisted_uids: list[int] = []
     failed_uids: set[int] = set()
     # 本批新邮件中最新的 Gmail 接收时间（INTERNALDATE），用于计算「Gmail 收到 → 入库」延迟。
     newest_received: Optional[datetime] = None
@@ -733,6 +739,7 @@ def _ingest_uids(
 
         try:
             saved += _persist_parsed_messages(records)
+            persisted_uids.extend(int(r["uid"]) for r in records)
         except IntegrityError:
             logger.warning(
                 "Batch insert conflict account=%s folder=%s chunk=%s; retrying one-by-one",
@@ -741,6 +748,7 @@ def _ingest_uids(
             for record in records:
                 try:
                     saved += _persist_parsed_messages([record])
+                    persisted_uids.append(int(record["uid"]))
                 except IntegrityError:
                     continue
                 except Exception:
@@ -755,6 +763,12 @@ def _ingest_uids(
                 account_id, folder, chunk,
             )
             failed_uids.update(int(record["uid"]) for record in records)
+
+    if apply_rules and persisted_uids and folder_kind in ("inbox", "junk"):
+        # 延迟导入：rules 依赖 message_actions，后者又依赖本模块
+        from .rules import safe_apply_to_new
+
+        safe_apply_to_new(account_id, folder, persisted_uids)
 
     return IngestResult(
         saved=saved,
@@ -1072,7 +1086,8 @@ def _sync_one_folder(
         _update_sync_state(account_id, folder, uidvalidity=uidvalidity, new_last_uid=None)
         return {"saved": 0, "scanned": 0, "folder": folder, "folder_kind": folder_kind}
 
-    result = _ingest_uids(client, account_id, folder, folder_kind, uids)
+    # 首次同步拉的是已有的邮件，不执行自动规则（与 Gmail 过滤器只作用于新邮件一致）
+    result = _ingest_uids(client, account_id, folder, folder_kind, uids, apply_rules=last_uid > 0)
     saved = result.saved
     newest_received = result.newest_received
 

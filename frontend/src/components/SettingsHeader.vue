@@ -9,7 +9,8 @@ const router = useRouter();
 
 const TABS = [
   { name: "accounts", label: "账号和导入", path: "/accounts/" },
-  { name: "blocked", label: "过滤器和屏蔽的地址", path: "/messages/blocked-senders" },
+  { name: "blocked", label: "屏蔽的地址", path: "/messages/blocked-senders" },
+  { name: "rules", label: "自动规则", path: "/accounts/rules" },
   { name: "templates", label: "模板", path: "/accounts/templates" },
   { name: "security", label: "安全", path: "/accounts/security" },
   { name: "audit", label: "审计日志", path: "/accounts/security/audit" },

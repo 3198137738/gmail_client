@@ -59,6 +59,7 @@ class Account(Base):
     scheduled_sends = relationship(
         "ScheduledSend", back_populates="account", cascade="all, delete-orphan"
     )
+    mail_rules = relationship("MailRule", back_populates="account", cascade="all, delete-orphan")
     labels = relationship("Label", back_populates="account", cascade="all, delete-orphan")
 
 
@@ -430,3 +431,29 @@ class MailTemplate(Base):
     body_html: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now, nullable=False)
+
+
+class MailRule(Base):
+    """自动规则（过滤器）：新邮件的某个字段包含指定文字时，自动执行动作。"""
+
+    __tablename__ = "mail_rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    # 只对这个账号生效；为空表示所有账号
+    account_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    # 匹配字段：from / to（含抄送）/ subject / any（以上任意）
+    field: Mapped[str] = mapped_column(String(16), nullable=False, default="from")
+    contains: Mapped[str] = mapped_column(String(320), nullable=False)
+    mark_read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    star: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    label_name: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    delete: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # 累计命中的邮件数
+    hits: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
+
+    account = relationship("Account", back_populates="mail_rules")

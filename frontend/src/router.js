@@ -27,7 +27,7 @@ const routes = [
         path: "messages/blocked-senders",
         name: "blocked",
         component: () => import("./views/settings/BlockedSettings.vue"),
-        meta: { title: "设置 - 过滤器和屏蔽的地址", settings: "blocked", section: "blocked" },
+        meta: { title: "设置 - 屏蔽的地址", settings: "blocked", section: "blocked" },
       },
       { path: "messages/:id(\\d+)", name: "message", component: MailSplit },
       {
@@ -49,6 +49,12 @@ const routes = [
         name: "accounts",
         component: () => import("./views/settings/AccountsSettings.vue"),
         meta: { title: "设置 - 账号和导入", settings: "accounts", section: "settings" },
+      },
+      {
+        path: "accounts/rules",
+        name: "rules",
+        component: () => import("./views/settings/RulesSettings.vue"),
+        meta: { title: "设置 - 自动规则", settings: "rules", section: "settings" },
       },
       {
         path: "accounts/templates",
