@@ -3,10 +3,11 @@
 // ↑↓ 选择、回车搜索、Esc 关闭；每条记录可单独删除，也可全部清空。
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { NIcon, NInput } from "naive-ui";
-import { CloseOutlined, HistoryOutlined, SearchOutlined } from "@vicons/material";
+import { NButton, NCheckbox, NDatePicker, NForm, NFormItem, NIcon, NInput, NPopover } from "naive-ui";
+import { CloseOutlined, HistoryOutlined, SearchOutlined, TuneOutlined } from "@vicons/material";
 import { store } from "../store";
 import { clearSearchHistory, forgetSearch, rememberSearch, searchHistory } from "../searchHistory";
+import { buildQuery, emptyFilters, parseQuery } from "../searchQuery";
 
 const route = useRoute();
 const router = useRouter();
@@ -74,6 +75,27 @@ function onBlur() {
   open.value = false;
 }
 
+// ---- 高级搜索（筛选面板） ----
+const filterOpen = ref(false);
+const filters = ref(emptyFilters());
+
+function onFilterShow(show) {
+  filterOpen.value = show;
+  if (show) {
+    open.value = false;
+    filters.value = parseQuery(search.value);
+  }
+}
+
+function applyFilters() {
+  filterOpen.value = false;
+  submit(buildQuery(filters.value));
+}
+
+function resetFilters() {
+  filters.value = emptyFilters();
+}
+
 function remove(item) {
   forgetSearch(item);
 }
@@ -94,6 +116,44 @@ function remove(item) {
       @keydown="onKeydown"
     >
       <template #prefix><NIcon :component="SearchOutlined" /></template>
+      <template #suffix>
+        <NPopover
+          trigger="click"
+          placement="bottom-end"
+          :show="filterOpen"
+          :show-arrow="false"
+          style="width: min(440px, calc(100vw - 24px))"
+          @update:show="onFilterShow"
+        >
+          <template #trigger>
+            <NIcon :component="TuneOutlined" :size="18" class="gm-search-tune" title="高级搜索" @mousedown.prevent />
+          </template>
+          <NForm label-placement="left" label-width="76" size="small" :show-feedback="false" class="gm-filter-form" @submit.prevent="applyFilters">
+            <NFormItem label="发件人"><NInput v-model:value="filters.from" placeholder="名字或邮箱的一部分" /></NFormItem>
+            <NFormItem label="收件人"><NInput v-model:value="filters.to" placeholder="包括抄送" /></NFormItem>
+            <NFormItem label="主题"><NInput v-model:value="filters.subject" /></NFormItem>
+            <NFormItem label="包含字词"><NInput v-model:value="filters.words" placeholder="主题、正文、发件人中包含" /></NFormItem>
+            <NFormItem label="日期">
+              <div class="gm-filter-dates">
+                <NDatePicker v-model:value="filters.after" type="date" clearable placeholder="从" />
+                <span>—</span>
+                <NDatePicker v-model:value="filters.before" type="date" clearable placeholder="到" />
+              </div>
+            </NFormItem>
+            <NFormItem label=" ">
+              <div class="gm-filter-checks">
+                <NCheckbox v-model:checked="filters.hasAttachment">有附件</NCheckbox>
+                <NCheckbox v-model:checked="filters.unread">未读</NCheckbox>
+                <NCheckbox v-model:checked="filters.starred">已加星标</NCheckbox>
+              </div>
+            </NFormItem>
+            <div class="gm-filter-actions">
+              <NButton size="small" quaternary @click="resetFilters">清除条件</NButton>
+              <NButton size="small" type="primary" attr-type="submit">搜索</NButton>
+            </div>
+          </NForm>
+        </NPopover>
+      </template>
     </NInput>
 
     <div v-if="showDropdown" class="gm-search-history" role="listbox" @mousedown.prevent>
@@ -129,6 +189,12 @@ function remove(item) {
 
 <style scoped>
 .gm-search { position: relative; flex: 0 1 480px; min-width: 0; }
+.gm-search-tune { cursor: pointer; color: var(--gm-text-3); }
+.gm-search-tune:hover { color: var(--gm-primary); }
+.gm-filter-form { padding: 4px 4px 0; display: flex; flex-direction: column; gap: 10px; }
+.gm-filter-dates { display: flex; align-items: center; gap: 6px; width: 100%; }
+.gm-filter-checks { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.gm-filter-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 8px 0 4px; }
 .gm-search-history {
     position: absolute;
     top: calc(100% + 4px);

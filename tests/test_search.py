@@ -73,3 +73,28 @@ def test_list_page_search(client):
     data = resp.json()
     assert [m["subject"] for m in data["items"]] == ["独一无二的主题ABC"]
     assert data["q"] == "一无二的"
+
+
+def test_search_operators():
+    from datetime import datetime
+
+    acc = create_account()
+    report = create_message(acc, subject="季度报告", from_addr="Alice <alice@corp.example>",
+                            to_addr="me@example.com", date=datetime(2026, 3, 5), has_attachments=True)
+    invoice = create_message(acc, subject="发票", from_addr="Bob <bob@shop.example>", cc_addr="team@corp.example",
+                             date=datetime(2025, 12, 1), is_read=True, is_starred=True, body_text="请查收发票")
+    other = create_message(acc, subject="周报", from_addr="Carol <carol@corp.example>", date=datetime(2026, 5, 1))
+
+    def ids(q):
+        return _search(q, acc)
+
+    assert ids("from:alice") == {report}
+    assert ids('subject:"季度报告"') == {report}
+    assert ids("to:team@corp") == {invoice}
+    assert ids("has:attachment") == {report}
+    assert ids("is:starred") == {invoice}
+    assert ids("is:unread from:corp.example") == {report, other}
+    assert ids("after:2026-01-01 before:2026/4/1") == {report}
+    assert ids("from:bob 发票") == {invoice}
+    # 不认识的条件按普通关键词处理，不会报错
+    assert ids("foo:bar") == set()
