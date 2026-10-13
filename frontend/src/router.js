@@ -43,6 +43,7 @@ const routes = [
       { path: "compose/drafts", name: "drafts", component: () => import("./views/DraftsView.vue"), meta: { title: "草稿", section: "drafts" } },
       { path: "compose/scheduled", name: "scheduled", component: () => import("./views/ScheduledView.vue"), meta: { title: "定时发送", section: "scheduled" } },
       { path: "compose/sent", name: "sent", component: () => import("./views/SentView.vue"), meta: { title: "发件记录", section: "sent_log" } },
+      { path: "files", name: "files", component: () => import("./views/FilesView.vue"), meta: { title: "附件", section: "files" } },
       { path: "compose/sent/:id(\\d+)", name: "sentDetail", component: () => import("./views/SentDetailView.vue"), meta: { section: "sent_log" } },
       {
         path: "accounts/",
