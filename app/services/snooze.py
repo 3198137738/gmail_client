@@ -14,7 +14,7 @@ from sqlalchemy import select
 from ..database import session_scope
 from ..models import Message
 from ..timeutil import utcnow
-from .events import publish_new_mail
+from .events import new_mail_preview, publish_new_mail
 from .message_actions import toggle_messages_read_state
 
 logger = logging.getLogger(__name__)
@@ -30,14 +30,16 @@ def wake_due() -> int:
             return 0
         now = datetime.now().replace(microsecond=0)   # 邮件时间是本地时间
         per_account: Counter[int] = Counter()
+        woken: dict[int, list[int]] = {}
         for m in due:
             m.snoozed_until = None
             m.date = now
             per_account[int(m.account_id)] += 1
+            woken.setdefault(int(m.account_id), []).append(int(m.id))
         toggle_messages_read_state(db, due, is_read=False)   # 会提交
         db.commit()
     for account_id, count in per_account.items():
-        publish_new_mail(account_id, inbox=count)
+        publish_new_mail(account_id, inbox=count, preview=new_mail_preview(account_id, count, woken[account_id]))
     logger.info("Snoozed messages returned to inbox: %s", sum(per_account.values()))
     return sum(per_account.values())
 

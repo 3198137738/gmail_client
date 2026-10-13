@@ -90,7 +90,38 @@ class EventBus:
 event_bus = EventBus()
 
 
-def publish_new_mail(account_id: int, *, inbox: int = 0, sent: int = 0, junk: int = 0) -> None:
+PREVIEW_COUNT = 3
+
+
+def new_mail_preview(account_id: int, count: int, message_ids=None) -> list[dict]:
+    """新到收件箱邮件的摘要（最多 3 封，最新的在前），用于浏览器桌面通知。
+
+    message_ids 为空时取该账号收件箱中最新入库的 count 封。
+    """
+    if count <= 0:
+        return []
+    from sqlalchemy import select
+
+    from .. import serializers as ser
+    from ..database import session_scope
+    from ..models import Message
+
+    stmt = select(Message.id, Message.from_addr, Message.subject, Message.otp_code).where(
+        Message.account_id == account_id, Message.folder_kind == "inbox"
+    )
+    if message_ids is not None:
+        stmt = stmt.where(Message.id.in_(list(message_ids)))
+    with session_scope() as db:
+        rows = db.execute(stmt.order_by(Message.id.desc()).limit(min(count, PREVIEW_COUNT))).all()
+    return [
+        {"id": int(mid), "from": ser.addr_name(from_addr), "subject": subject or "", "otp_code": otp_code}
+        for mid, from_addr, subject, otp_code in rows
+    ]
+
+
+def publish_new_mail(
+    account_id: int, *, inbox: int = 0, sent: int = 0, junk: int = 0, preview: list[dict] | None = None
+) -> None:
     """Convenience helper announcing newly stored messages for an account."""
     event_bus.publish(
         {
@@ -99,6 +130,7 @@ def publish_new_mail(account_id: int, *, inbox: int = 0, sent: int = 0, junk: in
             "inbox": int(inbox),
             "sent": int(sent),
             "junk": int(junk),
+            "preview": preview or [],
         }
     )
 

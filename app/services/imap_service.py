@@ -81,7 +81,7 @@ from .imap_client import (
     _try_acquire_for_sync,
 )
 from .email_parser import _message_base_dir, parse_email
-from .events import publish_mail_changed, publish_new_mail, publish_sync_done
+from .events import new_mail_preview, publish_mail_changed, publish_new_mail, publish_sync_done
 from . import image_proxy
 from .otp import extract_code
 from .telegram_service import notify_new_mail
@@ -1141,7 +1141,8 @@ def _announce_new_mail(account_id: int, results: dict[str, dict]) -> None:
     junk_new = int(results.get("junk", {}).get("saved", 0) or 0)
     if inbox_new or sent_new or junk_new:
         try:
-            publish_new_mail(account_id, inbox=inbox_new, sent=sent_new, junk=junk_new)
+            preview = new_mail_preview(account_id, inbox_new)
+            publish_new_mail(account_id, inbox=inbox_new, sent=sent_new, junk=junk_new, preview=preview)
         except Exception:
             logger.debug("Failed to publish new_mail event", exc_info=True)
     # 是否真正发送（已发送/垃圾邮件的开关、账号级开关）由 notify_new_mail 决定。

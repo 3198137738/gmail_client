@@ -7,6 +7,8 @@ import {
   LightModeOutlined,
   LogOutOutlined,
   MenuOutlined,
+  NotificationsActiveOutlined,
+  NotificationsOffOutlined,
   SettingsOutlined,
   SyncOutlined,
 } from "@vicons/material";
@@ -16,6 +18,7 @@ import { navAccount, setNavCollapsed, setThemeMode, store } from "../store";
 import { isMobile } from "../composables/common";
 import { syncAll, logout } from "../actions";
 import { initial } from "../format";
+import { desktopNotify, setDesktopNotify } from "../desktopNotify";
 
 // 电脑端折叠 / 展开侧栏，手机端打开导航抽屉
 function toggleMenu() {
@@ -64,6 +67,12 @@ const themeOptions = [
       </NTooltip>
       <template v-if="!isMobile">
         <IconBtn :icon="SyncOutlined" title="同步所有账号" @click="syncAll" />
+        <IconBtn
+          v-if="desktopNotify.supported"
+          :icon="desktopNotify.enabled ? NotificationsActiveOutlined : NotificationsOffOutlined"
+          :title="desktopNotify.enabled ? '桌面通知已开启（点击关闭）' : '开启桌面通知：页面不在前台时提醒新邮件'"
+          @click="setDesktopNotify(!desktopNotify.enabled)"
+        />
         <NDropdown trigger="click" :options="themeOptions" :value="store.themeMode" @select="setThemeMode">
           <IconBtn :icon="THEME_ICONS[store.themeMode]" title="外观" />
         </NDropdown>

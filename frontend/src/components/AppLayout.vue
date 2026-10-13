@@ -11,6 +11,7 @@ import { store } from "../store";
 import { isMobile, refreshNav } from "../composables/common";
 import { useGlobalShortcuts } from "../composables/shortcuts";
 import { onRealtime, startRealtime } from "../realtime";
+import { startDesktopNotify } from "../desktopNotify";
 
 const route = useRoute();
 
@@ -26,6 +27,7 @@ const disposers = [];
 onMounted(() => {
   refreshNav();
   startRealtime();
+  startDesktopNotify();
   // 任何邮箱变化都要更新左侧的未读数
   for (const type of ["new_mail", "mail_changed", "sync_done", "resume"]) {
     disposers.push(onRealtime(type, refreshNav));
