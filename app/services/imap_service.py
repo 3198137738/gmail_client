@@ -51,7 +51,7 @@ from typing import Optional
 
 from imapclient import IMAPClient
 from imapclient.exceptions import IMAPClientAbortError, IMAPClientError
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -173,6 +173,46 @@ def _backfill_labels(client: IMAPClient, account_id: int, folder: str) -> int:
 THREAD_BACKFILL_LIMIT = 2000
 
 
+def _backfill_received_dates(client: IMAPClient, account_id: int, folder: str) -> int:
+    """升级后第一次同步：把已入库邮件的时间改为 Gmail 收到时间（每个文件夹只做一次）。
+
+    只取 INTERNALDATE，不下载邮件内容；按 UID 区间分段，大文件夹也不会一次读进太多数据。
+    """
+    with session_scope() as db:
+        state = _get_or_create_sync_state(db, account_id, folder)
+        if state.dates_backfilled:
+            return 0
+        last_uid = int(state.last_uid or 0)
+    changed = 0
+    for start in range(1, last_uid + 1, LABEL_BACKFILL_RANGE):
+        end = min(start + LABEL_BACKFILL_RANGE - 1, last_uid)
+        try:
+            fetched = client.fetch(f"{start}:{end}", ["INTERNALDATE"])
+        except IMAPClientError as exc:
+            logger.warning("Received date backfill failed account=%s folder=%s: %s", account_id, folder, exc)
+            return changed
+        with session_scope() as db:
+            for uid, data in fetched.items():
+                when = received_date(data)
+                if when is None:
+                    continue
+                changed += db.execute(
+                    update(Message)
+                    .where(
+                        Message.account_id == account_id,
+                        Message.folder == folder,
+                        Message.uid == int(uid),
+                        or_(Message.date.is_(None), Message.date != when),
+                    )
+                    .values(date=when)
+                ).rowcount or 0
+    with session_scope() as db:
+        _get_or_create_sync_state(db, account_id, folder).dates_backfilled = True
+    if changed:
+        logger.info("Received dates backfilled account=%s folder=%s messages=%s", account_id, folder, changed)
+    return changed
+
+
 def _backfill_thread_ids(client: IMAPClient, account_id: int, folder: str) -> int:
     """为还没有会话 id 的本地邮件补上 X-GM-THRID，返回补齐的封数。"""
     if not _has_gmail_ext(client):
@@ -258,6 +298,16 @@ def _existing_uids(account_id: int, folder: str, uids: list[int]) -> set[int]:
     return found
 
 
+def received_date(data: dict) -> Optional[datetime]:
+    """Gmail 收到邮件的时间（INTERNALDATE，IMAPClient 已转为本地时间、无时区）。
+
+    邮件的时间以它为准，与 Gmail 网页版一致：发件方自己写的 Date 头可能不准，
+    曾见过写成 2611 年的邮件，按 Date 排序会永远排在最上面。
+    """
+    value = data.get(b"INTERNALDATE")
+    return value if isinstance(value, datetime) else None
+
+
 def _parse_fetched_messages(
     *,
     account_id: int,
@@ -310,7 +360,7 @@ def _parse_fetched_messages(
                 "to_addr": parsed.to_addr,
                 "cc_addr": parsed.cc_addr,
                 "bcc_addr": parsed.bcc_addr,
-                "date": parsed.date,
+                "date": received_date(data) or parsed.date,
                 "body_text": parsed.body_text,
                 "body_html": parsed.body_html,
                 "is_read": bool(_is_seen(data.get(b"FLAGS") or ())),
@@ -793,6 +843,7 @@ def _reset_folder(account_id: int, folder: str, uidvalidity: int) -> None:
         state.highestmodseq = None
         state.reconciled_at = None
         state.labels_backfilled = False
+        state.dates_backfilled = True   # 清空后重新下载的邮件都直接带收到时间
     logger.warning(
         "UIDVALIDITY changed account=%s folder=%s; cleared %s local messages, dropped %s pending ops",
         account_id, folder, removed, dropped,
@@ -994,6 +1045,8 @@ def _sync_one_folder(
         changed_flags += 1   # 会话分组变了，页面需要刷新
     if _backfill_labels(client, account_id, folder):
         changed_flags += 1
+    if _backfill_received_dates(client, account_id, folder):
+        changed_flags += 1   # 排序变了，页面需要刷新
     if changed_flags or removed:
         publish_mail_changed(account_id, folder_kind)
 

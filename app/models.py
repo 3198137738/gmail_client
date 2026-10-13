@@ -158,6 +158,10 @@ class SyncState(Base):
     labels_backfilled: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="0", nullable=False
     )
+    # 已入库邮件的时间是否已全部改为 Gmail 收到时间（INTERNALDATE，升级前入库的邮件用的是 Date 头）
+    dates_backfilled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
 
     account = relationship("Account", back_populates="sync_states")
 

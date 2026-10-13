@@ -56,7 +56,7 @@ def _restore_sender_from_folder(
     to_fetch = [uid for uid in uids if uid not in existing_before]
     for chunk in _plan_fetch_batches(client, to_fetch):
         try:
-            fetched = client.fetch(chunk, ["RFC822", "FLAGS"])
+            fetched = client.fetch(chunk, ["RFC822", "FLAGS", "INTERNALDATE"])
         except IMAPClientError as exc:
             logger.warning(
                 "Restore fetch failed account=%s folder=%s sender=%s: %s",
