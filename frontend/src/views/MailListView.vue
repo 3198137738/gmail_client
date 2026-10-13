@@ -18,6 +18,7 @@ import {
 } from "@vicons/material";
 import IconBtn from "../components/IconBtn.vue";
 import MailRow from "../components/MailRow.vue";
+import RemoteSearch from "../components/RemoteSearch.vue";
 import TimePicker from "../components/TimePicker.vue";
 import { get, post } from "../api";
 import { navAccount, openCompose, store } from "../store";
@@ -209,6 +210,9 @@ async function toggleStar(item) {
 }
 
 // ---- 延后（稍后提醒） ----
+// 在 Gmail 服务器上搜索（当前搜索词）
+const remoteOpen = ref(false);
+
 const snoozeOpen = ref(false);
 function afterSnooze() {
   selected.clear();
@@ -501,6 +505,12 @@ const emptyText = computed(() => {
       </div>
     </div>
 
+    <div v-if="data?.q" class="gm-banner gm-remote-banner">
+      <span>本地搜索只包含已同步的邮件。</span>
+      <a href="#" @click.prevent="remoteOpen = true">在 Gmail 服务器上搜索「{{ data.q }}」</a>
+      <span>（包括未同步、已归档的邮件）</span>
+    </div>
+    <RemoteSearch v-model:show="remoteOpen" :q="data?.q || ''" :account-id="data?.account_id || null" />
     <div v-if="data?.current_label" class="gm-banner">
       只显示收件箱、已发送和垃圾邮件中带有「{{ data.current_label.name }}」标签的邮件；在 Gmail 中已归档的邮件不在这里。
     </div>

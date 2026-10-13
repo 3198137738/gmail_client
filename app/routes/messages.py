@@ -33,6 +33,7 @@ from ..services.imap_client import is_account_busy
 from ..timeutil import utcnow
 from ..services import labels as gmail_labels
 from ..services import audit, outbox, threads
+from ..services import remote_search as remote_search_service
 from ..services.message_actions import (
     delete_local_messages as _delete_local_messages,
     set_starred as _set_starred,
@@ -296,6 +297,12 @@ def nav_payload(request: Request) -> dict:
 def nav(request: Request):
     """左侧导航数据（未读数等），实时推送收到新邮件时前端只刷新这一部分。"""
     return nav_payload(request)
+
+
+@router.get("/remote-search", name="messages.remote_search")
+def remote_search(q: str = Query(..., min_length=1, max_length=500), account_id: Optional[int] = Query(None)):
+    """在 Gmail 服务器上搜索（包括本地没有同步的邮件）。普通 def：IMAP 是阻塞调用，放进线程池执行。"""
+    return remote_search_service.search(q, [account_id] if account_id else None)
 
 
 def _list_item(m: Message, snippets, attachments_by_message, message_labels, thread_stats) -> dict:
