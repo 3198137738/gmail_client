@@ -342,7 +342,12 @@ def compose_init(
 
     return {
         "accounts": [
-            {"id": int(a.id), "email": a.email, "display_name": a.display_name or ""}
+            {
+                "id": int(a.id),
+                "email": a.email,
+                "display_name": a.display_name or "",
+                "signature_html": a.signature_html or "",
+            }
             for a in _enabled_accounts(db)
         ],
         "prefill": prefill,

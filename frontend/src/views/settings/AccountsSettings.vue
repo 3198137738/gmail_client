@@ -16,6 +16,7 @@ import {
 } from "naive-ui";
 import { LabelFilled, NotificationsOffOutlined, NotificationsOutlined, SyncOutlined } from "@vicons/material";
 import SettingsHeader from "../../components/SettingsHeader.vue";
+import RichEditor from "../../components/RichEditor.vue";
 import { get, post } from "../../api";
 import { confirm, run, ui } from "../../ui";
 import { hardNavigate, refreshNav } from "../../composables/common";
@@ -27,6 +28,8 @@ const data = ref(null);
 const selected = ref([]);
 const editing = ref(null);
 const editForm = reactive({ display_name: "", password: "" });
+// 正在编辑的账号的签名编辑器（列表里同时只编辑一个账号）
+let sigEditor = null;
 const single = reactive({ email: "", display_name: "", password: "", verify: false });
 const batch = reactive({ text: "", verify: false });
 const adding = ref(false);
@@ -87,6 +90,7 @@ function startEdit(a) {
 async function saveEdit(a) {
   const body = { display_name: editForm.display_name };
   if (editForm.password) body.password = editForm.password;
+  if (sigEditor) body.signature_html = sigEditor.getInnerHtml();
   if (await run(post(`/api/accounts/${a.id}/update`, body), "已保存")) {
     editing.value = null;
     load();
@@ -214,6 +218,11 @@ function oauthStart() {
                   </NFormItem>
                   <NFormItem label="新应用专用密码（留空则不修改）">
                     <NInput v-model:value="editForm.password" type="password" show-password-on="click" :input-props="{ autocomplete: 'new-password' }" />
+                  </NFormItem>
+                  <NFormItem label="签名（写邮件时自动添加，留空则不添加）">
+                    <div class="gm-sig-editor">
+                      <RichEditor :ref="(el) => (sigEditor = el)" :initial-html="a.signature_html" show-format-bar />
+                    </div>
                   </NFormItem>
                   <div class="gm-acct-edit-actions">
                     <NButton size="small" @click="editing = null">取消</NButton>
@@ -362,6 +371,8 @@ function oauthStart() {
 .gm-acct-links { display: flex; flex-wrap: wrap; gap: 12px; justify-content: flex-end; }
 .gm-acct-edit { margin-top: 12px; max-width: 420px; }
 .gm-acct-edit-actions { display: flex; gap: 8px; }
+.gm-sig-editor { display: flex; flex-direction: column; width: 100%; min-height: 120px; padding: 0 10px; border: 1px solid var(--gm-border); border-radius: var(--gm-radius); }
+.gm-sig-editor :deep(.gm-editor) { min-height: 80px; }
 .gm-oauth-box { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-bottom: 16px; }
 .gm-add-tabs { max-width: 520px; }
 .gm-form { padding-top: 12px; }

@@ -31,6 +31,8 @@ class Account(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     email: Mapped[str] = mapped_column(String(320), unique=True, nullable=False)
     display_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # 签名（HTML，已清洗）：写邮件时自动插入
+    signature_html: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     encrypted_password: Mapped[str] = mapped_column(Text, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     notify_enabled: Mapped[bool] = mapped_column(

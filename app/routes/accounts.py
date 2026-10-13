@@ -25,6 +25,7 @@ from ..auth import current_session_token
 from ..config import BACKUP_PUBLIC_KEY
 from ..navigation import LABEL_COLORS
 from ..services import audit, backup, google_oauth, login_sessions, telegram_service
+from ..services.html_sanitizer import sanitize_compose_html
 from ..services.idle_service import reconcile_idle
 from ..services.background import submit_bg
 from ..services.imap_backfill import is_backfilling, sync_then_backfill
@@ -120,6 +121,7 @@ def list_accounts(request: Request, db: Session = Depends(get_db)):
                 "id": int(a.id),
                 "email": a.email,
                 "display_name": a.display_name or "",
+                "signature_html": a.signature_html or "",
                 "color": LABEL_COLORS[(int(a.id) - 1) % len(LABEL_COLORS)],
                 "enabled": bool(a.enabled),
                 "notify_enabled": bool(a.notify_enabled),
@@ -304,6 +306,7 @@ def telegram_test():
 class AccountUpdateBody(BaseModel):
     display_name: Optional[str] = None
     password: Optional[str] = None
+    signature_html: Optional[str] = None
 
 
 @router.post("/accounts/{account_id}/update", name="accounts.update")
@@ -316,7 +319,16 @@ def update_account(request: Request, account_id: int, body: AccountUpdateBody, d
         if len(cleaned) < 8:
             raise HTTPException(status_code=400, detail="App password is too short")
         account.encrypted_password = encrypt_password(cleaned)
-    changes = [c for c, on in (("显示名称", body.display_name is not None), ("应用专用密码", bool(body.password))) if on]
+    if body.signature_html is not None:
+        # 签名会插入写邮件编辑器，与草稿一样先清洗
+        account.signature_html = sanitize_compose_html(body.signature_html).strip() or None
+    changes = [
+        c for c, on in (
+            ("显示名称", body.display_name is not None),
+            ("应用专用密码", bool(body.password)),
+            ("签名", body.signature_html is not None),
+        ) if on
+    ]
     audit.record_request(request, "account_updated", f"{account.email}：{'、'.join(changes) or '无变化'}")
     db.commit()
     reconcile_idle()

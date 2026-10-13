@@ -122,8 +122,46 @@ onMounted(async () => {
     loading.value = false;
   }
   await nextTick();
+  // 草稿里已经带着签名，不再重复添加
+  if (!prefill.value.draft_id) applySignature(form.accountId, { initial: true });
   if (!prefill.value.is_reply || prefill.value.is_forward) toInput.value?.focus();
 });
+
+// ---- 签名 ----
+// 签名放在 class="gm-signature" 的块里：新邮件在正文末尾，回复 / 转发在引用原文上方（与 Gmail 一致）；
+// 切换发件账号时替换为新账号的签名，新账号没有签名就去掉。
+function applySignature(accountId, { initial = false } = {}) {
+  const el = editor.value?.editorEl();
+  if (!el) return;
+  const html = accounts.value.find((a) => a.id === accountId)?.signature_html || "";
+  let block = el.querySelector(".gm-signature");
+  if (!html) {
+    if (block) {
+      block.remove();
+      editor.value.changed();
+    }
+    return;
+  }
+  if (!block) {
+    block = document.createElement("div");
+    block.className = "gm-signature";
+    const quote = el.querySelector(".gmail_quote");
+    if (quote) {
+      el.insertBefore(block, quote);
+    } else {
+      // 新邮件：签名上方留出空行供输入
+      if (!el.textContent.trim()) el.innerHTML = "<div><br></div><div><br></div>";
+      el.appendChild(block);
+    }
+  }
+  block.innerHTML = `<div>-- </div>${html}`;
+  if (!initial) editor.value.changed();
+}
+
+function onAccountChange(accountId) {
+  if (!form.plain) applySignature(accountId);
+  markDirty();
+}
 
 // ---- 修改与草稿自动保存 ----
 let dirty = false;      // 填写过内容（舍弃时需要确认）
@@ -583,7 +621,7 @@ const fullScreen = computed(() => isMobile.value || winState.value === "max");
             size="small"
             :bordered="false"
             class="gm-from"
-            @update:value="markDirty"
+            @update:value="onAccountChange"
           />
         </div>
         <div class="gm-field">
