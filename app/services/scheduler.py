@@ -28,6 +28,7 @@ from .imap_backfill import schedule_all_backfills
 from .imap_service import safe_sync_account
 from .outbox import process_all_due
 from .scheduled import safe_process_due
+from .snooze import safe_wake_due
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,17 @@ def start_scheduler() -> BackgroundScheduler:
         minutes=1,
         next_run_time=datetime.now(timezone.utc) + timedelta(seconds=5),
         id="outbox",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    # 稍后提醒：每分钟把到时间的延后邮件放回收件箱
+    sched.add_job(
+        safe_wake_due,
+        "interval",
+        minutes=1,
+        next_run_time=datetime.now(timezone.utc) + timedelta(seconds=25),
+        id="snooze-wake",
         replace_existing=True,
         max_instances=1,
         coalesce=True,

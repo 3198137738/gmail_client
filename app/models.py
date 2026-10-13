@@ -92,6 +92,8 @@ class Message(Base):
     has_attachments: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # Gmail 会话 id（X-GM-THRID）：同一会话的往来邮件相同，用于会话视图；非 Gmail 或尚未补齐时为 NULL
     thread_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    # 稍后提醒：延后到这个时间（UTC）之前不在收件箱中显示，到时间后回到收件箱最上面
+    snoozed_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
 

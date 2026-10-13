@@ -14,16 +14,18 @@ import {
   MarkEmailUnreadOutlined,
   MoreVertOutlined,
   RefreshOutlined,
+  SnoozeOutlined,
 } from "@vicons/material";
 import IconBtn from "../components/IconBtn.vue";
 import MailRow from "../components/MailRow.vue";
+import TimePicker from "../components/TimePicker.vue";
 import { get, post } from "../api";
 import { navAccount, openCompose, store } from "../store";
 import { confirm, run, toast } from "../ui";
 import { isMobile, makeRefresher, refreshNav, useCleanup } from "../composables/common";
 import { usePageShortcuts } from "../composables/shortcuts";
 import { onRealtime } from "../realtime";
-import { syncAccount, syncAll } from "../actions";
+import { snoozeMessages, syncAccount, syncAll } from "../actions";
 
 const props = defineProps({
   // 列表的筛选条件（地址栏参数）：分栏阅读时取自详情页的 back 参数
@@ -204,6 +206,20 @@ async function toggleStar(item) {
   const result = await run(post(`/api/messages/${item.id}/star`, { starred: value }));
   if (!result) item.is_starred = !value;
   else if (kind.value === "starred" && !value) silentRefresh();
+}
+
+// ---- 延后（稍后提醒） ----
+const snoozeOpen = ref(false);
+function afterSnooze() {
+  selected.clear();
+  silentRefresh();
+  refreshNav();
+}
+function snoozeSelected(until) {
+  snoozeMessages([...selected], until, { onChange: afterSnooze });
+}
+function unsnoozeSelected() {
+  snoozeMessages([...selected], null, { onChange: afterSnooze });
 }
 
 function refresh() {
@@ -390,6 +406,12 @@ usePageShortcuts({
   I: () => act("read", targetIds()),
   U: () => act("unread", targetIds()),
   Escape: () => selected.clear(),
+  b: () => {
+    const ids = targetIds();
+    if (!ids.length || kind.value === "snoozed") return false;
+    if (!selected.size) selected.add(ids[0]);
+    snoozeOpen.value = true;
+  },
 });
 
 const emptyText = computed(() => {
@@ -399,6 +421,7 @@ const emptyText = computed(() => {
   if (d.q) return { title: "没有与搜索条件相符的邮件", link: "清除搜索", action: () => goView({ q: undefined, page: undefined }) };
   if (!d.has_accounts) return { title: "还没有添加邮箱账号", hint: "先到设置添加 Gmail 账号", link: "前往设置", action: () => router.push("/accounts/") };
   if (d.current_label) return { title: `没有带「${d.current_label.name}」标签的邮件` };
+  if (d.kind === "snoozed") return { title: "没有延后的邮件", hint: "在邮件上点「延后」，邮件会在指定时间回到收件箱最上面" };
   if (d.kind === "starred") return { title: "没有已加星标的邮件", hint: "点邮件旁边的星形图标即可加星标，方便以后查找" };
   if (d.kind === "inbox") return { title: "收件箱里没有邮件", hint: "点工具栏的刷新按钮拉取最新邮件" };
   return { title: "这里没有邮件" };
@@ -433,12 +456,21 @@ const emptyText = computed(() => {
               <template #icon><NIcon :component="MarkEmailUnreadOutlined" /></template>
               <template v-if="!compact">标为未读</template>
             </NButton>
+            <NButton v-if="kind === 'snoozed'" @click="unsnoozeSelected">
+              <template #icon><NIcon :component="SnoozeOutlined" /></template>
+              <template v-if="!compact">取消延后</template>
+            </NButton>
+            <NButton v-else @click="snoozeOpen = true">
+              <template #icon><NIcon :component="SnoozeOutlined" /></template>
+              <template v-if="!compact">延后</template>
+            </NButton>
             <NButton type="error" ghost @click="act('delete', [...selected])">
               <template #icon><NIcon :component="DeleteOutlined" /></template>
               <template v-if="!compact">删除</template>
             </NButton>
           </NButtonGroup>
           <IconBtn :icon="CloseOutlined" title="取消选择" size="small" @click="selected.clear()" />
+          <TimePicker v-model:show="snoozeOpen" title="延后到…" confirm-text="延后" @pick="snoozeSelected" />
         </template>
         <template v-else>
           <span v-if="!compact" class="gm-toolbar-title">{{ data?.kind_label }}</span>

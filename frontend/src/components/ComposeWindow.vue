@@ -40,7 +40,7 @@ import { formatAddress, isValidEmail, parseAddressList } from "../address";
 import { closeCompose, store } from "../store";
 import { confirm, toast, ui } from "../ui";
 import { isMobile, refreshNav } from "../composables/common";
-import { cnTime, fileSize } from "../format";
+import { fileSize, futureDate } from "../format";
 import TimePicker from "./TimePicker.vue";
 
 const props = defineProps({
@@ -349,8 +349,7 @@ async function scheduleAt(ms) {
     unsaved = false;
     closeCompose();
     refreshNav();
-    const when = new Date(ms);
-    toast(`已安排在 ${when.getMonth() + 1}月${when.getDate()}日 ${cnTime(when)} 发送`, {
+    toast(`已安排在 ${futureDate(new Date(ms))} 发送`, {
       linkText: "查看",
       onLink: () => router.push("/compose/scheduled"),
       duration: 6000,

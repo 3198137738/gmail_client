@@ -13,12 +13,13 @@ import {
   ImageOutlined,
   MarkEmailUnreadOutlined,
   PictureAsPdfOutlined,
+  SnoozeOutlined,
   StarFilled,
   StarBorderOutlined,
   TableChartOutlined,
 } from "@vicons/material";
 import IconBtn from "./IconBtn.vue";
-import { attachmentKind, avatarColor, fullDate, initial, listDate } from "../format";
+import { attachmentKind, avatarColor, fullDate, futureDate, initial, listDate } from "../format";
 
 const props = defineProps({
   item: { type: Object, required: true },
@@ -203,7 +204,10 @@ const rowStyle = computed(() =>
       </div>
       <div class="gm-row-end">
         <NIcon v-if="item.has_attachments" :component="AttachFileOutlined" :size="15" class="gm-row-clip" />
-        <span class="gm-row-date" :title="fullDate(item.date)">{{ listDate(item.date) }}</span>
+        <span v-if="item.snoozed_until" class="gm-row-date is-snoozed" :title="`延后到 ${fullDate(item.snoozed_until)}`">
+          <NIcon :component="SnoozeOutlined" :size="14" /> {{ futureDate(item.snoozed_until) }}
+        </span>
+        <span v-else class="gm-row-date" :title="fullDate(item.date)">{{ listDate(item.date) }}</span>
       </div>
       <button
         type="button"
@@ -295,6 +299,7 @@ const rowStyle = computed(() =>
 .gm-row-date { font-size: 12px; color: var(--gm-text-3); white-space: nowrap; min-width: 52px; text-align: right; }
 .gm-row.is-unread .gm-row-date { color: var(--gm-text); font-weight: 600; }
 .gm-row-clip { color: var(--gm-text-3); }
+.gm-row-date.is-snoozed { display: inline-flex; align-items: center; justify-content: flex-end; gap: 3px; color: var(--gm-primary); font-weight: 600; }
 .gm-row-star {
     grid-area: star;
     display: flex;

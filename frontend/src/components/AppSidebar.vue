@@ -23,6 +23,7 @@ import {
   ReportOutlined,
   SendOutlined,
   SettingsOutlined,
+  SnoozeOutlined,
   StarBorderOutlined,
   SyncOutlined,
 } from "@vicons/material";
@@ -70,6 +71,7 @@ const folderOptions = computed(() => {
   const items = [
     { key: listUrl("inbox", accId), kind: "inbox", label: itemLabel("收件箱", inbox), icon: icon(InboxOutlined), unread: inbox },
     { key: listUrl("starred", accId), kind: "starred", label: "已加星标", icon: icon(StarBorderOutlined) },
+    { key: listUrl("snoozed", accId), kind: "snoozed", label: itemLabel("已延后", n?.snoozed || 0), icon: icon(SnoozeOutlined) },
     { key: listUrl("sent", accId), kind: "sent", label: "已发送", icon: icon(SendOutlined) },
   ];
   if (store.session?.config?.sync_junk_enabled) {
@@ -115,7 +117,7 @@ const labelValue = computed(() => labelOptions.value.find((o) => o.kind === acti
 
 // 切换账号时保留当前文件夹（标签视图属于某个账号，切换后回到收件箱）
 const accountKind = computed(() =>
-  ["inbox", "sent", "junk", "all", "starred"].includes(activeKind.value) ? activeKind.value : "inbox",
+  ["inbox", "sent", "junk", "all", "starred", "snoozed"].includes(activeKind.value) ? activeKind.value : "inbox",
 );
 
 const accountOptions = computed(() => {

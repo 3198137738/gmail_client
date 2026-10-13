@@ -14,6 +14,7 @@ import {
   ForwardOutlined,
   LabelOutlined,
   MarkEmailUnreadOutlined,
+  SnoozeOutlined,
   MoreVertOutlined,
   OpenInNewOutlined,
   PrintOutlined,
@@ -27,6 +28,8 @@ import {
 import IconBtn from "../components/IconBtn.vue";
 import MailBodyFrame from "../components/MailBodyFrame.vue";
 import AttachmentCards from "../components/AttachmentCards.vue";
+import TimePicker from "../components/TimePicker.vue";
+import { snoozeMessages } from "../actions";
 import { get, post } from "../api";
 import { openCompose, store } from "../store";
 import { confirm, run, toast } from "../ui";
@@ -113,6 +116,20 @@ async function markUnread() {
   if (await run(post(`/api/messages/${msg.value.id}/mark-unread`))) {
     changed();
     goBack();
+  }
+}
+
+// ---- 延后（稍后提醒） ----
+const snoozeOpen = ref(false);
+
+async function snoozeTo(until) {
+  const ok = await snoozeMessages([msg.value.id], until, { previous: msg.value.snoozed_until, onChange: changed });
+  if (ok) goBack();
+}
+
+async function unsnooze() {
+  if (await snoozeMessages([msg.value.id], null, { previous: msg.value.snoozed_until, onChange: changed })) {
+    msg.value.snoozed_until = null;
   }
 }
 
@@ -209,6 +226,7 @@ usePageShortcuts({
   s: () => msg.value && toggleStar(),
   "#": () => msg.value && remove(),
   U: () => msg.value && markUnread(),
+  b: () => msg.value && !msg.value.snoozed_until && (snoozeOpen.value = true),
 });
 </script>
 
@@ -223,6 +241,15 @@ usePageShortcuts({
           <IconBtn :icon="DeleteOutlined" title="删除（#）" @click="remove" />
           <span class="gm-toolbar-sep" />
           <IconBtn :icon="MarkEmailUnreadOutlined" title="标记为未读（Shift+U）" @click="markUnread" />
+          <IconBtn
+            v-if="msg.snoozed_until"
+            :icon="SnoozeOutlined"
+            color="var(--gm-primary)"
+            :title="`已延后到 ${fullDate(msg.snoozed_until).replace(/ \(.*\)$/, '')}，点击取消延后`"
+            @click="unsnooze"
+          />
+          <IconBtn v-else :icon="SnoozeOutlined" title="延后（b）" @click="snoozeOpen = true" />
+          <TimePicker v-model:show="snoozeOpen" title="延后到…" confirm-text="延后" @pick="snoozeTo" />
           <NPopover v-if="msg.account_labels.length" v-model:show="labelsOpen" trigger="click" placement="bottom-start">
             <template #trigger>
               <IconBtn :icon="LabelOutlined" title="标签" />

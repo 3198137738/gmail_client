@@ -103,3 +103,15 @@ export function attachmentKind(mime) {
   if (mt.includes("zip") || mt.includes("compressed")) return "zip";
   return "doc";
 }
+
+// 将来的时间（延后到、定时发送）：今天「下午6:00」，明天「明天 上午8:00」，更晚「10月17日 上午8:00」
+export function futureDate(value) {
+  const d = parseDate(value);
+  if (!d) return "";
+  const now = new Date();
+  const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  if (sameDay(d, now)) return cnTime(d);
+  if (sameDay(d, tomorrow)) return `明天 ${cnTime(d)}`;
+  const year = d.getFullYear() === now.getFullYear() ? "" : `${d.getFullYear()}年`;
+  return `${year}${d.getMonth() + 1}月${d.getDate()}日 ${cnTime(d)}`;
+}

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from datetime import datetime, timezone
 from email.utils import parseaddr
 import re
 from typing import Optional
@@ -29,6 +30,7 @@ from ..services.mail_body import (
     request_origin,
 )
 from ..services.imap_client import is_account_busy
+from ..timeutil import utcnow
 from ..services import labels as gmail_labels
 from ..services import audit, outbox, threads
 from ..services.message_actions import (
@@ -45,7 +47,9 @@ body_router = APIRouter(prefix="/messages", tags=["messages"])
 
 DEFAULT_PAGE_SIZE = 25
 PAGE_SIZE_OPTIONS = (25, 50, 100)
-KIND_LABELS = {"inbox": "收件箱", "sent": "已发送", "junk": "垃圾邮件", "all": "全部邮件", "starred": "已加星标"}
+KIND_LABELS = {
+    "inbox": "收件箱", "sent": "已发送", "junk": "垃圾邮件", "all": "全部邮件", "starred": "已加星标", "snoozed": "已延后",
+}
 
 # Cookie name + lifetime for persisting the user's account filter choice.
 # Selection is remembered for a year so it survives across normal browser
@@ -101,18 +105,23 @@ def _normalize_sender_email(value: Optional[str]) -> str:
 
 
 def _kind_condition(kind: str):
-    """按文件夹类型过滤；与 Gmail 一致，「全部邮件」不包含垃圾邮件。"""
+    """按文件夹类型过滤；与 Gmail 一致，「全部邮件」不包含垃圾邮件。延后的邮件只在「已延后」中显示。"""
+    if kind == "snoozed":
+        return Message.snoozed_until.is_not(None)
+    not_snoozed = Message.snoozed_until.is_(None)
     if kind == "all":
-        return Message.folder_kind != "junk"
+        return (Message.folder_kind != "junk") & not_snoozed
     if kind == "starred":
         # 与 Gmail 一致：垃圾邮件中的星标邮件不显示在「已加星标」里
-        return (Message.is_starred.is_(True)) & (Message.folder_kind != "junk")
+        return (Message.is_starred.is_(True)) & (Message.folder_kind != "junk") & not_snoozed
     label_id = _label_id_of(kind)
     if label_id is not None:
         return Message.id.in_(
             select(MessageLabel.message_id).where(MessageLabel.label_id == label_id)
-        ) & (Message.folder_kind != "junk")
-    return Message.folder_kind == kind
+        ) & (Message.folder_kind != "junk") & not_snoozed
+    if kind == "sent":
+        return Message.folder_kind == "sent"
+    return (Message.folder_kind == kind) & not_snoozed
 
 
 def _apply_kind_account_filters(stmt, kind: str, account_id: Optional[int]):
@@ -273,6 +282,7 @@ def nav_payload(request: Request) -> dict:
         "unread_inbox": nav.unread_inbox,
         "unread_junk": nav.unread_junk,
         "drafts": nav.drafts,
+        "snoozed": nav.snoozed,
         "scheduled": nav.scheduled,
         "labels": [
             {"id": lb.id, "account_id": lb.account_id, "name": lb.name, "short": lb.short}
@@ -308,6 +318,7 @@ def _list_item(m: Message, snippets, attachments_by_message, message_labels, thr
         "labels": message_labels.get(int(m.id), []),
         "thread_count": int(stats.get("count", 1)),
         "thread_unread": int(stats.get("unread", 0)),
+        "snoozed_until": ser.iso_utc(m.snoozed_until),
     }
 
 
@@ -464,6 +475,26 @@ def batch_action(request: Request, body: ActionBody, db: Session = Depends(get_d
         raise HTTPException(status_code=400, detail="Unknown action")
     logger.info("batch-%s selected=%s affected=%s", body.action, len(body.ids), affected)
     return {"ok": True, "affected": affected}
+
+
+class SnoozeBody(IdsBody):
+    # 延后到的时间（浏览器给出的毫秒时间戳）；为空表示取消延后
+    until_ms: Optional[int] = None
+
+
+@router.post("/snooze", name="messages.snooze")
+def snooze(request: Request, body: SnoozeBody, db: Session = Depends(get_db)):
+    """延后（稍后提醒）选中的邮件；会话视图下整个会话一起延后。"""
+    messages = _load_for_action(request, db, body.ids)
+    until = None
+    if body.until_ms is not None:
+        until = datetime.fromtimestamp(body.until_ms / 1000, tz=timezone.utc).replace(tzinfo=None)
+        if until <= utcnow():
+            raise HTTPException(status_code=400, detail="请选择一个将来的时间")
+    for m in messages:
+        m.snoozed_until = until
+    db.commit()
+    return {"ok": True, "affected": len(messages), "until": ser.iso_utc(until)}
 
 
 class ViewBody(BaseModel):
@@ -721,6 +752,7 @@ def view_message(
         "subject": message.subject or "",
         "folder_kind": message.folder_kind,
         "is_starred": bool(message.is_starred),
+        "snoozed_until": ser.iso_utc(message.snoozed_until),
         "thread": [_thread_item(m, int(m.id) in expanded_ids) for m in thread],
         "thread_labels": _thread_labels(db, thread),
         "account_labels": [

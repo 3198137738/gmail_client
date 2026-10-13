@@ -5,7 +5,7 @@ import { get, post } from "../api";
 import { navAccount, openCompose, store } from "../store";
 import { confirm, run, toast } from "../ui";
 import { refreshNav } from "../composables/common";
-import { avatarColor, fullDate, initial } from "../format";
+import { avatarColor, futureDate, initial } from "../format";
 
 const items = ref(null);
 const multiAccount = computed(() => (store.nav?.accounts.length || 0) > 1);
@@ -75,7 +75,7 @@ async function sendNow(item) {
             <div class="gm-sched-meta">
               <NTag v-if="it.status === 'failed'" size="small" type="error" :bordered="false">发送失败</NTag>
               <NTag v-else-if="it.status === 'sending'" size="small" type="info" :bordered="false">正在发送</NTag>
-              <span>将于 {{ fullDate(it.send_at).replace(/ \(.*\)$/, "") }} 发送</span>
+              <span>将于 {{ futureDate(it.send_at) }} 发送</span>
               <span v-if="it.attachments.length">· {{ it.attachments.length }} 个附件</span>
             </div>
             <div v-if="it.error" class="gm-sched-error">{{ it.error }}</div>
