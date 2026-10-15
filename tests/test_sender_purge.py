@@ -227,3 +227,40 @@ def test_purge_route_404_for_unknown_row(client):
     token = login(client)
     resp = api_post(client, "/api/senders/blocked/999999/purge", token)
     assert resp.status_code == 404
+
+
+def test_batch_purge_runs_in_background(client, monkeypatch, _no_background_network):
+    token = login(client)
+    acc = create_account()
+    bid = _blocked_id(acc)
+    with session_scope() as db:
+        row = BlockedSender(account_id=acc, sender_email="ads@bad.example")
+        db.add(row)
+        db.flush()
+        bid2 = int(row.id)
+
+    resp = api_post(client, "/api/senders/blocked/purge", token, json={"ids": [bid, bid2, 99999]})
+    assert resp.status_code == 200 and resp.json()["queued"] == 2
+    name, args, _kw = _no_background_network[-1]
+    assert name == "_purge_many"
+    targets, ip = args
+    assert {(t[0], t[1]) for t in targets} == {(acc, SENDER), (acc, "ads@bad.example")}
+
+    # 后台任务：逐个永久删除、记审计、推送结果
+    def fake_purge(account_id, sender_email, **kw):
+        if sender_email == SENDER:
+            return {"ok": True, "trashed": 1, "purged": 4, "local": 0,
+                    "folders": {"T": {"count": 4, "error": None}}, "error": None}
+        return {"ok": False, "trashed": 0, "purged": 0, "local": 0, "folders": {}, "error": "busy"}
+
+    events: list[dict] = []
+    monkeypatch.setattr(senders_routes, "purge_sender_messages", fake_purge)
+    monkeypatch.setattr(senders_routes, "publish_purge_done", lambda **kw: events.append(kw))
+    senders_routes._purge_many(targets, ip)
+    assert events == [{"senders": 2, "failed": 1, "purged": 4}]
+    with session_scope() as db:
+        details = [r.detail for r in db.execute(select(AuditLog).where(AuditLog.event == "sender_purged")).scalars()]
+        assert any(d.startswith(SENDER) and "已永久删除 4 封" in d for d in details)
+        assert not any(d.startswith("ads@bad.example") for d in details)
+
+    assert api_post(client, "/api/senders/blocked/purge", token, json={"ids": []}).status_code == 404

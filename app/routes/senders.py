@@ -16,6 +16,7 @@ from ..database import get_db
 from ..models import Account, BlockedSender, Message, TrustedSender
 from ..services import audit
 from ..services.background import submit_bg
+from ..services.events import publish_purge_done
 from ..services.imap_purge import describe_purge, purge_sender_messages
 from ..services.imap_restore import restore_sender_messages_since
 from ..services.message_actions import (
@@ -204,6 +205,45 @@ def purge_blocked_sender(request: Request, blocked_id: int, db: Session = Depend
         result["ok"], result["error"],
     )
     return {"ok": bool(result["ok"]), "message": f"{sender_email}：{summary}"}
+
+
+class BlockedIdsBody(BaseModel):
+    ids: list[int] = []
+
+
+def _purge_many(targets: list[tuple[int, str, str]], ip: Optional[str]) -> None:
+    """后台逐个永久删除，每个地址各记一条审计日志，全部结束后推送结果。"""
+    failed = purged = 0
+    for account_id, sender_email, account_email in targets:
+        result = purge_sender_messages(account_id, sender_email)
+        if result["folders"]:
+            audit.record("sender_purged", f"{sender_email}（{account_email}）：{describe_purge(result)}", ip=ip)
+        if not result["ok"]:
+            failed += 1
+        purged += int(result["purged"] or 0)
+    logger.info("purge-blocked-senders senders=%s failed=%s purged=%s", len(targets), failed, purged)
+    publish_purge_done(senders=len(targets), failed=failed, purged=purged)
+
+
+@router.post("/senders/blocked/purge", name="senders.purge_blocked_many")
+def purge_blocked_senders(request: Request, body: BlockedIdsBody, db: Session = Depends(get_db)):
+    """批量「永久删除」：在后台依次清除选中屏蔽地址在 Gmail 中的全部邮件，屏蔽保持不变。
+
+    多个地址逐个连 IMAP 可能要很久，放在请求里会超时；结果写进审计日志并通过实时推送提示。
+    """
+    ids = sorted({int(i) for i in body.ids if i})
+    rows = db.execute(
+        select(BlockedSender).options(selectinload(BlockedSender.account)).where(BlockedSender.id.in_(ids))
+    ).scalars().all() if ids else []
+    if not rows:
+        raise HTTPException(status_code=404, detail="Blocked sender not found")
+    targets = [
+        (int(r.account_id), r.sender_email, r.account.email if r.account else f"#{r.account_id}")
+        for r in rows
+    ]
+    db.close()
+    submit_bg(_purge_many, targets, audit.request_ip(request))
+    return {"ok": True, "queued": len(targets)}
 
 
 @router.post("/senders/blocked/{blocked_id}/remove", name="senders.unblock")

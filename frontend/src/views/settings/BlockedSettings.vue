@@ -1,12 +1,14 @@
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { NButton, NInput, NSelect, NSpin } from "naive-ui";
+import { NButton, NCheckbox, NInput, NSelect, NSpin } from "naive-ui";
 import SettingsHeader from "../../components/SettingsHeader.vue";
 import { get, post } from "../../api";
 import { store } from "../../store";
 import { confirm, run, ui } from "../../ui";
 import { dateTime } from "../../format";
+import { onRealtime } from "../../realtime";
+import { useCleanup } from "../../composables/common";
 
 const route = useRoute();
 const router = useRouter();
@@ -19,6 +21,9 @@ const purging = ref(null);
 const addAccountId = ref(null);
 const addText = ref("");
 const adding = ref(false);
+// 勾选的屏蔽记录（批量永久删除）
+const checked = reactive(new Set());
+const batchPurging = ref(false);
 
 const accountOptions = computed(() => [
   { value: null, label: "全部账号" },
@@ -28,7 +33,10 @@ const addAccountOptions = computed(() => accountOptions.value.slice(1));
 
 async function load() {
   const result = await run(get("/api/senders", { account_id: route.query.account_id, q: route.query.q }));
-  if (result) data.value = result;
+  if (!result) return;
+  data.value = result;
+  const ids = new Set(result.blocked.map((r) => r.id));
+  for (const id of [...checked]) if (!ids.has(id)) checked.delete(id);
 }
 
 watch(
@@ -75,6 +83,41 @@ async function purge(row) {
   purging.value = null;
   if (result) ui.message[result.ok ? "success" : "error"](result.message, { duration: 6000 });
 }
+
+const allChecked = computed(() => !!data.value?.blocked.length && data.value.blocked.every((r) => checked.has(r.id)));
+function toggleAll(value) {
+  checked.clear();
+  if (value) for (const r of data.value.blocked) checked.add(r.id);
+}
+function toggleCheck(id, value) {
+  if (value) checked.add(id);
+  else checked.delete(id);
+}
+
+async function purgeChecked() {
+  const ids = [...checked];
+  if (!ids.length) return;
+  const ok = await confirm(
+    `确定永久删除选中 ${ids.length} 个地址在 Gmail 中的全部邮件吗？包括所有邮件、垃圾邮件和已删除邮件，删除后无法恢复；屏蔽会继续保留。`,
+    { danger: true, positiveText: "永久删除" },
+  );
+  if (!ok) return;
+  batchPurging.value = true;
+  const result = await run(post("/api/senders/blocked/purge", { ids }));
+  batchPurging.value = false;
+  if (!result) return;
+  checked.clear();
+  const tail = store.session?.config?.realtime_enabled ? "完成后会提示" : "结果可在审计日志中查看";
+  ui.message.info(`已开始在后台永久删除 ${result.queued} 个地址的邮件，${tail}`, { duration: 6000 });
+}
+
+useCleanup(
+  onRealtime("purge_done", (ev) => {
+    const text = `已永久删除 ${ev.senders} 个地址的邮件，共 ${ev.purged} 封`;
+    if (ev.failed) ui.message.warning(`${text}；其中 ${ev.failed} 个地址失败，详见审计日志`, { duration: 8000 });
+    else ui.message.success(text, { duration: 6000 });
+  }),
+);
 
 async function unblock(row) {
   if (!(await confirm(`确定解除对 ${row.sender_email} 的屏蔽吗？`))) return;
@@ -126,7 +169,24 @@ async function untrust(row) {
             </div>
           </div>
           <div class="gm-settings-content">
+            <div v-if="data.blocked.length" class="gm-batch">
+              <NCheckbox
+                :checked="allChecked"
+                :indeterminate="checked.size > 0 && !allChecked"
+                @update:checked="toggleAll"
+              >{{ checked.size ? `已选 ${checked.size} 个` : "全选" }}</NCheckbox>
+              <NButton
+                size="small"
+                type="error"
+                ghost
+                :disabled="!checked.size"
+                :loading="batchPurging"
+                title="彻底删除选中发件人在 Gmail 中的全部邮件（不解除屏蔽）"
+                @click="purgeChecked"
+              >永久删除选中</NButton>
+            </div>
             <div v-for="row in data.blocked" :key="row.id" class="gm-addr">
+              <NCheckbox :checked="checked.has(row.id)" @update:checked="(v) => toggleCheck(row.id, v)" />
               <span class="gm-addr-email">{{ row.sender_email }}</span>
               <span class="gm-addr-meta">{{ row.account_name }} · {{ dateTime(row.created_at) }}</span>
               <span class="gm-addr-actions">
@@ -173,6 +233,7 @@ async function untrust(row) {
 .gm-filter-q { flex: 1; min-width: 180px; }
 .gm-add { display: flex; flex-direction: column; gap: 8px; max-width: 520px; }
 .gm-add > .n-button { align-self: flex-start; }
+.gm-batch { display: flex; align-items: center; gap: 16px; padding-bottom: 8px; border-bottom: 1px solid var(--gm-divider); }
 .gm-addr {
     display: flex;
     align-items: center;

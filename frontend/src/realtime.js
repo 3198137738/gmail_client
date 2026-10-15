@@ -1,7 +1,8 @@
 // 实时推送：整个页面共用一条 SSE 连接（/events/stream），把服务器事件分发给各页面。
 //
 // 事件：new_mail（新邮件，带各文件夹数量）、mail_changed（在手机 / Gmail 网页上读过、删除的邮件
-// 已同步到本地）、sync_done（某账号同步结束）、open（连接建立，first 表示首次连接）。
+// 已同步到本地）、sync_done（某账号同步结束）、purge_done（批量永久删除屏蔽地址的邮件结束）、
+// open（连接建立，first 表示首次连接）。
 import { store } from "./store";
 
 const listeners = new Map();

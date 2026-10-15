@@ -145,3 +145,10 @@ def publish_mail_changed(account_id: int, folder_kind: str) -> None:
 def publish_sync_done(account_id: int) -> None:
     """一次整账号同步结束（无论有无新邮件），页面据此刷新「正在同步」状态。"""
     event_bus.publish({"type": "sync_done", "account_id": int(account_id)})
+
+
+def publish_purge_done(*, senders: int, failed: int, purged: int) -> None:
+    """后台批量永久删除屏蔽地址的邮件已结束，页面据此提示结果。"""
+    event_bus.publish(
+        {"type": "purge_done", "senders": int(senders), "failed": int(failed), "purged": int(purged)}
+    )
