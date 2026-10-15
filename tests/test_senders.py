@@ -61,3 +61,51 @@ def test_block_requires_csrf(client):
     acc = create_account()
     mid = create_message(acc, from_addr="x@bad.example")
     assert client.post(f"/api/messages/{mid}/block-sender", json={}).status_code == 403
+
+
+def test_block_selected_senders(client):
+    token = login(client)
+    acc = create_account(email="me@mine.example")
+    other_acc = create_account()
+    a = create_message(acc, from_addr="A <a@bad.example>")
+    a2 = create_message(acc, from_addr="a@bad.example")
+    b = create_message(other_acc, from_addr="B <b@bad.example>")
+    sent = create_message(acc, from_addr="Me <me@mine.example>", folder_kind="sent")
+    keep = create_message(acc, from_addr="b@bad.example")  # 同地址但在另一个账号屏蔽，不受影响
+
+    resp = api_post(client, "/api/senders/block", token, json={"ids": [a, b, sent]})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["senders"] == ["a@bad.example", "b@bad.example"]
+    assert data["added"] == 2 and data["hidden"] == 3 and data["skipped"] == 1
+    with session_scope() as db:
+        blocked = {(r.account_id, r.sender_email) for r in db.execute(
+            select(BlockedSender).where(BlockedSender.account_id.in_([acc, other_acc]))).scalars()}
+        assert blocked == {(acc, "a@bad.example"), (other_acc, "b@bad.example")}
+        assert db.get(Message, a2) is None
+        assert db.get(Message, sent) is not None
+        assert db.get(Message, keep) is not None
+
+    # 重复屏蔽不会报错，也不会重复添加
+    c = create_message(acc, from_addr="a@bad.example")
+    data = api_post(client, "/api/senders/block", token, json={"ids": [c]}).json()
+    assert data["added"] == 0 and data["hidden"] == 1
+
+
+def test_block_addresses_bulk(client):
+    token = login(client)
+    acc = create_account(email="me2@mine.example")
+    existing = create_message(acc, from_addr="Ads <ads@spam.example>")
+    text = "ads@spam.example, X <x@spam.example>;\ny@spam.example  me2@mine.example\nnot-an-address"
+    resp = api_post(client, "/api/senders/blocked", token, json={"account_id": acc, "text": text})
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "added": 3, "existing": 0, "hidden": 1}
+    with session_scope() as db:
+        emails = set(db.execute(select(BlockedSender.sender_email).where(BlockedSender.account_id == acc)).scalars())
+        assert emails == {"ads@spam.example", "x@spam.example", "y@spam.example"}
+        assert db.get(Message, existing) is None
+
+    again = api_post(client, "/api/senders/blocked", token, json={"account_id": acc, "text": "ADS@spam.example"})
+    assert again.json()["existing"] == 1
+    assert api_post(client, "/api/senders/blocked", token, json={"account_id": acc, "text": "nothing"}).status_code == 400
+    assert api_post(client, "/api/senders/blocked", token, json={"account_id": 9999, "text": "a@b.example"}).status_code == 404

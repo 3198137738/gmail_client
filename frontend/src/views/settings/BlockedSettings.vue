@@ -15,11 +15,16 @@ const data = ref(null);
 const accountId = ref(null);
 const q = ref("");
 const purging = ref(null);
+// 批量添加屏蔽地址
+const addAccountId = ref(null);
+const addText = ref("");
+const adding = ref(false);
 
 const accountOptions = computed(() => [
   { value: null, label: "全部账号" },
   ...(store.nav?.accounts || []).map((a) => ({ value: a.id, label: a.name })),
 ]);
+const addAccountOptions = computed(() => accountOptions.value.slice(1));
 
 async function load() {
   const result = await run(get("/api/senders", { account_id: route.query.account_id, q: route.query.q }));
@@ -31,6 +36,7 @@ watch(
   (query) => {
     accountId.value = query.account_id ? Number(query.account_id) : null;
     q.value = String(query.q || "");
+    if (accountId.value) addAccountId.value = accountId.value;
     load();
   },
   { immediate: true },
@@ -41,6 +47,21 @@ function search() {
   if (accountId.value) query.account_id = accountId.value;
   if (q.value.trim()) query.q = q.value.trim();
   router.push({ path: "/messages/blocked-senders", query });
+}
+
+async function addBlocked() {
+  if (!addAccountId.value) return ui.message.warning("请选择账号");
+  if (!addText.value.trim()) return;
+  adding.value = true;
+  const result = await run(post("/api/senders/blocked", { account_id: addAccountId.value, text: addText.value }));
+  adding.value = false;
+  if (!result) return;
+  const parts = [`已屏蔽 ${result.added} 个地址`];
+  if (result.existing) parts.push(`${result.existing} 个之前已屏蔽`);
+  if (result.hidden) parts.push(`隐藏了 ${result.hidden} 封邮件`);
+  ui.message.success(parts.join("，"));
+  addText.value = "";
+  load();
 }
 
 async function purge(row) {
@@ -78,6 +99,25 @@ async function untrust(row) {
 
       <NSpin v-if="!data" class="gm-settings-loading" />
       <template v-else>
+        <section class="gm-settings-row">
+          <div class="gm-settings-label">
+            批量屏蔽：
+            <div class="gm-settings-hint">一次可粘贴多个地址，用逗号、分号、空格或换行分隔；会同时隐藏该账号中这些发件人已有的邮件。</div>
+          </div>
+          <div class="gm-settings-content">
+            <form class="gm-add" @submit.prevent="addBlocked">
+              <NSelect v-model:value="addAccountId" :options="addAccountOptions" placeholder="选择账号" class="gm-filter-account" />
+              <NInput
+                v-model:value="addText"
+                type="textarea"
+                :autosize="{ minRows: 3, maxRows: 10 }"
+                :placeholder="'spam@example.com\nads@example.org'"
+              />
+              <NButton attr-type="submit" type="primary" :loading="adding" :disabled="!addText.trim()">屏蔽</NButton>
+            </form>
+          </div>
+        </section>
+
         <section class="gm-settings-row">
           <div class="gm-settings-label">
             屏蔽的地址：
@@ -131,6 +171,8 @@ async function untrust(row) {
 .gm-settings-filter { display: flex; flex-wrap: wrap; gap: 8px; padding: 16px 0 4px; max-width: 640px; }
 .gm-filter-account { width: 200px; }
 .gm-filter-q { flex: 1; min-width: 180px; }
+.gm-add { display: flex; flex-direction: column; gap: 8px; max-width: 520px; }
+.gm-add > .n-button { align-self: flex-start; }
 .gm-addr {
     display: flex;
     align-items: center;

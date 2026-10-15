@@ -2,15 +2,18 @@
 from __future__ import annotations
 
 import logging
+import re
+from collections import defaultdict
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from .. import serializers as ser
 from ..database import get_db
-from ..models import BlockedSender, Message, TrustedSender
+from ..models import Account, BlockedSender, Message, TrustedSender
 from ..services import audit
 from ..services.background import submit_bg
 from ..services.imap_purge import describe_purge, purge_sender_messages
@@ -20,7 +23,7 @@ from ..services.message_actions import (
     mark_not_spam,
 )
 from ..timeutil import utcnow
-from .messages import _coerce_int, _normalize_sender_email
+from .messages import _coerce_int, _load_messages_by_ids, _normalize_sender_email
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +43,39 @@ def not_spam(message_id: int, db: Session = Depends(get_db)):
     return {"ok": True, "message": info}
 
 
+_EMAIL_RE = re.compile(r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}", re.IGNORECASE)
+
+
+def _block_senders(db: Session, account_id: int, emails: set[str]) -> tuple[list[str], int]:
+    """屏蔽该账号下的这些发件人，并隐藏（本地删除）已有的同发件人邮件。返回（新增的屏蔽地址, 隐藏的邮件数）。"""
+    existing = set(db.execute(
+        select(BlockedSender.sender_email).where(
+            BlockedSender.account_id == account_id,
+            BlockedSender.sender_email.in_(emails),
+        )
+    ).scalars())
+    added = sorted(emails - existing)
+    for email in added:
+        db.add(BlockedSender(account_id=account_id, sender_email=email))
+    db.flush()
+
+    to_delete: list[Message] = []
+    for email in sorted(emails):
+        matched = db.execute(
+            select(Message)
+            .options(selectinload(Message.attachments))
+            .where(Message.account_id == account_id, Message.from_addr.ilike(f"%{email}%"))
+        ).scalars().all()
+        to_delete.extend(m for m in matched if _normalize_sender_email(m.from_addr) == email)
+    hidden = _delete_local_messages(db, to_delete)
+    db.commit()
+    logger.info(
+        "block-senders account_id=%s senders=%s added=%s hidden=%s",
+        account_id, len(emails), len(added), hidden,
+    )
+    return added, hidden
+
+
 @router.post("/messages/{message_id}/block-sender", name="messages.block_sender")
 def block_sender(message_id: int, db: Session = Depends(get_db)):
     """永久屏蔽该账号下的这个发件人，并隐藏已有的同发件人邮件。"""
@@ -51,31 +87,63 @@ def block_sender(message_id: int, db: Session = Depends(get_db)):
     if not sender_email:
         raise HTTPException(status_code=400, detail="Cannot parse sender email")
 
-    exists = db.execute(
-        select(BlockedSender.id).where(
-            BlockedSender.account_id == message.account_id,
-            BlockedSender.sender_email == sender_email,
-        )
-    ).first()
-    if exists is None:
-        db.add(BlockedSender(account_id=int(message.account_id), sender_email=sender_email))
-        db.flush()
+    _added, hidden = _block_senders(db, int(message.account_id), {sender_email})
+    return {"ok": True, "sender_email": sender_email, "hidden": hidden}
 
-    pattern = f"%{sender_email}%"
-    matched = db.execute(
-        select(Message)
-        .options(selectinload(Message.attachments))
-        .where(
-            Message.account_id == message.account_id,
-            Message.from_addr.ilike(pattern),
-        )
-    ).scalars().all()
-    to_delete = [m for m in matched if _normalize_sender_email(m.from_addr) == sender_email]
-    deleted = _delete_local_messages(db, to_delete)
-    logger.info(
-        "block-sender account_id=%s sender=%s hidden=%s", message.account_id, sender_email, deleted,
-    )
-    return {"ok": True, "sender_email": sender_email, "hidden": deleted}
+
+class BlockMessagesBody(BaseModel):
+    ids: list[int] = []
+
+
+@router.post("/senders/block", name="senders.block_messages")
+def block_message_senders(body: BlockMessagesBody, db: Session = Depends(get_db)):
+    """批量屏蔽：屏蔽选中邮件的发件人（各自所在账号下），并隐藏这些发件人已有的邮件。
+
+    账号自己的地址（如已发送邮件）会被跳过，避免把自己屏蔽掉。
+    """
+    messages = _load_messages_by_ids(db, body.ids)
+    own = {
+        int(a.id): (a.email or "").strip().lower()
+        for a in db.execute(select(Account)).scalars()
+    }
+    by_account: dict[int, set[str]] = defaultdict(set)
+    skipped = 0
+    for message in messages:
+        account_id = int(message.account_id)
+        email = _normalize_sender_email(message.from_addr)
+        if not email or email == own.get(account_id):
+            skipped += 1
+            continue
+        by_account[account_id].add(email)
+
+    senders: set[str] = set()
+    added = hidden = 0
+    for account_id, emails in by_account.items():
+        new, count = _block_senders(db, account_id, emails)
+        senders |= emails
+        added += len(new)
+        hidden += count
+    return {"ok": True, "senders": sorted(senders), "added": added, "hidden": hidden, "skipped": skipped}
+
+
+class BlockAddressesBody(BaseModel):
+    account_id: int
+    # 一次可粘贴多个地址：逗号、分号、空白或换行分隔，也可以是「名称 <地址>」
+    text: str = ""
+
+
+@router.post("/senders/blocked", name="senders.block_addresses")
+def block_addresses(body: BlockAddressesBody, db: Session = Depends(get_db)):
+    """在设置页手动批量添加屏蔽地址。"""
+    account = db.get(Account, body.account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    own = (account.email or "").strip().lower()
+    emails = {e.lower() for e in _EMAIL_RE.findall(body.text or "")} - {own}
+    if not emails:
+        raise HTTPException(status_code=400, detail="Invalid email address")
+    added, hidden = _block_senders(db, int(account.id), emails)
+    return {"ok": True, "added": len(added), "existing": len(emails) - len(added), "hidden": hidden}
 
 
 def _sender_row(row) -> dict:

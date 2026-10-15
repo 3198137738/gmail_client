@@ -5,6 +5,7 @@ import { NButton, NButtonGroup, NCheckbox, NDropdown, NIcon, NRadioButton, NRadi
 import {
   ArrowDropDownOutlined,
   ArrowUpwardOutlined,
+  BlockOutlined,
   ChevronLeftOutlined,
   ChevronRightOutlined,
   CloseOutlined,
@@ -197,6 +198,25 @@ async function act(action, ids) {
   if (!result) return;
   if (action === "delete") toast(ids.length > 1 ? `已删除 ${ids.length} 封邮件` : "已删除邮件");
   for (const id of ids) selected.delete(id);
+  await load({ silent: true });
+  refreshNav();
+}
+
+// 批量屏蔽：屏蔽选中邮件的发件人，并隐藏这些发件人已有的邮件
+async function blockSelected() {
+  const ids = [...selected];
+  if (!ids.length) return;
+  const ok = await confirm(
+    `永久屏蔽选中 ${ids.length} 封邮件的发件人？\n后续同步将自动忽略这些发件人，并隐藏对应账号中已有的同发件人邮件。`,
+    { danger: true, positiveText: "屏蔽" },
+  );
+  if (!ok) return;
+  const result = await run(post("/api/senders/block", { ids }));
+  if (!result) return;
+  const n = result.senders.length;
+  if (!n) toast("没有可屏蔽的发件人");
+  else toast(`已屏蔽 ${n === 1 ? result.senders[0] : `${n} 个发件人`}${result.hidden ? `，隐藏了 ${result.hidden} 封邮件` : ""}`);
+  selected.clear();
   await load({ silent: true });
   refreshNav();
 }
@@ -467,6 +487,10 @@ const emptyText = computed(() => {
             <NButton v-else @click="snoozeOpen = true">
               <template #icon><NIcon :component="SnoozeOutlined" /></template>
               <template v-if="!compact">延后</template>
+            </NButton>
+            <NButton @click="blockSelected">
+              <template #icon><NIcon :component="BlockOutlined" /></template>
+              <template v-if="!compact">屏蔽发件人</template>
             </NButton>
             <NButton type="error" ghost @click="act('delete', [...selected])">
               <template #icon><NIcon :component="DeleteOutlined" /></template>
