@@ -229,7 +229,9 @@ def test_purge_route_404_for_unknown_row(client):
     assert resp.status_code == 404
 
 
-def test_batch_purge_runs_in_background(client, monkeypatch, _no_background_network):
+def test_batch_purge_runs_in_background_with_progress(client, monkeypatch, _no_background_network):
+    from app.services import purge_jobs
+
     token = login(client)
     acc = create_account()
     bid = _blocked_id(acc)
@@ -240,13 +242,17 @@ def test_batch_purge_runs_in_background(client, monkeypatch, _no_background_netw
         bid2 = int(row.id)
 
     resp = api_post(client, "/api/senders/blocked/purge", token, json={"ids": [bid, bid2, 99999]})
-    assert resp.status_code == 200 and resp.json()["queued"] == 2
+    assert resp.status_code == 200
+    job = resp.json()["job"]
+    assert resp.json()["queued"] == 2 and job["total"] == 2 and not job["finished"]
+    assert [i["status"] for i in job["items"]] == ["pending", "pending"]
     name, args, _kw = _no_background_network[-1]
-    assert name == "_purge_many"
-    targets, ip = args
+    assert name == "run"
+    job_id, targets, ip = args
+    assert job_id == job["id"]
     assert {(t[0], t[1]) for t in targets} == {(acc, SENDER), (acc, "ads@bad.example")}
 
-    # 后台任务：逐个永久删除、记审计、推送结果
+    # 后台任务：逐个永久删除、记审计、每一步推送进度
     def fake_purge(account_id, sender_email, **kw):
         if sender_email == SENDER:
             return {"ok": True, "trashed": 1, "purged": 4, "local": 0,
@@ -254,13 +260,39 @@ def test_batch_purge_runs_in_background(client, monkeypatch, _no_background_netw
         return {"ok": False, "trashed": 0, "purged": 0, "local": 0, "folders": {}, "error": "busy"}
 
     events: list[dict] = []
-    monkeypatch.setattr(senders_routes, "purge_sender_messages", fake_purge)
-    monkeypatch.setattr(senders_routes, "publish_purge_done", lambda **kw: events.append(kw))
-    senders_routes._purge_many(targets, ip)
-    assert events == [{"senders": 2, "failed": 1, "purged": 4}]
+    monkeypatch.setattr(purge_jobs, "purge_sender_messages", fake_purge)
+    monkeypatch.setattr(purge_jobs, "publish_purge_progress", events.append)
+    purge_jobs.run(job_id, targets, ip)
+
+    # 每个地址「开始」「结束」各一次，最后「全部结束」一次；版本号递增
+    assert len(events) == 2 * len(targets) + 1
+    assert [e["version"] for e in events] == list(range(1, len(events) + 1))
+    assert events[0]["current"] == targets[0][1] and events[0]["items"][0]["status"] == "running"
+    final = events[-1]
+    assert final["finished"] and final["current"] is None
+    assert (final["done"], final["failed"], final["purged"]) == (2, 1, 4)
+    by_sender = {i["sender"]: i for i in final["items"]}
+    assert by_sender[SENDER]["status"] == "done" and by_sender[SENDER]["message"] == "已永久删除 4 封"
+    assert by_sender["ads@bad.example"]["status"] == "failed"
+    assert by_sender["ads@bad.example"]["message"] == "账号正在同步，请稍后再试"
     with session_scope() as db:
         details = [r.detail for r in db.execute(select(AuditLog).where(AuditLog.event == "sender_purged")).scalars()]
         assert any(d.startswith(SENDER) and "已永久删除 4 封" in d for d in details)
         assert not any(d.startswith("ads@bad.example") for d in details)
 
+    # 刷新页面后可取回；关闭后不再出现
+    jobs = client.get("/api/senders/purge-jobs").json()["jobs"]
+    assert any(j["id"] == job_id and j["finished"] for j in jobs)
+    assert api_post(client, f"/api/senders/purge-jobs/{job_id}/dismiss", token).json() == {"ok": True}
+    assert all(j["id"] != job_id for j in client.get("/api/senders/purge-jobs").json()["jobs"])
+
     assert api_post(client, "/api/senders/blocked/purge", token, json={"ids": []}).status_code == 404
+
+
+def test_running_purge_job_cannot_be_dismissed(client):
+    from app.services import purge_jobs
+
+    token = login(client)
+    job = purge_jobs.create([(1, "a@bad.example", "me@example.com")])
+    assert api_post(client, f"/api/senders/purge-jobs/{job['id']}/dismiss", token).json() == {"ok": False}
+    assert any(j["id"] == job["id"] for j in purge_jobs.list_jobs())

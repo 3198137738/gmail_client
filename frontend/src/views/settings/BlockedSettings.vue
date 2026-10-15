@@ -7,8 +7,7 @@ import { get, post } from "../../api";
 import { store } from "../../store";
 import { confirm, run, ui } from "../../ui";
 import { dateTime } from "../../format";
-import { onRealtime } from "../../realtime";
-import { useCleanup } from "../../composables/common";
+import { upsertPurgeJob } from "../../purgeJobs";
 
 const route = useRoute();
 const router = useRouter();
@@ -107,17 +106,8 @@ async function purgeChecked() {
   batchPurging.value = false;
   if (!result) return;
   checked.clear();
-  const tail = store.session?.config?.realtime_enabled ? "完成后会提示" : "结果可在审计日志中查看";
-  ui.message.info(`已开始在后台永久删除 ${result.queued} 个地址的邮件，${tail}`, { duration: 6000 });
+  upsertPurgeJob(result.job);   // 右下角显示进度
 }
-
-useCleanup(
-  onRealtime("purge_done", (ev) => {
-    const text = `已永久删除 ${ev.senders} 个地址的邮件，共 ${ev.purged} 封`;
-    if (ev.failed) ui.message.warning(`${text}；其中 ${ev.failed} 个地址失败，详见审计日志`, { duration: 8000 });
-    else ui.message.success(text, { duration: 6000 });
-  }),
-);
 
 async function unblock(row) {
   if (!(await confirm(`确定解除对 ${row.sender_email} 的屏蔽吗？`))) return;

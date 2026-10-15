@@ -147,8 +147,7 @@ def publish_sync_done(account_id: int) -> None:
     event_bus.publish({"type": "sync_done", "account_id": int(account_id)})
 
 
-def publish_purge_done(*, senders: int, failed: int, purged: int) -> None:
-    """后台批量永久删除屏蔽地址的邮件已结束，页面据此提示结果。"""
-    event_bus.publish(
-        {"type": "purge_done", "senders": int(senders), "failed": int(failed), "purged": int(purged)}
-    )
+
+def publish_purge_progress(job: dict) -> None:
+    """批量永久删除屏蔽地址邮件的进度（每处理完一个地址推送一次，结束时 finished 为真）。"""
+    event_bus.publish({"type": "purge_progress", "job": job})

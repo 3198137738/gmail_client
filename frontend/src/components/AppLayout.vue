@@ -1,11 +1,12 @@
 <script setup>
-// 登录后的整体框架（Naive UI 布局）：顶栏 + 可折叠侧栏 + 内容区；写邮件窗口和快捷键帮助浮在上面。
+// 登录后的整体框架（Naive UI 布局）：顶栏 + 可折叠侧栏 + 内容区；写邮件窗口、批量删除进度和快捷键帮助浮在上面。
 import { onBeforeUnmount, onMounted, watch } from "vue";
 import { useRoute } from "vue-router";
 import { NDrawer, NDrawerContent, NLayout, NLayoutContent, NLayoutHeader, NLayoutSider } from "naive-ui";
 import AppHeader from "./AppHeader.vue";
 import AppSidebar from "./AppSidebar.vue";
 import ComposeWindow from "./ComposeWindow.vue";
+import PurgeProgress from "./PurgeProgress.vue";
 import ShortcutHelp from "./ShortcutHelp.vue";
 import { store } from "../store";
 import { isMobile, refreshNav } from "../composables/common";
@@ -66,6 +67,7 @@ useGlobalShortcuts();
       </NDrawerContent>
     </NDrawer>
     <ComposeWindow v-if="store.compose" :key="store.compose.key" :params="store.compose.params" />
+    <PurgeProgress />
     <ShortcutHelp />
   </NLayout>
 </template>
