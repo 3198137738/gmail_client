@@ -22,8 +22,13 @@ def test_block_list_and_unblock(client, _no_background_network):
             BlockedSender.account_id == acc,
             BlockedSender.sender_email == "spam@bad.example",
         )).scalar_one_or_none() is not None
-        # 同账号同发件人的已有邮件被隐藏（本地删除）
+        # 同账号同发件人的已有邮件本地立即删除
         assert db.get(Message, other) is None
+    # Gmail 中的已有邮件在后台永久删除，返回进度任务
+    job = resp.json()["job"]
+    assert [(i["sender"], i["status"]) for i in job["items"]] == [("spam@bad.example", "pending")]
+    name, args, _kw = _no_background_network[-1]
+    assert name == "run" and args[0] == job["id"] and args[1][0][:2] == (acc, "spam@bad.example")
 
     listing = client.get("/api/senders", params={"account_id": acc})
     assert listing.status_code == 200
@@ -63,7 +68,7 @@ def test_block_requires_csrf(client):
     assert client.post(f"/api/messages/{mid}/block-sender", json={}).status_code == 403
 
 
-def test_block_selected_senders(client):
+def test_block_selected_senders(client, _no_background_network):
     token = login(client)
     acc = create_account(email="me@mine.example")
     other_acc = create_account()
@@ -78,6 +83,7 @@ def test_block_selected_senders(client):
     data = resp.json()
     assert data["senders"] == ["a@bad.example", "b@bad.example"]
     assert data["added"] == 2 and data["hidden"] == 3 and data["skipped"] == 1
+    assert {i["sender"] for i in data["job"]["items"]} == {"a@bad.example", "b@bad.example"}
     with session_scope() as db:
         blocked = {(r.account_id, r.sender_email) for r in db.execute(
             select(BlockedSender).where(BlockedSender.account_id.in_([acc, other_acc]))).scalars()}
@@ -90,16 +96,20 @@ def test_block_selected_senders(client):
     c = create_message(acc, from_addr="a@bad.example")
     data = api_post(client, "/api/senders/block", token, json={"ids": [c]}).json()
     assert data["added"] == 0 and data["hidden"] == 1
+    # 之前已屏蔽的地址不再重复启动永久删除
+    assert data["job"] is None
 
 
-def test_block_addresses_bulk(client):
+def test_block_addresses_bulk(client, _no_background_network):
     token = login(client)
     acc = create_account(email="me2@mine.example")
     existing = create_message(acc, from_addr="Ads <ads@spam.example>")
     text = "ads@spam.example, X <x@spam.example>;\ny@spam.example  me2@mine.example\nnot-an-address"
     resp = api_post(client, "/api/senders/blocked", token, json={"account_id": acc, "text": text})
     assert resp.status_code == 200
-    assert resp.json() == {"ok": True, "added": 3, "existing": 0, "hidden": 1}
+    data = resp.json()
+    assert (data["added"], data["existing"], data["hidden"]) == (3, 0, 1)
+    assert data["job"]["total"] == 3
     with session_scope() as db:
         emails = set(db.execute(select(BlockedSender.sender_email).where(BlockedSender.account_id == acc)).scalars())
         assert emails == {"ads@spam.example", "x@spam.example", "y@spam.example"}

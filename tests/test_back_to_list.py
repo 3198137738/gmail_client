@@ -43,13 +43,15 @@ def test_delete_one(client):
     assert client.get(f"/api/messages/{mid}").status_code == 404
 
 
-def test_block_sender_hides_existing_mail(client):
+def test_block_sender_hides_existing_mail(client, _no_background_network):
     token = login(client)
     acc = create_account()
     mid = create_message(acc, from_addr="Spam <spam@bad.example>", folder_kind="junk")
     other = create_message(acc, from_addr="spam@bad.example", folder_kind="inbox")
     resp = api_post(client, f"/api/messages/{mid}/block-sender", token)
-    assert resp.json() == {"ok": True, "sender_email": "spam@bad.example", "hidden": 2}
+    data = resp.json()
+    assert (data["sender_email"], data["hidden"]) == ("spam@bad.example", 2)
+    assert data["job"]["items"][0]["sender"] == "spam@bad.example"
     assert client.get(f"/api/messages/{other}").status_code == 404
     with session_scope() as db:
         blocked = db.execute(select(BlockedSender.sender_email).where(BlockedSender.account_id == acc)).scalar_one()

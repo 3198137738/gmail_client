@@ -27,8 +27,16 @@ def conversation_mode(request: Request) -> bool:
     return request.cookies.get(CONVERSATION_COOKIE) != "0"
 
 
-def _is_junk():
-    return case((Message.folder_kind == "junk", 1), else_=0)
+# 垃圾邮件、已删除邮件与其他文件夹的邮件不合并成一个会话（与 Gmail 一致）
+_SEPARATE_KINDS = ("junk", "trash")
+
+
+def _bucket():
+    return case((Message.folder_kind == "junk", 1), (Message.folder_kind == "trash", 2), else_=0)
+
+
+def _bucket_of(folder_kind: str) -> int:
+    return {"junk": 1, "trash": 2}.get(folder_kind, 0)
 
 
 def _thread_key():
@@ -39,7 +47,7 @@ def _thread_key():
 def representative_condition(conditions: Iterable):
     """只保留每个会话中符合 ``conditions`` 的最新一封。"""
     row_number = func.row_number().over(
-        partition_by=(Message.account_id, _is_junk(), _thread_key()),
+        partition_by=(Message.account_id, _bucket(), _thread_key()),
         order_by=pagination.forward_order(),
     ).label("rn")
     ranked = select(Message.id.label("id"), row_number).where(*conditions).subquery()
@@ -47,11 +55,11 @@ def representative_condition(conditions: Iterable):
 
 
 def _same_thread(message: Message):
-    junk = message.folder_kind == "junk"
+    kind = message.folder_kind
     return and_(
         Message.account_id == message.account_id,
         Message.thread_id == message.thread_id,
-        (Message.folder_kind == "junk") if junk else (Message.folder_kind != "junk"),
+        (Message.folder_kind == kind) if kind in _SEPARATE_KINDS else Message.folder_kind.not_in(_SEPARATE_KINDS),
     )
 
 
@@ -87,7 +95,7 @@ def expand(db: Session, messages: list[Message]) -> list[Message]:
 def thread_stats(db: Session, messages: list[Message]) -> dict[int, dict]:
     """列表当前页每个代表邮件所在会话的邮件数、是否有未读、是否有星标。"""
     keys = {
-        (int(m.account_id), int(m.thread_id), m.folder_kind == "junk")
+        (int(m.account_id), int(m.thread_id), _bucket_of(m.folder_kind))
         for m in messages if m.thread_id is not None
     }
     if not keys:
@@ -96,24 +104,24 @@ def thread_stats(db: Session, messages: list[Message]) -> dict[int, dict]:
         select(
             Message.account_id,
             Message.thread_id,
-            _is_junk(),
+            _bucket(),
             func.count(Message.id),
             func.sum(case((Message.is_read.is_(False), 1), else_=0)),
             func.sum(case((Message.is_starred.is_(True), 1), else_=0)),
         )
         .where(tuple_(Message.account_id, Message.thread_id).in_([(a, t) for a, t, _ in keys]))
-        .group_by(Message.account_id, Message.thread_id, _is_junk())
+        .group_by(Message.account_id, Message.thread_id, _bucket())
     ).all()
     by_key = defaultdict(dict)
-    for account_id, thread_id, junk, count, unread, starred in rows:
-        by_key[(int(account_id), int(thread_id), bool(junk))] = {
+    for account_id, thread_id, bucket, count, unread, starred in rows:
+        by_key[(int(account_id), int(thread_id), int(bucket))] = {
             "count": int(count), "unread": int(unread or 0), "starred": int(starred or 0),
         }
     result: dict[int, dict] = {}
     for m in messages:
         if m.thread_id is None:
             continue
-        stats = by_key.get((int(m.account_id), int(m.thread_id), m.folder_kind == "junk"))
+        stats = by_key.get((int(m.account_id), int(m.thread_id), _bucket_of(m.folder_kind)))
         if stats:
             result[int(m.id)] = stats
     return result

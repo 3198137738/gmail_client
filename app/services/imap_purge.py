@@ -1,13 +1,14 @@
-"""一键永久删除某个发件人在 Gmail 上的全部邮件（「过滤器和屏蔽的地址」页的「永久删除」）。
+"""删除某个发件人在 Gmail 上的全部邮件。
 
-屏蔽发件人只是本地不再显示、同步时跳过，邮件仍留在 Gmail 里占空间、在网页版 Gmail
-里也看得到。这里按 Gmail 的规则彻底清掉：
-
-1. 「所有邮件」和「垃圾邮件」里该发件人的邮件 → 移到「已删除邮件」；
-2. 「已删除邮件」里该发件人的邮件 → ``\\Deleted`` + EXPUNGE（Gmail 中从垃圾箱删除即永久删除）。
+1. 「所有邮件」和「垃圾邮件」里该发件人的邮件 → 移到「已删除邮件」（屏蔽发件人时只做这一步，
+   邮件出现在左侧「已删除」里，30 天后由 Gmail 自动清除）；
+2. 「屏蔽的地址」页手动「永久删除」时再把「已删除邮件」里该发件人的邮件 ``\\Deleted`` + EXPUNGE
+   （Gmail 中从垃圾箱删除即永久删除）。
 
 IMAP 的 ``SEARCH FROM`` 是子串匹配（``a@b.com`` 也会命中 ``xa@b.com``），永久删除不能
 容忍误伤，所以命中的每一封都再取 From 头精确核对。屏蔽记录本身保持不变。
+
+屏蔽之后新到的邮件由同步发现后经 outbox 移到已删除邮件（见 imap_service._trash_blocked）。
 """
 from __future__ import annotations
 
@@ -75,14 +76,20 @@ def _sender_uids(client: IMAPClient, folder: str, sender: str) -> list[int]:
     return sorted(matched)
 
 
-def _purge_local(account_id: int, sender: str) -> int:
-    """删掉本地残留的该发件人邮件（屏蔽时已删大部分，这里兜底）。"""
+def _purge_local(account_id: int, sender: str, *, permanent: bool) -> int:
+    """删掉本地残留的该发件人邮件（屏蔽时已删大部分，这里兜底）。
+
+    只移到已删除时，本地「已删除」里的保留（它们在 Gmail 里也还在）。
+    """
     with session_scope() as db:
-        rows = db.execute(
+        stmt = (
             select(Message)
             .options(selectinload(Message.attachments))
             .where(Message.account_id == account_id, Message.from_addr.ilike(f"%{sender}%"))
-        ).scalars().all()
+        )
+        if not permanent:
+            stmt = stmt.where(Message.folder_kind != "trash")
+        rows = db.execute(stmt).scalars().all()
         targets = [m for m in rows if _normalize_sender_email(m.from_addr) == sender]
         return delete_local_messages(db, targets)
 
@@ -91,16 +98,19 @@ def purge_sender_messages(
     account_id: int,
     sender_email: str,
     *,
+    permanent: bool = True,
     lock_timeout: float = 30.0,
 ) -> dict:
-    """永久删除该账号中某发件人的全部邮件。
+    """删除该账号中某发件人的全部邮件；``permanent=False`` 时只移到已删除邮件。
 
-    返回 ``{"ok": bool, "trashed": n, "purged": n, "local": n, "folders": {...}, "error": str|None}``：
-    ``trashed`` 是从所有邮件 / 垃圾邮件移进垃圾箱的封数，``purged`` 是最终从垃圾箱彻底清除的封数
-    （含之前就在垃圾箱里的）。不抛异常。
+    返回 ``{"ok": bool, "permanent": bool, "trashed": n, "purged": n, "local": n, "folders": {...},
+    "error": str|None}``：``trashed`` 是从所有邮件 / 垃圾邮件移进垃圾箱的封数，``purged`` 是最终从
+    垃圾箱彻底清除的封数（含之前就在垃圾箱里的；只移到已删除时为 0）。不抛异常。
     """
     sender = _normalize_sender_email(sender_email)
-    result: dict = {"ok": True, "trashed": 0, "purged": 0, "local": 0, "folders": {}, "error": None}
+    result: dict = {
+        "ok": True, "permanent": permanent, "trashed": 0, "purged": 0, "local": 0, "folders": {}, "error": None,
+    }
     if not sender:
         return {**result, "ok": False, "error": "invalid_sender"}
 
@@ -149,7 +159,7 @@ def purge_sender_messages(
                     result["folders"][folder] = {"count": 0, "error": str(exc)}
                     logger.warning("Purge failed account=%s folder=%s sender=%s: %s", account_id, folder, sender, exc)
 
-            if trash:
+            if trash and permanent:
                 try:
                     uids = _sender_uids(client, trash, sender)
                     for chunk in _chunks(uids):
@@ -160,7 +170,7 @@ def purge_sender_messages(
                     result["ok"] = False
                     result["folders"][trash] = {"count": 0, "error": str(exc)}
                     logger.warning("Purge expunge failed account=%s sender=%s: %s", account_id, sender, exc)
-            else:
+            elif not trash:
                 # 没有垃圾箱：上面已经直接 EXPUNGE
                 result["purged"] = result["trashed"]
     except IMAPSyncError as exc:
@@ -172,7 +182,7 @@ def purge_sender_messages(
         _release_account_lock(account_id, lock)
 
     try:
-        result["local"] = _purge_local(account_id, sender)
+        result["local"] = _purge_local(account_id, sender, permanent=permanent)
     except Exception:
         logger.exception("Local purge failed account=%s sender=%s", account_id, sender)
 
@@ -181,8 +191,8 @@ def purge_sender_messages(
             (f["error"] for f in result["folders"].values() if f.get("error")), "unknown"
         )
     logger.info(
-        "Purged sender account=%s sender=%s trashed=%s purged=%s local=%s ok=%s",
-        account_id, sender, result["trashed"], result["purged"], result["local"], result["ok"],
+        "Purged sender account=%s sender=%s permanent=%s trashed=%s purged=%s local=%s ok=%s",
+        account_id, sender, permanent, result["trashed"], result["purged"], result["local"], result["ok"],
     )
     return result
 
@@ -201,7 +211,10 @@ def describe_purge(result: dict) -> str:
     if error and not result.get("folders"):
         # 还没碰到任何文件夹就失败了（连不上、锁被占用等）
         return _ERROR_TEXT.get(error, f"连接 Gmail 失败：{error}")
-    text = f"已永久删除 {int(result.get('purged') or 0)} 封"
+    if result.get("permanent", True):
+        text = f"已永久删除 {int(result.get('purged') or 0)} 封"
+    else:
+        text = f"已移到已删除 {int(result.get('trashed') or 0)} 封"
     if not result.get("ok"):
         text += f"，部分文件夹操作失败：{error}"
     return text

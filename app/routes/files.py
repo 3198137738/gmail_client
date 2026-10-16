@@ -42,7 +42,7 @@ def list_files(
     page: int = Query(1, ge=1),
     db: Session = Depends(get_db),
 ):
-    conditions = [Attachment.is_inline.is_(False), Message.folder_kind != "junk"]
+    conditions = [Attachment.is_inline.is_(False), Message.folder_kind.not_in(("junk", "trash"))]
     if type in _TYPES:
         conditions.append(_TYPES[type])
     elif type == "other":

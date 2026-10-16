@@ -27,6 +27,7 @@ from ..auth import (
 from ..config import (
     REALTIME_ENABLED,
     SYNC_JUNK_ENABLED,
+    SYNC_TRASH_ENABLED,
     UNDO_SEND_SECONDS,
     WEB_AUTH_ENABLED,
     WEB_AUTH_PASSWORD,
@@ -72,6 +73,7 @@ def session_info(request: Request):
         "config": {
             "realtime_enabled": REALTIME_ENABLED,
             "sync_junk_enabled": SYNC_JUNK_ENABLED,
+            "sync_trash_enabled": SYNC_TRASH_ENABLED,
             "undo_send_seconds": UNDO_SEND_SECONDS,
         },
     }

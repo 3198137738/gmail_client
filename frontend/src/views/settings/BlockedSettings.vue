@@ -65,8 +65,9 @@ async function addBlocked() {
   if (!result) return;
   const parts = [`已屏蔽 ${result.added} 个地址`];
   if (result.existing) parts.push(`${result.existing} 个之前已屏蔽`);
-  if (result.hidden) parts.push(`隐藏了 ${result.hidden} 封邮件`);
+  if (result.job) parts.push("正在把其邮件移到「已删除」");
   ui.message.success(parts.join("，"));
+  if (result.job) upsertPurgeJob(result.job);   // 右下角显示进度
   addText.value = "";
   load();
 }
@@ -111,7 +112,7 @@ async function purgeChecked() {
 
 async function unblock(row) {
   if (!(await confirm(`确定解除对 ${row.sender_email} 的屏蔽吗？`))) return;
-  if (await run(post(`/api/senders/blocked/${row.id}/remove`), "已解除屏蔽，正在补回屏蔽期间的邮件")) load();
+  if (await run(post(`/api/senders/blocked/${row.id}/remove`), "已解除屏蔽，之后的新邮件会正常收取")) load();
 }
 
 async function untrust(row) {
@@ -155,7 +156,7 @@ async function untrust(row) {
           <div class="gm-settings-label">
             屏蔽的地址：
             <div class="gm-settings-hint">
-              同步时会忽略这些发件人的邮件，但邮件仍留在 Gmail 里；「永久删除」会把该发件人在 Gmail 中的全部邮件（含垃圾邮件、已删除邮件）彻底清除，屏蔽继续保留。解除屏蔽后，会自动补回屏蔽期间被忽略的邮件。
+              屏蔽时会把该发件人的已有邮件（含垃圾邮件）移到「已删除」，之后收到的新邮件也会自动移到「已删除」，30 天后由 Gmail 自动清除。「永久删除」会把该发件人在 Gmail 中的全部邮件（含「已删除」里的）立即彻底清除，屏蔽继续保留。
             </div>
           </div>
           <div class="gm-settings-content">

@@ -296,3 +296,75 @@ def test_running_purge_job_cannot_be_dismissed(client):
     job = purge_jobs.create([(1, "a@bad.example", "me@example.com")])
     assert api_post(client, f"/api/senders/purge-jobs/{job['id']}/dismiss", token).json() == {"ok": False}
     assert any(j["id"] == job["id"] for j in purge_jobs.list_jobs())
+
+
+def test_block_only_moves_to_trash_without_expunge(fake):
+    fake["client"] = gm = _gmail()
+    acc = create_account()
+    local_inbox = create_message(acc, from_addr=f"Spammer <{SENDER}>")
+    local_trash = create_message(acc, from_addr=SENDER, folder_kind="trash", folder="[Gmail]/已删除邮件")
+
+    result = imap_purge.purge_sender_messages(acc, SENDER, permanent=False)
+
+    assert result["ok"], result
+    assert (result["trashed"], result["purged"], result["local"]) == (3, 0, 1)
+    assert imap_purge.describe_purge(result) == "已移到已删除 3 封"
+    # 原有的 31、32 和移进来的 3 封都还在垃圾箱里，没有 EXPUNGE
+    assert len(gm.folders["[Gmail]/已删除邮件"]) == 5
+    assert not any(c[0] == "expunge" for c in gm.calls)
+    with session_scope() as db:
+        assert db.get(Message, local_inbox) is None
+        assert db.get(Message, local_trash) is not None
+
+
+class _RawClient:
+    def __init__(self, raws):
+        self.raws = raws
+
+    def fetch(self, uids, items):
+        return {u: {b"RFC822": self.raws[u], b"FLAGS": ()} for u in uids}
+
+
+_BLOCKED_RAW = b"From: Spammer <spam@bad.example>\r\nSubject: ad\r\nMessage-ID: <b1@x>\r\n\r\nbuy\r\n"
+_FRIEND_RAW = b"From: friend@ok.example\r\nSubject: hi\r\nMessage-ID: <b2@x>\r\n\r\nhello\r\n"
+
+
+def test_sync_moves_new_mail_from_blocked_sender_to_trash(monkeypatch, _no_background_network):
+    import app.services.imap_service as svc
+    from app.models import PendingOp
+
+    acc = create_account()
+    with session_scope() as db:
+        db.add(BlockedSender(account_id=acc, sender_email="spam@bad.example"))
+    monkeypatch.setattr(svc, "_plan_fetch_batches", lambda client, uids: [uids])
+    client = _RawClient({801: _BLOCKED_RAW, 802: _FRIEND_RAW})
+
+    result = svc._ingest_uids(client, acc, "INBOX", "inbox", [801, 802], apply_rules=True)
+
+    assert result.saved == 1
+    with session_scope() as db:
+        uids = set(db.execute(select(Message.uid).where(Message.account_id == acc)).scalars())
+        assert uids == {802}
+        ops = db.execute(select(PendingOp).where(PendingOp.account_id == acc)).scalars().all()
+        assert [(o.op, o.folder, o.uids) for o in ops] == [("delete", "INBOX", "801")]
+    assert any(name == "process_account" for name, _a, _k in _no_background_network)
+
+    # 移动还在排队时，下次同步不会把它重新下载回来
+    assert svc._ingest_uids(client, acc, "INBOX", "inbox", [801]).saved == 0
+
+
+def test_trash_sync_keeps_blocked_sender_mail(monkeypatch, _no_background_network):
+    import app.services.imap_service as svc
+    from app.models import PendingOp
+
+    acc = create_account()
+    with session_scope() as db:
+        db.add(BlockedSender(account_id=acc, sender_email="spam@bad.example"))
+    monkeypatch.setattr(svc, "_plan_fetch_batches", lambda client, uids: [uids])
+
+    result = svc._ingest_uids(_RawClient({901: _BLOCKED_RAW}), acc, "[Gmail]/已删除邮件", "trash", [901])
+
+    # 屏蔽发件人的邮件被移到已删除后，在「已删除」里照常显示，不再处理
+    assert result.saved == 1
+    with session_scope() as db:
+        assert db.query(PendingOp).filter_by(account_id=acc).count() == 0

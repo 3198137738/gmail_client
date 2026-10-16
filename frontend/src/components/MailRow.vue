@@ -37,7 +37,7 @@ const props = defineProps({
 });
 const emit = defineEmits(["open", "toggle-select", "star", "action", "swipe-delete", "label"]);
 
-const FOLDER_NAMES = { inbox: "收件箱", sent: "已发送", junk: "垃圾邮件" };
+const FOLDER_NAMES = { inbox: "收件箱", sent: "已发送", junk: "垃圾邮件", trash: "已删除" };
 const ATT_ICONS = {
   pdf: [PictureAsPdfOutlined, "#d93025"],
   image: [ImageOutlined, "#d93025"],

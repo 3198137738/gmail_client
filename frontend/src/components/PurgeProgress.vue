@@ -64,7 +64,7 @@ onBeforeUnmount(() => {
           :class="job.failed ? 'gm-purge-warn' : 'gm-purge-ok'"
           :size="18"
         />
-        <span class="gm-purge-title">永久删除屏蔽地址的邮件（{{ job.done }}/{{ job.total }}）</span>
+        <span class="gm-purge-title">{{ job.permanent === false ? "屏蔽地址的邮件移到已删除" : "永久删除屏蔽地址的邮件" }}（{{ job.done }}/{{ job.total }}）</span>
         <IconBtn
           :icon="expanded.has(job.id) ? ExpandLessOutlined : ExpandMoreOutlined"
           :title="expanded.has(job.id) ? '收起详情' : '展开详情'"

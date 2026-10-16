@@ -157,6 +157,8 @@ BACKGROUND_MAX_WORKERS = _get_positive_int("BACKGROUND_MAX_WORKERS", 4)
 SYNC_SENT_ENABLED = _get_bool("SYNC_SENT_ENABLED", True)
 # 同步垃圾邮件文件夹（带 \Junk 标记的文件夹）。默认关闭；垃圾邮件不发送 Telegram 通知。
 SYNC_JUNK_ENABLED = _get_bool("SYNC_JUNK_ENABLED", False)
+# 同步「已删除邮件」文件夹（带 \Trash 标记的文件夹），左侧显示「已删除」。默认开启；不发送通知。
+SYNC_TRASH_ENABLED = _get_bool("SYNC_TRASH_ENABLED", True)
 
 # 外部图片代理：邮件里的外部图片改由服务器下载后再显示，浏览器不直接连对方服务器，
 # 追踪像素拿不到你的 IP；新邮件同步时就预先下载（见 IMAGE_PROXY_PREFETCH），

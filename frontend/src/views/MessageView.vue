@@ -21,6 +21,7 @@ import {
   ReplyAllOutlined,
   ReplyOutlined,
   ReportOffOutlined,
+  RestoreFromTrashOutlined,
   ShieldOutlined,
   StarFilled,
   StarBorderOutlined,
@@ -30,6 +31,7 @@ import MailBodyFrame from "../components/MailBodyFrame.vue";
 import AttachmentCards from "../components/AttachmentCards.vue";
 import TimePicker from "../components/TimePicker.vue";
 import { snoozeMessages } from "../actions";
+import { upsertPurgeJob } from "../purgeJobs";
 import { get, post } from "../api";
 import { openCompose, store } from "../store";
 import { confirm, copyText, run, toast } from "../ui";
@@ -51,8 +53,9 @@ function changed() {
 }
 const router = useRouter();
 
-const FOLDER_NAMES = { inbox: "收件箱", sent: "已发送", junk: "垃圾邮件" };
-const DELETE_CONFIRM = "确定删除这封邮件吗？邮件会移到 Gmail 的「已删除邮件」，30 天后由 Gmail 自动清除。";
+const FOLDER_NAMES = { inbox: "收件箱", sent: "已发送", junk: "垃圾邮件", trash: "已删除" };
+const DELETE_CONFIRM = "确定删除这封邮件吗？邮件会移到「已删除」，30 天后由 Gmail 自动清除。";
+const PURGE_CONFIRM = "确定永久删除这封邮件吗？邮件会从 Gmail 中彻底删除，无法恢复。";
 
 const msg = ref(null);
 const error = ref("");
@@ -104,9 +107,22 @@ function bodyUrl(m) {
 
 // ---- 操作 ----
 async function remove() {
-  if (!(await confirm(DELETE_CONFIRM, { danger: true, positiveText: "删除" }))) return;
+  // 「已删除」里的删除是永久删除
+  const trash = msg.value.folder_kind === "trash";
+  const ok = trash
+    ? await confirm(PURGE_CONFIRM, { danger: true, positiveText: "永久删除" })
+    : await confirm(DELETE_CONFIRM, { danger: true, positiveText: "删除" });
+  if (!ok) return;
   if (await run(post(`/api/messages/${msg.value.id}/delete`))) {
-    toast("已删除邮件");
+    toast(trash ? "已永久删除邮件" : "已删除邮件");
+    changed();
+    goBack();
+  }
+}
+
+async function restore() {
+  if (await run(post("/api/messages/actions", { action: "restore", ids: [msg.value.id] }))) {
+    toast("已移至收件箱");
     changed();
     goBack();
   }
@@ -156,14 +172,15 @@ async function notSpam() {
 
 async function blockSender() {
   const email = msg.value.sender_email;
-  const ok = await confirm(`永久屏蔽 ${email}？\n后续同步将自动忽略该发件人，并隐藏当前账号已有同发件人邮件。`, {
+  const ok = await confirm(`永久屏蔽 ${email}？\n该发件人的已有邮件会移到「已删除」，之后收到的新邮件也会自动移到「已删除」。`, {
     danger: true,
     positiveText: "屏蔽",
   });
   if (!ok) return;
   const result = await run(post(`/api/messages/${msg.value.id}/block-sender`));
   if (result) {
-    toast(`已屏蔽 ${email}${result.hidden ? `，隐藏了 ${result.hidden} 封邮件` : ""}`);
+    toast(`已屏蔽 ${email}${result.job ? "，正在把其邮件移到「已删除」" : ""}`);
+    if (result.job) upsertPurgeJob(result.job);   // 右下角显示进度
     changed();
     goBack();
   }
@@ -238,7 +255,8 @@ usePageShortcuts({
         <template v-if="msg">
           <span class="gm-toolbar-gap" />
           <IconBtn v-if="msg.folder_kind === 'junk'" :icon="ReportOffOutlined" title="不是垃圾邮件" @click="notSpam" />
-          <IconBtn :icon="DeleteOutlined" title="删除（#）" @click="remove" />
+          <IconBtn v-if="msg.folder_kind === 'trash'" :icon="RestoreFromTrashOutlined" title="移至收件箱" @click="restore" />
+          <IconBtn :icon="DeleteOutlined" :title="msg.folder_kind === 'trash' ? '永久删除（#）' : '删除（#）'" @click="remove" />
           <span class="gm-toolbar-sep" />
           <IconBtn :icon="MarkEmailUnreadOutlined" title="标记为未读（Shift+U）" @click="markUnread" />
           <IconBtn

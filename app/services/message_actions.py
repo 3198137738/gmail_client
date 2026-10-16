@@ -14,7 +14,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from ..config import ATTACHMENTS_DIR
+from ..config import ATTACHMENTS_DIR, DEFAULT_FOLDER
 from ..database import session_scope
 from ..models import Message, TrustedSender
 from . import outbox
@@ -122,6 +122,23 @@ def set_starred(db: Session, messages: list[Message], starred: bool) -> int:
     db.commit()
     outbox.kick(grouped)
     return len(changed)
+
+
+def restore_from_trash(db: Session, messages: list[Message]) -> int:
+    """把「已删除」里的邮件移回收件箱：Gmail 上的移动写入 outbox，本地记录先删掉，
+    收件箱同步会再把它作为新邮件收进来（与「这不是垃圾邮件」相同）。"""
+    targets = [m for m in messages if m.folder_kind == "trash"]
+    if not targets:
+        return 0
+    grouped: dict[int, dict[str, list[int]]] = defaultdict(lambda: defaultdict(list))
+    for message in targets:
+        grouped[int(message.account_id)][message.folder].append(int(message.uid))
+    for account_id, folder_uids in grouped.items():
+        for folder, uids in folder_uids.items():
+            outbox.enqueue(db, account_id, folder, outbox.OP_MOVE, uids, DEFAULT_FOLDER)
+    restored = delete_local_messages(db, targets)
+    outbox.kick(grouped)
+    return restored
 
 
 # --- Standalone helpers for the Telegram bot (own session lifecycle) --------

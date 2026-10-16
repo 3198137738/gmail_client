@@ -1,4 +1,8 @@
-"""发件人管理接口：屏蔽 / 解除屏蔽 / 永久删除、信任（这不是垃圾邮件）/ 取消信任。"""
+"""发件人管理接口：屏蔽 / 解除屏蔽 / 永久删除、信任（这不是垃圾邮件）/ 取消信任。
+
+屏蔽发件人时，会在后台把该发件人在 Gmail 中的已有邮件移到已删除邮件（进度见右下角卡片），
+之后同步收到的新邮件也会自动移过去（见 imap_service._trash_blocked），都显示在左侧「已删除」里。
+"""
 from __future__ import annotations
 
 import logging
@@ -47,7 +51,11 @@ _EMAIL_RE = re.compile(r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}", re.IGNORECASE
 
 
 def _block_senders(db: Session, account_id: int, emails: set[str]) -> tuple[list[str], int]:
-    """屏蔽该账号下的这些发件人，并隐藏（本地删除）已有的同发件人邮件。返回（新增的屏蔽地址, 隐藏的邮件数）。"""
+    """屏蔽该账号下的这些发件人，并立即删除本地已有的同发件人邮件（「已删除」里的保留）。
+
+    返回（新增的屏蔽地址, 删除的本地邮件数）。Gmail 里的邮件由调用方用 :func:`_start_purge`
+    在后台移到已删除邮件。
+    """
     existing = set(db.execute(
         select(BlockedSender.sender_email).where(
             BlockedSender.account_id == account_id,
@@ -64,7 +72,11 @@ def _block_senders(db: Session, account_id: int, emails: set[str]) -> tuple[list
         matched = db.execute(
             select(Message)
             .options(selectinload(Message.attachments))
-            .where(Message.account_id == account_id, Message.from_addr.ilike(f"%{email}%"))
+            .where(
+                Message.account_id == account_id,
+                Message.folder_kind != "trash",
+                Message.from_addr.ilike(f"%{email}%"),
+            )
         ).scalars().all()
         to_delete.extend(m for m in matched if _normalize_sender_email(m.from_addr) == email)
     hidden = _delete_local_messages(db, to_delete)
@@ -76,9 +88,32 @@ def _block_senders(db: Session, account_id: int, emails: set[str]) -> tuple[list
     return added, hidden
 
 
+def _start_purge(
+    request: Request, db: Session, by_account: dict[int, list[str]], *, permanent: bool
+) -> Optional[dict]:
+    """在后台删除这些发件人在 Gmail 中的全部邮件，返回进度任务快照（没有地址时返回 None）。
+
+    ``permanent=False``：只移到已删除邮件（屏蔽时）。
+    """
+    accounts = {
+        int(a.id): a.email
+        for a in db.execute(select(Account).where(Account.id.in_(list(by_account)))).scalars()
+    } if by_account else {}
+    targets = [
+        (account_id, email, accounts.get(account_id) or f"#{account_id}")
+        for account_id, emails in sorted(by_account.items())
+        for email in emails
+    ]
+    if not targets:
+        return None
+    job = purge_jobs.create(targets, permanent=permanent)
+    submit_bg(purge_jobs.run, job["id"], targets, audit.request_ip(request), permanent=permanent)
+    return job
+
+
 @router.post("/messages/{message_id}/block-sender", name="messages.block_sender")
-def block_sender(message_id: int, db: Session = Depends(get_db)):
-    """永久屏蔽该账号下的这个发件人，并隐藏已有的同发件人邮件。"""
+def block_sender(request: Request, message_id: int, db: Session = Depends(get_db)):
+    """永久屏蔽该账号下的这个发件人，并把已有的同发件人邮件移到已删除（Gmail 中也移过去）。"""
     message = db.get(Message, message_id)
     if message is None:
         raise HTTPException(status_code=404, detail="Message not found")
@@ -87,8 +122,10 @@ def block_sender(message_id: int, db: Session = Depends(get_db)):
     if not sender_email:
         raise HTTPException(status_code=400, detail="Cannot parse sender email")
 
-    _added, hidden = _block_senders(db, int(message.account_id), {sender_email})
-    return {"ok": True, "sender_email": sender_email, "hidden": hidden}
+    account_id = int(message.account_id)
+    added, hidden = _block_senders(db, account_id, {sender_email})
+    job = _start_purge(request, db, {account_id: added}, permanent=False)
+    return {"ok": True, "sender_email": sender_email, "hidden": hidden, "job": job}
 
 
 class BlockMessagesBody(BaseModel):
@@ -96,8 +133,8 @@ class BlockMessagesBody(BaseModel):
 
 
 @router.post("/senders/block", name="senders.block_messages")
-def block_message_senders(body: BlockMessagesBody, db: Session = Depends(get_db)):
-    """批量屏蔽：屏蔽选中邮件的发件人（各自所在账号下），并隐藏这些发件人已有的邮件。
+def block_message_senders(request: Request, body: BlockMessagesBody, db: Session = Depends(get_db)):
+    """批量屏蔽：屏蔽选中邮件的发件人（各自所在账号下），并把这些发件人已有的邮件移到已删除。
 
     账号自己的地址（如已发送邮件）会被跳过，避免把自己屏蔽掉。
     """
@@ -117,13 +154,20 @@ def block_message_senders(body: BlockMessagesBody, db: Session = Depends(get_db)
         by_account[account_id].add(email)
 
     senders: set[str] = set()
-    added = hidden = 0
+    hidden = 0
+    new_by_account: dict[int, list[str]] = {}
     for account_id, emails in by_account.items():
         new, count = _block_senders(db, account_id, emails)
         senders |= emails
-        added += len(new)
         hidden += count
-    return {"ok": True, "senders": sorted(senders), "added": added, "hidden": hidden, "skipped": skipped}
+        if new:
+            new_by_account[account_id] = new
+    job = _start_purge(request, db, new_by_account, permanent=False)
+    added = sum(len(v) for v in new_by_account.values())
+    return {
+        "ok": True, "senders": sorted(senders), "added": added, "hidden": hidden,
+        "skipped": skipped, "job": job,
+    }
 
 
 class BlockAddressesBody(BaseModel):
@@ -133,8 +177,8 @@ class BlockAddressesBody(BaseModel):
 
 
 @router.post("/senders/blocked", name="senders.block_addresses")
-def block_addresses(body: BlockAddressesBody, db: Session = Depends(get_db)):
-    """在设置页手动批量添加屏蔽地址。"""
+def block_addresses(request: Request, body: BlockAddressesBody, db: Session = Depends(get_db)):
+    """在设置页手动批量添加屏蔽地址，并把这些地址已有的邮件移到已删除。"""
     account = db.get(Account, body.account_id)
     if account is None:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -142,8 +186,13 @@ def block_addresses(body: BlockAddressesBody, db: Session = Depends(get_db)):
     emails = {e.lower() for e in _EMAIL_RE.findall(body.text or "")} - {own}
     if not emails:
         raise HTTPException(status_code=400, detail="Invalid email address")
-    added, hidden = _block_senders(db, int(account.id), emails)
-    return {"ok": True, "added": len(added), "existing": len(emails) - len(added), "hidden": hidden}
+    account_id = int(account.id)
+    added, hidden = _block_senders(db, account_id, emails)
+    job = _start_purge(request, db, {account_id: added}, permanent=False)
+    return {
+        "ok": True, "added": len(added), "existing": len(emails) - len(added),
+        "hidden": hidden, "job": job,
+    }
 
 
 def _sender_row(row) -> dict:
@@ -223,14 +272,11 @@ def purge_blocked_senders(request: Request, body: BlockedIdsBody, db: Session = 
     ).scalars().all() if ids else []
     if not rows:
         raise HTTPException(status_code=404, detail="Blocked sender not found")
-    targets = [
-        (int(r.account_id), r.sender_email, r.account.email if r.account else f"#{r.account_id}")
-        for r in rows
-    ]
-    db.close()
-    job = purge_jobs.create(targets)
-    submit_bg(purge_jobs.run, job["id"], targets, audit.request_ip(request))
-    return {"ok": True, "queued": len(targets), "job": job}
+    by_account: dict[int, list[str]] = defaultdict(list)
+    for r in rows:
+        by_account[int(r.account_id)].append(r.sender_email)
+    job = _start_purge(request, db, by_account, permanent=True)
+    return {"ok": True, "queued": len(rows), "job": job}
 
 
 @router.get("/senders/purge-jobs", name="senders.purge_jobs")

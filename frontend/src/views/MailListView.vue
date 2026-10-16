@@ -15,6 +15,7 @@ import {
   MarkEmailUnreadOutlined,
   MoreVertOutlined,
   RefreshOutlined,
+  RestoreFromTrashOutlined,
   SnoozeOutlined,
 } from "@vicons/material";
 import IconBtn from "../components/IconBtn.vue";
@@ -28,6 +29,7 @@ import { isMobile, makeRefresher, refreshNav, useCleanup } from "../composables/
 import { usePageShortcuts } from "../composables/shortcuts";
 import { onRealtime } from "../realtime";
 import { snoozeMessages, syncAccount, syncAll } from "../actions";
+import { upsertPurgeJob } from "../purgeJobs";
 
 const props = defineProps({
   // 列表的筛选条件（地址栏参数）：分栏阅读时取自详情页的 back 参数
@@ -50,7 +52,8 @@ const newMailCount = ref(0);
 // 已滑动删除、还在「可撤销」期内的邮件（界面上先隐藏，几秒后才真正删除）
 const swipeHidden = reactive(new Set());
 
-const DELETE_CONFIRM = "确定删除选中的邮件吗？邮件会移到 Gmail 的「已删除邮件」，30 天后由 Gmail 自动清除。";
+const DELETE_CONFIRM = "确定删除选中的邮件吗？邮件会移到「已删除」，30 天后由 Gmail 自动清除。";
+const PURGE_CONFIRM = "确定永久删除选中的邮件吗？邮件会从 Gmail 中彻底删除，无法恢复。";
 
 // ---- 当前视图（地址栏参数） ----
 const query = computed(() => props.listQuery);
@@ -191,23 +194,50 @@ const selectOptions = [
 ];
 
 // ---- 操作 ----
+// 「已删除」里的删除是永久删除
+const inTrash = computed(() => kind.value === "trash");
+
 async function act(action, ids) {
   if (!ids.length) return;
-  if (action === "delete" && !(await confirm(DELETE_CONFIRM, { danger: true, positiveText: "删除" }))) return;
+  if (action === "delete") {
+    const ok = inTrash.value
+      ? await confirm(PURGE_CONFIRM, { danger: true, positiveText: "永久删除" })
+      : await confirm(DELETE_CONFIRM, { danger: true, positiveText: "删除" });
+    if (!ok) return;
+  }
   const result = await run(post("/api/messages/actions", { action, ids }));
   if (!result) return;
-  if (action === "delete") toast(ids.length > 1 ? `已删除 ${ids.length} 封邮件` : "已删除邮件");
+  if (action === "delete") {
+    const what = inTrash.value ? "永久删除" : "删除";
+    toast(ids.length > 1 ? `已${what} ${ids.length} 封邮件` : `已${what}邮件`);
+  }
+  if (action === "restore") toast(`已将 ${result.affected} 封邮件移至收件箱`);
   for (const id of ids) selected.delete(id);
   await load({ silent: true });
   refreshNav();
 }
 
-// 批量屏蔽：屏蔽选中邮件的发件人，并隐藏这些发件人已有的邮件
+// 「已删除」：清空当前账号（或全部账号）的已删除邮件
+async function emptyTrash() {
+  const d = data.value;
+  const ok = await confirm(
+    `确定清空${d?.account_id ? "当前账号" : "所有账号"}的「已删除」吗？其中的邮件会从 Gmail 中彻底删除，无法恢复。`,
+    { danger: true, positiveText: "清空" },
+  );
+  if (!ok) return;
+  const result = await run(post("/api/messages/empty-trash", { account_id: d?.account_id || null }));
+  if (!result) return;
+  toast(`已永久删除 ${result.affected} 封邮件`);
+  selected.clear();
+  await load({ silent: true });
+}
+
+// 批量屏蔽：屏蔽选中邮件的发件人，并把这些发件人已有的邮件移到「已删除」
 async function blockSelected() {
   const ids = [...selected];
   if (!ids.length) return;
   const ok = await confirm(
-    `永久屏蔽选中 ${ids.length} 封邮件的发件人？\n后续同步将自动忽略这些发件人，并隐藏对应账号中已有的同发件人邮件。`,
+    `永久屏蔽选中 ${ids.length} 封邮件的发件人？\n这些发件人的已有邮件会移到「已删除」，之后收到的新邮件也会自动移到「已删除」。`,
     { danger: true, positiveText: "屏蔽" },
   );
   if (!ok) return;
@@ -215,7 +245,8 @@ async function blockSelected() {
   if (!result) return;
   const n = result.senders.length;
   if (!n) toast("没有可屏蔽的发件人");
-  else toast(`已屏蔽 ${n === 1 ? result.senders[0] : `${n} 个发件人`}${result.hidden ? `，隐藏了 ${result.hidden} 封邮件` : ""}`);
+  else toast(`已屏蔽 ${n === 1 ? result.senders[0] : `${n} 个发件人`}${result.job ? "，正在把其邮件移到「已删除」" : ""}`);
+  if (result.job) upsertPurgeJob(result.job);   // 右下角显示进度
   selected.clear();
   await load({ silent: true });
   refreshNav();
@@ -366,7 +397,7 @@ function eventMatchesView(ev) {
   if (d.kind === "inbox") return ev.inbox > 0;
   if (d.kind === "sent") return ev.sent > 0;
   if (d.kind === "junk") return ev.junk > 0;
-  if (d.kind === "starred" || d.kind.startsWith("label-")) return false;   // 新邮件不会自带星标 / 标签
+  if (d.kind === "trash" || d.kind === "starred" || d.kind.startsWith("label-")) return false;   // 已删除的变化走 mail_changed   // 新邮件不会自带星标 / 标签
   return ev.inbox > 0 || ev.sent > 0;   // 「所有邮件」（不含垃圾邮件）
 }
 
@@ -448,6 +479,7 @@ const emptyText = computed(() => {
   if (d.kind === "snoozed") return { title: "没有延后的邮件", hint: "在邮件上点「延后」，邮件会在指定时间回到收件箱最上面" };
   if (d.kind === "starred") return { title: "没有已加星标的邮件", hint: "点邮件旁边的星形图标即可加星标，方便以后查找" };
   if (d.kind === "inbox") return { title: "收件箱里没有邮件", hint: "点工具栏的刷新按钮拉取最新邮件" };
+  if (d.kind === "trash") return { title: "「已删除」里没有邮件", hint: "删除的邮件会在这里保留 30 天，之后由 Gmail 自动清除" };
   return { title: "这里没有邮件" };
 });
 </script>
@@ -480,7 +512,11 @@ const emptyText = computed(() => {
               <template #icon><NIcon :component="MarkEmailUnreadOutlined" /></template>
               <template v-if="!compact">标为未读</template>
             </NButton>
-            <NButton v-if="kind === 'snoozed'" @click="unsnoozeSelected">
+            <NButton v-if="inTrash" @click="act('restore', [...selected])">
+              <template #icon><NIcon :component="RestoreFromTrashOutlined" /></template>
+              <template v-if="!compact">移至收件箱</template>
+            </NButton>
+            <NButton v-else-if="kind === 'snoozed'" @click="unsnoozeSelected">
               <template #icon><NIcon :component="SnoozeOutlined" /></template>
               <template v-if="!compact">取消延后</template>
             </NButton>
@@ -488,13 +524,13 @@ const emptyText = computed(() => {
               <template #icon><NIcon :component="SnoozeOutlined" /></template>
               <template v-if="!compact">延后</template>
             </NButton>
-            <NButton @click="blockSelected">
+            <NButton v-if="!inTrash" @click="blockSelected">
               <template #icon><NIcon :component="BlockOutlined" /></template>
               <template v-if="!compact">屏蔽发件人</template>
             </NButton>
             <NButton type="error" ghost @click="act('delete', [...selected])">
               <template #icon><NIcon :component="DeleteOutlined" /></template>
-              <template v-if="!compact">删除</template>
+              <template v-if="!compact">{{ inTrash ? "永久删除" : "删除" }}</template>
             </NButton>
           </NButtonGroup>
           <IconBtn :icon="CloseOutlined" title="取消选择" size="small" @click="selected.clear()" />
@@ -537,6 +573,10 @@ const emptyText = computed(() => {
     <RemoteSearch v-model:show="remoteOpen" :q="data?.q || ''" :account-id="data?.account_id || null" />
     <div v-if="data?.current_label" class="gm-banner">
       只显示收件箱、已发送和垃圾邮件中带有「{{ data.current_label.name }}」标签的邮件；在 Gmail 中已归档的邮件不在这里。
+    </div>
+    <div v-if="inTrash && items.length" class="gm-banner">
+      「已删除」中的邮件 30 天后由 Gmail 自动永久删除；在这里删除会立即永久删除。
+      <a href="#" @click.prevent="emptyTrash">立即清空「已删除」</a>
     </div>
     <div v-if="data?.kind === 'junk' && items.length" class="gm-banner">
       垃圾邮件文件夹中的邮件来自 Gmail 的垃圾邮件判断，确认无误的邮件可以打开后点「这不是垃圾邮件」。

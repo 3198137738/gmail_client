@@ -23,6 +23,7 @@ from .config import (
     SYNC_INTERVAL_MINUTES,
     SYNC_JUNK_ENABLED,
     SYNC_SENT_ENABLED,
+    SYNC_TRASH_ENABLED,
     WEB_AUTH_ENABLED,
     WEB_AUTH_PASSWORD,
     load_session_secret,
@@ -76,9 +77,10 @@ async def lifespan(app: FastAPI):
     start_idle()
     start_bot()
     logger.info(
-        "Sync settings: sent_enabled=%s junk_enabled=%s initial_limit=%s fetch_batch=%s workers=%s interval=%s",
+        "Sync settings: sent_enabled=%s junk_enabled=%s trash_enabled=%s initial_limit=%s fetch_batch=%s workers=%s interval=%s",
         SYNC_SENT_ENABLED,
         SYNC_JUNK_ENABLED,
+        SYNC_TRASH_ENABLED,
         INITIAL_SYNC_LIMIT,
         IMAP_FETCH_BATCH_SIZE,
         BACKGROUND_MAX_WORKERS,

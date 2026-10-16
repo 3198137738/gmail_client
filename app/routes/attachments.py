@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/attachments", tags=["attachments"])
 
-ALLOWED_KINDS = {"inbox", "sent", "junk"}
+ALLOWED_KINDS = {"inbox", "sent", "junk", "trash"}
 
 
 def _safe_join(base: Path, *parts: str) -> Path:

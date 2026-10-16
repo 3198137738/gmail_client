@@ -36,6 +36,7 @@ from ..services import audit, outbox, phishing, threads
 from ..services import remote_search as remote_search_service
 from ..services.message_actions import (
     delete_local_messages as _delete_local_messages,
+    restore_from_trash as _restore_from_trash,
     set_starred as _set_starred,
     toggle_messages_read_state as _toggle_messages_read_state,
 )
@@ -50,7 +51,10 @@ DEFAULT_PAGE_SIZE = 25
 PAGE_SIZE_OPTIONS = (25, 50, 100)
 KIND_LABELS = {
     "inbox": "收件箱", "sent": "已发送", "junk": "垃圾邮件", "all": "全部邮件", "starred": "已加星标", "snoozed": "已延后",
+    "trash": "已删除",
 }
+# 与 Gmail 一致：垃圾邮件和已删除邮件不出现在「所有邮件」「已加星标」和标签视图中
+SEPARATE_KINDS = ("junk", "trash")
 
 # Cookie name + lifetime for persisting the user's account filter choice.
 # Selection is remembered for a year so it survives across normal browser
@@ -106,22 +110,22 @@ def _normalize_sender_email(value: Optional[str]) -> str:
 
 
 def _kind_condition(kind: str):
-    """按文件夹类型过滤；与 Gmail 一致，「全部邮件」不包含垃圾邮件。延后的邮件只在「已延后」中显示。"""
+    """按文件夹类型过滤；与 Gmail 一致，「全部邮件」不包含垃圾邮件和已删除邮件。延后的邮件只在「已延后」中显示。"""
     if kind == "snoozed":
         return Message.snoozed_until.is_not(None)
     not_snoozed = Message.snoozed_until.is_(None)
+    regular = Message.folder_kind.not_in(SEPARATE_KINDS)
     if kind == "all":
-        return (Message.folder_kind != "junk") & not_snoozed
+        return regular & not_snoozed
     if kind == "starred":
-        # 与 Gmail 一致：垃圾邮件中的星标邮件不显示在「已加星标」里
-        return (Message.is_starred.is_(True)) & (Message.folder_kind != "junk") & not_snoozed
+        return (Message.is_starred.is_(True)) & regular & not_snoozed
     label_id = _label_id_of(kind)
     if label_id is not None:
         return Message.id.in_(
             select(MessageLabel.message_id).where(MessageLabel.label_id == label_id)
-        ) & (Message.folder_kind != "junk") & not_snoozed
-    if kind == "sent":
-        return Message.folder_kind == "sent"
+        ) & regular & not_snoozed
+    if kind in ("sent", "trash"):
+        return Message.folder_kind == kind
     return (Message.folder_kind == kind) & not_snoozed
 
 
@@ -472,7 +476,8 @@ class ActionBody(IdsBody):
 
 @router.post("/actions", name="messages.actions")
 def batch_action(request: Request, body: ActionBody, db: Session = Depends(get_db)):
-    """批量操作选中的邮件：read（标为已读）/ unread（标为未读）/ delete（删除）。"""
+    """批量操作选中的邮件：read（标为已读）/ unread（标为未读）/ delete（删除；已删除里的为永久删除）/
+    restore（把已删除里的移回收件箱）。"""
     messages = _load_for_action(request, db, body.ids)
     if body.action == "read":
         affected = _toggle_messages_read_state(db, messages, is_read=True)
@@ -480,6 +485,8 @@ def batch_action(request: Request, body: ActionBody, db: Session = Depends(get_d
         affected = _toggle_messages_read_state(db, messages, is_read=False)
     elif body.action == "delete":
         affected = delete_messages(request, db, messages)
+    elif body.action == "restore":
+        affected = _restore_from_trash(db, messages)
     else:
         raise HTTPException(status_code=400, detail="Unknown action")
     logger.info("batch-%s selected=%s affected=%s", body.action, len(body.ids), affected)
@@ -504,6 +511,21 @@ def snooze(request: Request, body: SnoozeBody, db: Session = Depends(get_db)):
         m.snoozed_until = until
     db.commit()
     return {"ok": True, "affected": len(messages), "until": ser.iso_utc(until)}
+
+
+class EmptyTrashBody(BaseModel):
+    account_id: Optional[int] = None
+
+
+@router.post("/empty-trash", name="messages.empty_trash")
+def empty_trash(request: Request, body: EmptyTrashBody, db: Session = Depends(get_db)):
+    """清空「已删除」：永久删除（当前账号或全部账号）已同步到本地的已删除邮件。"""
+    stmt = select(Message).options(selectinload(Message.attachments)).where(Message.folder_kind == "trash")
+    if body.account_id:
+        stmt = stmt.where(Message.account_id == body.account_id)
+    affected = delete_messages(request, db, db.execute(stmt).scalars().all())
+    logger.info("empty-trash account_id=%s affected=%s", body.account_id, affected)
+    return {"ok": True, "affected": affected}
 
 
 class ViewBody(BaseModel):

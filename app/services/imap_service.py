@@ -62,6 +62,7 @@ from ..config import (
     INITIAL_SYNC_LIMIT,
     SYNC_JUNK_ENABLED,
     SYNC_SENT_ENABLED,
+    SYNC_TRASH_ENABLED,
 )
 from ..crypto import decrypt_password
 from ..database import session_scope
@@ -75,6 +76,7 @@ from .imap_client import (
     _account_lock,
     _discover_junk_folder,
     _discover_sent_folder,
+    _discover_trash_folder,
     _folder_lock,
     _imap_client,
     _release_account_lock,
@@ -317,8 +319,12 @@ def _parse_fetched_messages(
     fetched_items: list[tuple[int, dict]],
     blocked_senders: set[str],
     failed_uids: Optional[set[int]] = None,
+    blocked_uids: Optional[list[int]] = None,
 ) -> list[dict]:
-    """解析下载到的邮件；传入 ``failed_uids`` 时，把没能解析的 UID 记进去。"""
+    """解析下载到的邮件；传入 ``failed_uids`` 时，把没能解析的 UID 记进去。
+
+    屏蔽发件人的邮件不入库；传入 ``blocked_uids`` 时把它们的 UID 记进去。
+    """
     records: list[dict] = []
     for uid, data in fetched_items:
         raw = data.get(b"RFC822")
@@ -347,6 +353,8 @@ def _parse_fetched_messages(
                 sender_email,
                 uid,
             )
+            if blocked_uids is not None:
+                blocked_uids.append(uid)
             continue
 
         records.append(
@@ -649,9 +657,12 @@ def _ingest_uids(
 
     ``apply_rules``：对新入库的邮件执行自动规则（只用于增量同步收到的新邮件）。
     """
-    blocked_senders = _load_blocked_sender_emails(account_id)
+    # 已删除邮件里的照常显示（屏蔽发件人的邮件就是被移到那里的）
+    blocked_senders = _load_blocked_sender_emails(account_id) if folder_kind != "trash" else set()
     trusted_senders = _load_trusted_sender_emails(account_id) if folder_kind == "junk" else set()
     rescue_uids: list[int] = []
+    # 屏蔽发件人的邮件：不在这里入库，在 Gmail 中移到已删除邮件（已发送里的不动）
+    blocked_uids: Optional[list[int]] = [] if folder_kind in ("inbox", "junk") else None
     saved = 0
     persisted_uids: list[int] = []
     failed_uids: set[int] = set()
@@ -723,6 +734,7 @@ def _ingest_uids(
             fetched_items=new_items,
             blocked_senders=blocked_senders,
             failed_uids=failed_uids,
+            blocked_uids=blocked_uids,
         )
         if trusted_senders:
             # 信任发件人的邮件被 Gmail 判为垃圾邮件时，不入库，改为移回收件箱，
@@ -768,6 +780,9 @@ def _ingest_uids(
             )
             failed_uids.update(int(record["uid"]) for record in records)
 
+    if blocked_uids:
+        _trash_blocked(account_id, folder, blocked_uids)
+
     if apply_rules and persisted_uids and folder_kind in ("inbox", "junk"):
         # 延迟导入：rules 依赖 message_actions，后者又依赖本模块
         from .rules import safe_apply_to_new
@@ -783,6 +798,17 @@ def _ingest_uids(
         ),
         interrupted=bool(transient_uids),
     )
+
+
+def _trash_blocked(account_id: int, folder: str, uids: list[int]) -> None:
+    """屏蔽发件人的新邮件：经 outbox 移到 Gmail 的已删除邮件（失败会一直重试），之后出现在「已删除」里。"""
+    logger.info(
+        "Blocked sender mail found, moving to trash account=%s folder=%s uids=%s",
+        account_id, folder, uids,
+    )
+    with session_scope() as db:
+        outbox.enqueue(db, account_id, folder, outbox.OP_DELETE, uids)
+    outbox.kick([account_id])
 
 
 def _move_rescued_to_inbox(account_id: int, folder: str, rescue_uids: list[int]) -> None:
@@ -1139,6 +1165,9 @@ def _announce_new_mail(account_id: int, results: dict[str, dict]) -> None:
     inbox_new = int(results.get("inbox", {}).get("saved", 0) or 0)
     sent_new = int(results.get("sent", {}).get("saved", 0) or 0)
     junk_new = int(results.get("junk", {}).get("saved", 0) or 0)
+    if int(results.get("trash", {}).get("saved", 0) or 0):
+        # 已删除邮件不算新邮件（不提示、不通知），只让正在看「已删除」的页面刷新
+        publish_mail_changed(account_id, "trash")
     if inbox_new or sent_new or junk_new:
         try:
             preview = new_mail_preview(account_id, inbox_new)
@@ -1183,7 +1212,7 @@ def sync_folder_with_client(
 
 
 def sync_targets(client: IMAPClient, account_id: int) -> list[tuple[str, str]]:
-    """本账号需要同步的 (文件夹名, 类型) 列表：收件箱，以及按配置开启的已发送 / 垃圾邮件。"""
+    """本账号需要同步的 (文件夹名, 类型) 列表：收件箱，以及按配置开启的已发送 / 垃圾邮件 / 已删除邮件。"""
     targets: list[tuple[str, str]] = [(DEFAULT_FOLDER, "inbox")]
     if SYNC_SENT_ENABLED:
         sent_folder = _discover_sent_folder(client)
@@ -1197,6 +1226,12 @@ def sync_targets(client: IMAPClient, account_id: int) -> list[tuple[str, str]]:
             targets.append((junk_folder, "junk"))
         else:
             logger.info("No Junk folder discovered for account=%s", account_id)
+    if SYNC_TRASH_ENABLED:
+        trash_folder = _discover_trash_folder(client)
+        if trash_folder and trash_folder != DEFAULT_FOLDER:
+            targets.append((trash_folder, "trash"))
+        else:
+            logger.info("No Trash folder discovered for account=%s", account_id)
     return targets
 
 
