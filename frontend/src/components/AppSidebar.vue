@@ -15,6 +15,7 @@ import {
   BlockOutlined,
   DraftsOutlined,
   ScheduleSendOutlined,
+  UnsubscribeOutlined,
   EditOutlined,
   FolderOutlined,
   InboxOutlined,
@@ -82,7 +83,10 @@ const folderOptions = computed(() => {
     items.push({ key: listUrl("junk", accId), kind: "junk", label: itemLabel("垃圾邮件", junk), icon: icon(ReportOutlined), unread: junk });
   }
   if (store.session?.config?.sync_trash_enabled) {
-    items.push({ key: listUrl("trash", accId), kind: "trash", label: "已删除", icon: icon(DeleteOutlined) });
+    items.push(
+      { key: listUrl("trash", accId), kind: "trash", label: "已删除", icon: icon(DeleteOutlined) },
+      { key: listUrl("blocked", accId), kind: "blocked", label: "屏蔽的邮件", icon: icon(UnsubscribeOutlined) },
+    );
   }
   items.push(
     { key: listUrl("all", accId), kind: "all", label: "所有邮件", icon: icon(MailOutlined) },
@@ -126,7 +130,7 @@ const labelValue = computed(() => labelOptions.value.find((o) => o.kind === acti
 
 // 切换账号时保留当前文件夹（标签视图属于某个账号，切换后回到收件箱）
 const accountKind = computed(() =>
-  ["inbox", "sent", "junk", "trash", "all", "starred", "snoozed"].includes(activeKind.value) ? activeKind.value : "inbox",
+  ["inbox", "sent", "junk", "trash", "blocked", "all", "starred", "snoozed"].includes(activeKind.value) ? activeKind.value : "inbox",
 );
 
 function accountItem(a) {

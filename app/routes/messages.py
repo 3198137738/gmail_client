@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlparse
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
-from sqlalchemy import case, func, select
+from sqlalchemy import case, exists, func, or_, select
 from sqlalchemy.orm import Session, defer, selectinload
 
 from .. import serializers as ser
@@ -51,7 +51,7 @@ DEFAULT_PAGE_SIZE = 25
 PAGE_SIZE_OPTIONS = (25, 50, 100)
 KIND_LABELS = {
     "inbox": "收件箱", "sent": "已发送", "junk": "垃圾邮件", "all": "全部邮件", "starred": "已加星标", "snoozed": "已延后",
-    "trash": "已删除",
+    "trash": "已删除", "blocked": "屏蔽的邮件",
 }
 # 与 Gmail 一致：垃圾邮件和已删除邮件不出现在「所有邮件」「已加星标」和标签视图中
 SEPARATE_KINDS = ("junk", "trash")
@@ -109,10 +109,29 @@ def _normalize_sender_email(value: Optional[str]) -> str:
     return (m.group(0).strip().lower() if m else "")
 
 
+def _blocked_sender_condition():
+    """发件人在该账号屏蔽列表中的邮件（已发送的除外）。
+
+    From 头是「名称 <地址>」或裸地址：按 ``<地址>`` 或整串相等精确匹配，
+    不用 LIKE 子串匹配（``spam@a.com`` 不能命中 ``xspam@a.com``）。
+    """
+    sender = func.lower(func.trim(Message.from_addr))
+    return (Message.folder_kind != "sent") & exists().where(
+        BlockedSender.account_id == Message.account_id,
+        or_(
+            sender == BlockedSender.sender_email,
+            func.instr(sender, "<" + BlockedSender.sender_email + ">") > 0,
+        ),
+    )
+
+
 def _kind_condition(kind: str):
     """按文件夹类型过滤；与 Gmail 一致，「全部邮件」不包含垃圾邮件和已删除邮件。延后的邮件只在「已延后」中显示。"""
     if kind == "snoozed":
         return Message.snoozed_until.is_not(None)
+    if kind == "blocked":
+        # 屏蔽后这些邮件都被移到了已删除邮件，单独列出来方便查看、批量永久删除
+        return _blocked_sender_condition()
     not_snoozed = Message.snoozed_until.is_(None)
     regular = Message.folder_kind.not_in(SEPARATE_KINDS)
     if kind == "all":
@@ -515,16 +534,23 @@ def snooze(request: Request, body: SnoozeBody, db: Session = Depends(get_db)):
 
 class EmptyTrashBody(BaseModel):
     account_id: Optional[int] = None
+    # trash：清空「已删除」；blocked：删除「屏蔽的邮件」中的全部邮件
+    kind: str = "trash"
 
 
 @router.post("/empty-trash", name="messages.empty_trash")
 def empty_trash(request: Request, body: EmptyTrashBody, db: Session = Depends(get_db)):
-    """清空「已删除」：永久删除（当前账号或全部账号）已同步到本地的已删除邮件。"""
-    stmt = select(Message).options(selectinload(Message.attachments)).where(Message.folder_kind == "trash")
+    """清空「已删除」或「屏蔽的邮件」（当前账号或全部账号，已同步到本地的邮件）。
+
+    它们都在 Gmail 的已删除邮件里，删除即永久删除。
+    """
+    if body.kind not in ("trash", "blocked"):
+        raise HTTPException(status_code=400, detail="Unknown kind")
+    stmt = select(Message).options(selectinload(Message.attachments)).where(_kind_condition(body.kind))
     if body.account_id:
         stmt = stmt.where(Message.account_id == body.account_id)
     affected = delete_messages(request, db, db.execute(stmt).scalars().all())
-    logger.info("empty-trash account_id=%s affected=%s", body.account_id, affected)
+    logger.info("empty-%s account_id=%s affected=%s", body.kind, body.account_id, affected)
     return {"ok": True, "affected": affected}
 
 

@@ -255,7 +255,7 @@ usePageShortcuts({
         <template v-if="msg">
           <span class="gm-toolbar-gap" />
           <IconBtn v-if="msg.folder_kind === 'junk'" :icon="ReportOffOutlined" title="不是垃圾邮件" @click="notSpam" />
-          <IconBtn v-if="msg.folder_kind === 'trash'" :icon="RestoreFromTrashOutlined" title="移至收件箱" @click="restore" />
+          <IconBtn v-if="msg.folder_kind === 'trash' && !msg.sender_blocked" :icon="RestoreFromTrashOutlined" title="移至收件箱" @click="restore" />
           <IconBtn :icon="DeleteOutlined" :title="msg.folder_kind === 'trash' ? '永久删除（#）' : '删除（#）'" @click="remove" />
           <span class="gm-toolbar-sep" />
           <IconBtn :icon="MarkEmailUnreadOutlined" title="标记为未读（Shift+U）" @click="markUnread" />

@@ -183,6 +183,12 @@ async function untrust(row) {
               <span class="gm-addr-actions">
                 <NButton
                   text
+                  type="primary"
+                  title="在「屏蔽的邮件」中查看该发件人的邮件"
+                  @click="router.push({ path: '/messages/', query: { kind: 'blocked', account_id: row.account_id, q: row.sender_email } })"
+                >查看邮件</NButton>
+                <NButton
+                  text
                   type="error"
                   :loading="purging === row.id"
                   title="彻底删除该发件人在 Gmail 中的全部邮件（不解除屏蔽）"

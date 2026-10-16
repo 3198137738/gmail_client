@@ -87,3 +87,44 @@ def test_sync_targets_include_trash():
             ]
 
     assert (TRASH, "trash") in sync_targets(Client(), 1)
+
+
+def _block(acc, email):
+    from app.models import BlockedSender
+
+    with session_scope() as db:
+        db.add(BlockedSender(account_id=acc, sender_email=email))
+
+
+def test_blocked_view_lists_exact_blocked_senders_only(client):
+    login(client)
+    acc = create_account()
+    other = create_account()
+    _block(acc, "spam@bad.example")
+    named = create_message(acc, folder=TRASH, folder_kind="trash", from_addr="Spammer <SPAM@bad.example>")
+    bare = create_message(acc, folder=TRASH, folder_kind="trash", from_addr="spam@bad.example")
+    create_message(acc, folder=TRASH, folder_kind="trash", from_addr="Evil <xspam@bad.example>")   # 只是子串
+    create_message(acc, folder=TRASH, folder_kind="trash", from_addr="friend@ok.example")
+    create_message(other, folder=TRASH, folder_kind="trash", from_addr="spam@bad.example")         # 另一个账号没屏蔽
+
+    ids, data = _ids(client, "blocked", acc)
+    assert ids == {named, bare} and data["kind_label"] == "屏蔽的邮件"
+    all_ids = {m["id"] for m in client.get("/api/messages", params={"kind": "blocked"}).json()["items"]}
+    assert all_ids == {named, bare}
+
+
+def test_delete_all_blocked_mail(client, _no_background_network):
+    token = login(client)
+    acc = create_account()
+    _block(acc, "spam@bad.example")
+    blocked = [create_message(acc, folder=TRASH, folder_kind="trash", from_addr="spam@bad.example") for _ in range(2)]
+    keep = create_message(acc, folder=TRASH, folder_kind="trash", from_addr="friend@ok.example")
+
+    resp = api_post(client, "/api/messages/empty-trash", token, json={"account_id": acc, "kind": "blocked"})
+    assert resp.json() == {"ok": True, "affected": 2}
+    with session_scope() as db:
+        assert all(db.get(Message, mid) is None for mid in blocked)
+        assert db.get(Message, keep) is not None
+        ops = db.execute(select(PendingOp).where(PendingOp.account_id == acc)).scalars().all()
+        assert [(o.op, o.folder) for o in ops] == [("delete", TRASH)]
+    assert api_post(client, "/api/messages/empty-trash", token, json={"kind": "inbox"}).status_code == 400
