@@ -1,5 +1,6 @@
 <script setup>
-// 右下角的批量永久删除进度卡片：逐个地址显示进度，结束后显示结果，关闭前一直保留（刷新页面也在）。
+// 右下角的批量永久删除进度卡片：逐个地址显示进度，全部成功后片刻自动关闭；
+// 有失败的地址则一直保留（刷新页面也在），等用户查看后手动关闭。
 import { onBeforeUnmount, onMounted, reactive, watch } from "vue";
 import { NIcon, NProgress, NSpin } from "naive-ui";
 import { CheckCircleOutlined, CloseOutlined, ErrorOutlineOutlined, ExpandLessOutlined, ExpandMoreOutlined } from "@vicons/material";
@@ -10,6 +11,8 @@ import { dismissPurgeJob, loadPurgeJobs, purgeJobs, upsertPurgeJob } from "../pu
 
 // 实时推送不可用时，有进行中的任务就定时查询
 const POLL_MS = 3000;
+// 全部成功的任务完成后多久自动关闭（展开详情时暂停）
+const AUTO_DISMISS_MS = 3000;
 
 const expanded = reactive(new Set());
 
@@ -27,6 +30,28 @@ function summary(job) {
   const text = `已完成，共永久删除 ${job.purged} 封`;
   return job.failed ? `${text}；${job.failed} 个地址失败` : text;
 }
+
+const dismissTimers = new Map();
+watch(
+  () => purgeJobs.list.filter((j) => j.finished && !j.failed && !expanded.has(j.id)).map((j) => j.id),
+  (ids) => {
+    for (const [id, t] of dismissTimers) {
+      if (!ids.includes(id)) {
+        clearTimeout(t);
+        dismissTimers.delete(id);
+      }
+    }
+    for (const id of ids) {
+      if (!dismissTimers.has(id)) {
+        dismissTimers.set(id, setTimeout(() => {
+          dismissTimers.delete(id);
+          dismissPurgeJob(id);
+        }, AUTO_DISMISS_MS));
+      }
+    }
+  },
+  { immediate: true },
+);
 
 let timer = null;
 function stopPolling() {
@@ -50,6 +75,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   disposers.forEach((d) => d());
   stopPolling();
+  dismissTimers.forEach((t) => clearTimeout(t));
 });
 </script>
 
