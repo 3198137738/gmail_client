@@ -24,7 +24,7 @@ from .. import auth as web_auth
 from ..auth import current_session_token
 from ..config import BACKUP_PUBLIC_KEY
 from ..navigation import LABEL_COLORS
-from ..services import audit, backup, google_oauth, login_sessions, telegram_service
+from ..services import audit, backup, gmail_profile, google_oauth, login_sessions, telegram_service
 from ..services.html_sanitizer import sanitize_compose_html
 from ..services.idle_service import reconcile_idle
 from ..services.background import submit_bg
@@ -309,11 +309,31 @@ class AccountUpdateBody(BaseModel):
     password: Optional[str] = None
     signature_html: Optional[str] = None
     group_name: Optional[str] = None
+    # 同时把显示名称改到 Gmail 中（仅 Google 授权账号）
+    sync_gmail_name: bool = False
+
+
+@router.get("/accounts/{account_id}/gmail-name", name="accounts.gmail_name")
+def get_gmail_name(account_id: int, db: Session = Depends(get_db)):
+    """从 Gmail 读取邮箱姓名（发件人名称）。"""
+    account = _get_account(db, account_id)
+    try:
+        return gmail_profile.fetch_name(db, account)
+    except gmail_profile.GmailProfileError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.post("/accounts/{account_id}/update", name="accounts.update")
 def update_account(request: Request, account_id: int, body: AccountUpdateBody, db: Session = Depends(get_db)):
     account = _get_account(db, account_id)
+    gmail_name = None
+    if body.sync_gmail_name and body.display_name is not None:
+        # 先改 Gmail：失败时整个保存不生效，避免本地与 Gmail 不一致却不自知
+        try:
+            gmail_name = gmail_profile.update_name(account, body.display_name)
+        except gmail_profile.GmailProfileError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        body.display_name = gmail_name
     if body.display_name is not None:
         account.display_name = body.display_name.strip() or None
     if body.password:
@@ -329,6 +349,7 @@ def update_account(request: Request, account_id: int, body: AccountUpdateBody, d
     changes = [
         c for c, on in (
             ("显示名称", body.display_name is not None),
+            ("Gmail 姓名", gmail_name is not None),
             ("应用专用密码", bool(body.password)),
             ("签名", body.signature_html is not None),
             ("分组", body.group_name is not None),
@@ -337,7 +358,7 @@ def update_account(request: Request, account_id: int, body: AccountUpdateBody, d
     audit.record_request(request, "account_updated", f"{account.email}：{'、'.join(changes) or '无变化'}")
     db.commit()
     reconcile_idle()
-    return {"ok": True}
+    return {"ok": True, "gmail_name": gmail_name}
 
 
 @router.post("/accounts/{account_id}/toggle", name="accounts.toggle")
@@ -642,6 +663,15 @@ def oauth_callback(
         account.enabled = True
         message = f"{email} 已改为使用 Google 授权登录"
         event = "account_updated"
+    if not account.display_name:
+        # 没填显示名称时用 Gmail 中的姓名；取不到不影响授权
+        try:
+            fetched = gmail_profile.fetch_name(db, account)
+        except gmail_profile.GmailProfileError as exc:
+            logger.info("Fetch Gmail name failed email=%s: %s", email, exc)
+        else:
+            if fetched["source"] == "gmail":
+                account.display_name = fetched["name"]
     db.commit()
     audit.record_request(request, event, f"{email}（Google 授权）")
     logger.info("OAuth account linked email=%s account_id=%s", email, account.id)

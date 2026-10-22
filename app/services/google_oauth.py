@@ -26,8 +26,9 @@ logger = logging.getLogger(__name__)
 
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
-# https://mail.google.com/ 是 IMAP / SMTP 访问 Gmail 所需的权限
-SCOPES = "https://mail.google.com/ openid email"
+# https://mail.google.com/ 是 IMAP / SMTP 访问 Gmail 所需的权限；
+# gmail.settings.basic 用于修改 Gmail 中的姓名（Send-as 显示名称）
+SCOPES = "https://mail.google.com/ https://www.googleapis.com/auth/gmail.settings.basic openid email"
 SECRET_PREFIX = "oauth2:"
 _HTTP_TIMEOUT = 15
 

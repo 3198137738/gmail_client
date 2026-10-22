@@ -28,7 +28,8 @@ import { onRealtime } from "../../realtime";
 const data = ref(null);
 const selected = ref([]);
 const editing = ref(null);
-const editForm = reactive({ display_name: "", password: "", group_name: "" });
+const editForm = reactive({ display_name: "", password: "", group_name: "", sync_gmail_name: false });
+const fetchingName = ref(false);
 // 已有的分组名，填写分组时作为候选
 const groupOptions = computed(() => {
   const names = [...new Set((data.value?.accounts || []).map((a) => a.group_name).filter(Boolean))].sort();
@@ -93,13 +94,30 @@ function startEdit(a) {
   editForm.display_name = a.display_name;
   editForm.group_name = a.group_name;
   editForm.password = "";
+  editForm.sync_gmail_name = false;
+}
+
+const NAME_SOURCES = { gmail: "已从 Gmail 获取姓名", sent: "Gmail 未提供姓名，已按已发送邮件的发件人名称填入" };
+
+async function fetchGmailName(a) {
+  fetchingName.value = true;
+  const result = await run(get(`/api/accounts/${a.id}/gmail-name`));
+  fetchingName.value = false;
+  if (!result) return;
+  if (!result.name) {
+    ui.message.warning("没有取到姓名：Gmail 中未设置，也没有可参考的已发送邮件");
+    return;
+  }
+  editForm.display_name = result.name;
+  ui.message.success(NAME_SOURCES[result.source]);
 }
 
 async function saveEdit(a) {
   const body = { display_name: editForm.display_name, group_name: editForm.group_name || "" };
+  if (a.oauth && editForm.sync_gmail_name) body.sync_gmail_name = true;
   if (editForm.password) body.password = editForm.password;
   if (sigEditor) body.signature_html = sigEditor.getInnerHtml();
-  if (await run(post(`/api/accounts/${a.id}/update`, body), "已保存")) {
+  if (await run(post(`/api/accounts/${a.id}/update`, body), (r) => (r.gmail_name ? "已保存，Gmail 中的姓名已同步修改" : "已保存"))) {
     editing.value = null;
     load();
     refreshNav();
@@ -225,8 +243,17 @@ function oauthStart() {
                   <NFormItem label="分组（可选，侧栏按分组折叠显示）">
                     <NAutoComplete v-model:value="editForm.group_name" :options="groupOptions" placeholder="如：工作、注册用" clearable />
                   </NFormItem>
-                  <NFormItem label="显示名">
-                    <NInput v-model:value="editForm.display_name" />
+                  <NFormItem label="显示名（收件人看到的发件人名称）">
+                    <div class="gm-name-field">
+                      <div class="gm-name-row">
+                        <NInput v-model:value="editForm.display_name" :maxlength="255" />
+                        <NButton secondary :loading="fetchingName" title="读取 Gmail 中设置的姓名" @click="fetchGmailName(a)">从 Gmail 获取</NButton>
+                      </div>
+                      <NCheckbox v-if="a.oauth" v-model:checked="editForm.sync_gmail_name" :disabled="!editForm.display_name.trim()">
+                        保存时同时修改 Gmail 中的姓名
+                      </NCheckbox>
+                      <div v-else class="gm-settings-hint">应用专用密码账号无法修改 Gmail 中的姓名，改为 Google 授权登录后可修改</div>
+                    </div>
                   </NFormItem>
                   <NFormItem label="新应用专用密码（留空则不修改）">
                     <NInput v-model:value="editForm.password" type="password" show-password-on="click" :input-props="{ autocomplete: 'new-password' }" />
@@ -382,6 +409,8 @@ function oauthStart() {
 .gm-err-text { max-width: 420px; word-break: break-word; font-size: 13px; }
 .gm-acct-links { display: flex; flex-wrap: wrap; gap: 12px; justify-content: flex-end; }
 .gm-acct-edit { margin-top: 12px; max-width: 420px; }
+.gm-name-field { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.gm-name-row { display: flex; gap: 8px; }
 .gm-acct-edit-actions { display: flex; gap: 8px; }
 .gm-sig-editor { display: flex; flex-direction: column; width: 100%; min-height: 120px; padding: 0 10px; border: 1px solid var(--gm-border); border-radius: var(--gm-radius); }
 .gm-sig-editor :deep(.gm-editor) { min-height: 80px; }

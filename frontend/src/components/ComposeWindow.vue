@@ -97,6 +97,40 @@ const accountOptions = computed(() =>
 );
 const totalSize = computed(() => files.value.reduce((n, f) => n + f.size, 0));
 
+// ---- 发件人姓名 ----
+// 账号没设置显示名称时，发出的邮件只带邮箱地址；从 Gmail 读取姓名作为建议，一键设为该账号的显示名称。
+const currentAccount = computed(() => accounts.value.find((a) => a.id === form.accountId) || null);
+const fetchedNames = reactive({});   // 账号 id → Gmail 姓名（"" 表示没取到）
+const savingName = ref(false);
+const suggestedName = computed(() => (currentAccount.value ? fetchedNames[currentAccount.value.id] : undefined));
+
+watch(currentAccount, async (a) => {
+  if (!a || a.display_name || a.id in fetchedNames) return;
+  fetchedNames[a.id] = "";
+  try {
+    fetchedNames[a.id] = (await get(`/api/accounts/${a.id}/gmail-name`)).name || "";
+  } catch {
+    // 取不到只是不给建议，不影响写邮件
+  }
+});
+
+async function useSuggestedName() {
+  const a = currentAccount.value;
+  const name = suggestedName.value;
+  if (!a || !name) return;
+  savingName.value = true;
+  try {
+    await post(`/api/accounts/${a.id}/update`, { display_name: name });
+    a.display_name = name;
+    toast(`已将发件人姓名设为「${name}」`);
+    refreshNav();
+  } catch (err) {
+    ui.message.error(err.message);
+  } finally {
+    savingName.value = false;
+  }
+}
+
 // ---- 初始化 ----
 onMounted(async () => {
   try {
@@ -624,6 +658,14 @@ const fullScreen = computed(() => isMobile.value || winState.value === "max");
             @update:value="onAccountChange"
           />
         </div>
+        <div v-if="currentAccount && !currentAccount.display_name" class="gm-from-hint">
+          <NIcon :component="WarningAmberOutlined" :size="16" />
+          <span>未设置发件人姓名，收件人只会看到邮箱地址。</span>
+          <NButton v-if="suggestedName" text type="primary" size="small" :loading="savingName" @click="useSuggestedName">
+            使用 Gmail 中的姓名「{{ suggestedName }}」
+          </NButton>
+          <RouterLink v-else to="/accounts/" @click="closeCompose">去设置</RouterLink>
+        </div>
         <div class="gm-field">
           <label class="gm-field-label">收件人</label>
           <AddressInput ref="toInput" v-model:value="form.to" :contacts="contacts" label="收件人" @change="markDirty" />
@@ -798,6 +840,8 @@ const fullScreen = computed(() => isMobile.value || winState.value === "max");
 .gm-field { display: flex; align-items: center; gap: 8px; min-height: 42px; border-bottom: 1px solid var(--gm-divider); }
 .gm-field-label { color: var(--gm-text-3); flex: none; min-width: 42px; }
 .gm-from { flex: 1; }
+.gm-from-hint { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; padding: 6px 0; font-size: 12px; color: var(--gm-text-3); border-bottom: 1px solid var(--gm-divider); }
+.gm-from-hint > .n-icon { color: var(--gm-warning); }
 .gm-field-extras { display: flex; gap: 8px; flex: none; }
 .gm-link-btn { border: 0; background: none; color: var(--gm-text-3); cursor: pointer; padding: 4px; font: inherit; }
 .gm-link-btn:hover { color: var(--gm-primary); }
