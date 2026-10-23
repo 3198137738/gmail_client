@@ -52,8 +52,8 @@ const newMailCount = ref(0);
 // 已滑动删除、还在「可撤销」期内的邮件（界面上先隐藏，几秒后才真正删除）
 const swipeHidden = reactive(new Set());
 
-const DELETE_CONFIRM = "确定删除选中的邮件吗？邮件会移到「已删除」，30 天后由 Gmail 自动清除。";
-const PURGE_CONFIRM = "确定永久删除选中的邮件吗？邮件会从 Gmail 中彻底删除，无法恢复。";
+const DELETE_CONFIRM = "确定删除选中的邮件吗？邮件会移到「已删除」，之后由邮箱服务商自动清除（Gmail 为 30 天）。";
+const PURGE_CONFIRM = "确定永久删除选中的邮件吗？邮件会从邮箱服务器中彻底删除，无法恢复。";
 
 // ---- 当前视图（地址栏参数） ----
 const query = computed(() => props.listQuery);
@@ -194,7 +194,7 @@ const selectOptions = [
 ];
 
 // ---- 操作 ----
-// 「已删除」和「屏蔽的邮件」（都在 Gmail 的已删除邮件里）中的删除是永久删除
+// 「已删除」和「屏蔽的邮件」（都在服务器的已删除邮件里）中的删除是永久删除
 const inTrash = computed(() => kind.value === "trash" || kind.value === "blocked");
 
 async function act(action, ids) {
@@ -223,8 +223,8 @@ async function emptyTrash() {
   const scope = d?.account_id ? "当前账号" : "所有账号";
   const ok = await confirm(
     d?.kind === "blocked"
-      ? `确定永久删除${scope}「屏蔽的邮件」中的全部邮件吗？邮件会从 Gmail 中彻底删除，无法恢复；屏蔽继续保留。`
-      : `确定清空${scope}的「已删除」吗？其中的邮件会从 Gmail 中彻底删除，无法恢复。`,
+      ? `确定永久删除${scope}「屏蔽的邮件」中的全部邮件吗？邮件会从邮箱服务器中彻底删除，无法恢复；屏蔽继续保留。`
+      : `确定清空${scope}的「已删除」吗？其中的邮件会从邮箱服务器中彻底删除，无法恢复。`,
     { danger: true, positiveText: d?.kind === "blocked" ? "全部永久删除" : "清空" },
   );
   if (!ok) return;
@@ -264,7 +264,7 @@ async function toggleStar(item) {
 }
 
 // ---- 延后（稍后提醒） ----
-// 在 Gmail 服务器上搜索（当前搜索词）
+// 在邮箱服务器上搜索（当前搜索词）
 const remoteOpen = ref(false);
 
 const snoozeOpen = ref(false);
@@ -312,7 +312,7 @@ async function onMore(key) {
   const d = data.value;
   if (key === "mark-all-read") {
     const ok = await confirm(
-      `确定将当前视图下的全部 ${d.unread_total} 封未读邮件标记为已读吗？\n（同时会同步更新 Gmail 服务器的已读状态）`,
+      `确定将当前视图下的全部 ${d.unread_total} 封未读邮件标记为已读吗？\n（同时会同步更新邮箱服务器的已读状态）`,
     );
     if (!ok) return;
     const result = await run(post("/api/messages/mark-all-read", { kind: d.kind, account_id: d.account_id, q: d.q }));
@@ -477,12 +477,12 @@ const emptyText = computed(() => {
   if (!d) return null;
   if (d.unread_only) return { title: "没有未读邮件", hint: "所有邮件都已读", link: "查看全部邮件", action: toggleUnreadOnly };
   if (d.q) return { title: "没有与搜索条件相符的邮件", link: "清除搜索", action: () => goView({ q: undefined, page: undefined }) };
-  if (!d.has_accounts) return { title: "还没有添加邮箱账号", hint: "先到设置添加 Gmail 账号", link: "前往设置", action: () => router.push("/accounts/") };
+  if (!d.has_accounts) return { title: "还没有添加邮箱账号", hint: "先到设置添加 Gmail 或 Outlook 账号", link: "前往设置", action: () => router.push("/accounts/") };
   if (d.current_label) return { title: `没有带「${d.current_label.name}」标签的邮件` };
   if (d.kind === "snoozed") return { title: "没有延后的邮件", hint: "在邮件上点「延后」，邮件会在指定时间回到收件箱最上面" };
   if (d.kind === "starred") return { title: "没有已加星标的邮件", hint: "点邮件旁边的星形图标即可加星标，方便以后查找" };
   if (d.kind === "inbox") return { title: "收件箱里没有邮件", hint: "点工具栏的刷新按钮拉取最新邮件" };
-  if (d.kind === "trash") return { title: "「已删除」里没有邮件", hint: "删除的邮件会在这里保留 30 天，之后由 Gmail 自动清除" };
+  if (d.kind === "trash") return { title: "「已删除」里没有邮件", hint: "删除的邮件会在这里保留一段时间（Gmail 为 30 天），之后由邮箱服务商自动清除" };
   if (d.kind === "blocked") return { title: "没有屏蔽发件人的邮件", hint: "屏蔽发件人后，其邮件会移到「已删除」并显示在这里" };
   return { title: "这里没有邮件" };
 });
@@ -571,7 +571,7 @@ const emptyText = computed(() => {
 
     <div v-if="data?.q" class="gm-banner gm-remote-banner">
       <span>本地搜索只包含已同步的邮件。</span>
-      <a href="#" @click.prevent="remoteOpen = true">在 Gmail 服务器上搜索「{{ data.q }}」</a>
+      <a href="#" @click.prevent="remoteOpen = true">在邮箱服务器上搜索「{{ data.q }}」</a>
       <span>（包括未同步、已归档的邮件）</span>
     </div>
     <RemoteSearch v-model:show="remoteOpen" :q="data?.q || ''" :account-id="data?.account_id || null" />

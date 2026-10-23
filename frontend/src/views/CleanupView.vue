@@ -86,7 +86,7 @@ async function clean() {
   }
   const samples = preview.samples.map((m) => `· ${m.from}：${m.subject || "(无主题)"}`).join("\n");
   const ok = await confirm(
-    `将删除 ${preview.count} 封邮件（Gmail 上同时移到已删除邮件），星标和已延后的邮件会保留。\n\n${samples}${preview.count > preview.samples.length ? "\n……" : ""}`,
+    `将删除 ${preview.count} 封邮件（邮箱服务器上同时移到已删除邮件），星标和已延后的邮件会保留。\n\n${samples}${preview.count > preview.samples.length ? "\n……" : ""}`,
     { title: "批量删除邮件", positiveText: `删除 ${preview.count} 封`, danger: true },
   );
   if (!ok) return;

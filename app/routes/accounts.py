@@ -24,7 +24,9 @@ from .. import auth as web_auth
 from ..auth import current_session_token
 from ..config import BACKUP_PUBLIC_KEY
 from ..navigation import LABEL_COLORS
-from ..services import audit, backup, gmail_profile, google_oauth, login_sessions, telegram_service
+from ..services import (
+    audit, backup, gmail_profile, google_oauth, login_sessions, mail_providers, ms_oauth, telegram_service,
+)
 from ..services.html_sanitizer import sanitize_compose_html
 from ..services.idle_service import reconcile_idle
 from ..services.background import submit_bg
@@ -79,6 +81,14 @@ def _parse_account_line(line: str) -> Optional[tuple[str, str, Optional[str]]]:
     return email, password, display
 
 
+_OUTLOOK_PASSWORD_ERROR = "Outlook / Hotmail 邮箱已不支持密码登录，请使用 Microsoft 账号授权添加"
+
+
+def _reject_outlook_password(email: str) -> None:
+    if mail_providers.is_outlook_address(email):
+        raise HTTPException(status_code=400, detail=_OUTLOOK_PASSWORD_ERROR)
+
+
 def _get_account(db: Session, account_id: int) -> Account:
     account = db.get(Account, account_id)
     if account is None:
@@ -107,11 +117,13 @@ def list_accounts(request: Request, db: Session = Depends(get_db)):
         ).all()
     )
 
-    def is_oauth(account: Account) -> bool:
+    def secret_of(account: Account) -> Optional[str]:
         try:
-            return google_oauth.is_oauth_secret(decrypt_password(account.encrypted_password))
+            return decrypt_password(account.encrypted_password)
         except ValueError:
-            return False
+            return None
+
+    secrets_by_id = {int(a.id): secret_of(a) for a in accounts}
 
     # Google 授权回调后跳回设置页时的结果提示
     flash = request.session.pop(_ACCOUNTS_FLASH_KEY, None)
@@ -126,7 +138,8 @@ def list_accounts(request: Request, db: Session = Depends(get_db)):
                 "color": LABEL_COLORS[(int(a.id) - 1) % len(LABEL_COLORS)],
                 "enabled": bool(a.enabled),
                 "notify_enabled": bool(a.notify_enabled),
-                "oauth": is_oauth(a),
+                "oauth": mail_providers.is_oauth_secret(secrets_by_id[int(a.id)]),
+                "provider": mail_providers.key_for_secret(secrets_by_id[int(a.id)]),
                 "busy": is_account_busy(int(a.id)),
                 "backfilling": is_backfilling(int(a.id)),
                 "message_count": int(message_counts.get(a.id, 0)),
@@ -148,6 +161,7 @@ def list_accounts(request: Request, db: Session = Depends(get_db)):
             "notify_sent": TELEGRAM_NOTIFY_SENT,
         },
         "oauth_configured": google_oauth.is_configured(),
+        "ms_oauth_configured": ms_oauth.is_configured(),
         "flash": {"message": flash[0], "level": flash[1]} if flash else None,
     }
 
@@ -162,6 +176,7 @@ class AccountCreateBody(BaseModel):
 @router.post("/accounts", name="accounts.create")
 def create_account(request: Request, body: AccountCreateBody, db: Session = Depends(get_db)):
     email_norm = _validate_email(body.email)
+    _reject_outlook_password(email_norm)
     password_clean = (body.password or "").strip()
     if len(password_clean) < 8:
         raise HTTPException(status_code=400, detail="App password is required")
@@ -222,6 +237,9 @@ def batch_create_accounts(request: Request, body: BatchCreateBody, db: Session =
             email_norm = _validate_email(email_raw)
         except HTTPException:
             errors.append(f"第{lineno}行: 邮箱格式无效 ({email_raw})")
+            continue
+        if mail_providers.is_outlook_address(email_norm):
+            errors.append(f"第{lineno}行: {email_norm} 是 Outlook 邮箱，请使用 Microsoft 账号授权添加")
             continue
 
         password_clean = (password or "").strip()
@@ -337,6 +355,12 @@ def update_account(request: Request, account_id: int, body: AccountUpdateBody, d
     if body.display_name is not None:
         account.display_name = body.display_name.strip() or None
     if body.password:
+        try:
+            current_secret = decrypt_password(account.encrypted_password)
+        except ValueError:
+            current_secret = None
+        if ms_oauth.is_oauth_secret(current_secret) or mail_providers.is_outlook_address(account.email):
+            raise HTTPException(status_code=400, detail=_OUTLOOK_PASSWORD_ERROR)
         cleaned = body.password.strip()
         if len(cleaned) < 8:
             raise HTTPException(status_code=400, detail="App password is too short")
@@ -675,6 +699,79 @@ def oauth_callback(
     db.commit()
     audit.record_request(request, event, f"{email}（Google 授权）")
     logger.info("OAuth account linked email=%s account_id=%s", email, account.id)
+    reconcile_idle()   # 凭据变化：IDLE 连接用新的方式重连
+    submit_bg(sync_then_backfill, int(account.id))
+    return _accounts_redirect(request, message)
+
+
+# ---- 用 Microsoft 账号授权添加 Outlook 邮箱（OAuth2） ----------------------------
+_MS_OAUTH_STATE_KEY = "ms_oauth_state"
+_MS_OAUTH_VERIFIER_KEY = "ms_oauth_verifier"
+
+
+def _ms_oauth_redirect_uri(request: Request) -> str:
+    # 必须与 Azure 应用注册中登记的重定向 URI 完全一致
+    return str(request.url_for("accounts.ms_oauth_callback"))
+
+
+@oauth_router.get("/microsoft/start", name="accounts.ms_oauth_start")
+def ms_oauth_start(request: Request, login_hint: Optional[str] = None):
+    if not ms_oauth.is_configured():
+        return _accounts_redirect(request, "未配置 Microsoft OAuth 客户端", "error")
+    import secrets as _secrets
+
+    state = _secrets.token_urlsafe(32)
+    verifier, challenge = ms_oauth.new_pkce()
+    request.session[_MS_OAUTH_STATE_KEY] = state
+    request.session[_MS_OAUTH_VERIFIER_KEY] = verifier
+    url = ms_oauth.authorize_url(
+        _ms_oauth_redirect_uri(request), state, challenge, (login_hint or "").strip() or None
+    )
+    return RedirectResponse(url=url, status_code=303)
+
+
+@oauth_router.get("/microsoft/callback", name="accounts.ms_oauth_callback")
+def ms_oauth_callback(
+    request: Request,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+    error_description: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    import secrets as _secrets
+
+    expected = request.session.pop(_MS_OAUTH_STATE_KEY, None)
+    verifier = request.session.pop(_MS_OAUTH_VERIFIER_KEY, None)
+    if error:
+        detail = (error_description or "").splitlines()[0][:200] if error_description else ""
+        return _accounts_redirect(request, f"Microsoft 授权未完成：{error} {detail}".strip(), "warning")
+    if not expected or not state or not verifier or not _secrets.compare_digest(expected, state):
+        return _accounts_redirect(request, "授权请求已失效", "error")
+    try:
+        email, refresh_token, name = ms_oauth.exchange_code(code or "", _ms_oauth_redirect_uri(request), verifier)
+    except ms_oauth.OAuthError as exc:
+        logger.warning("Microsoft OAuth code exchange failed: %s", exc)
+        return _accounts_redirect(request, f"授权失败：{exc}", "error")
+
+    secret = encrypt_password(ms_oauth.make_secret(refresh_token))
+    account = db.execute(select(Account).where(func.lower(Account.email) == email)).scalar_one_or_none()
+    if account is None:
+        account = Account(email=email, encrypted_password=secret, enabled=True)
+        db.add(account)
+        message = f"已通过 Microsoft 授权添加 {email}"
+        event = "account_added"
+    else:
+        account.encrypted_password = secret
+        account.enabled = True
+        message = f"{email} 已重新通过 Microsoft 授权"
+        event = "account_updated"
+    if not account.display_name and name:
+        # 没填显示名称时用 Microsoft 账号中的姓名
+        account.display_name = name[:255]
+    db.commit()
+    audit.record_request(request, event, f"{email}（Microsoft 授权）")
+    logger.info("Microsoft OAuth account linked email=%s account_id=%s", email, account.id)
     reconcile_idle()   # 凭据变化：IDLE 连接用新的方式重连
     submit_bg(sync_then_backfill, int(account.id))
     return _accounts_redirect(request, message)

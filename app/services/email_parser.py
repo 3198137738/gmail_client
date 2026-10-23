@@ -55,6 +55,9 @@ class ParsedMessage:
     bcc_addr: Optional[str] = None
     date: Optional[datetime] = None
     message_id: Optional[str] = None
+    # 会话的第一封邮件的 Message-ID（References 的第一项，没有时取 In-Reply-To、再取自身），
+    # 服务器不提供会话 id（非 Gmail）时据此把往来邮件归为同一会话
+    thread_root: Optional[str] = None
     body_text: Optional[str] = None
     body_html: Optional[str] = None
     has_attachments: bool = False
@@ -198,6 +201,21 @@ def _walk_parts(msg: Message) -> Iterable[Message]:
         yield part
 
 
+_MSGID_RE = re.compile(r"<([^<>\s]+)>")
+
+
+def _thread_root(msg, message_id: Optional[str]) -> Optional[str]:
+    for header in ("References", "In-Reply-To"):
+        try:
+            found = _MSGID_RE.findall(str(msg.get(header) or ""))
+        except Exception:
+            found = []
+        if found:
+            return found[0].lower()
+    own = _MSGID_RE.findall(message_id or "")
+    return own[0].lower() if own else None
+
+
 def parse_email(
     raw_bytes: bytes,
     account_id: int,
@@ -216,6 +234,7 @@ def parse_email(
         date=_parse_date(msg.get("Date")),
         message_id=(msg.get("Message-ID") or "").strip() or None,
     )
+    parsed.thread_root = _thread_root(msg, parsed.message_id)
 
     text_chunks: list[str] = []
     html_chunks: list[str] = []

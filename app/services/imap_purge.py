@@ -138,9 +138,10 @@ def purge_sender_messages(
             all_mail = _discover_special_folder(client, "\\All")
             junk = _discover_junk_folder(client)
 
-            # 没有「所有邮件」（非 Gmail）时退回收件箱
+            # 没有「所有邮件」（Outlook 等）时查收件箱和存档文件夹
+            archive = None if all_mail else _discover_special_folder(client, "\\Archive")
             sources: list[str] = []
-            for folder in (all_mail or DEFAULT_FOLDER, junk):
+            for folder in (all_mail or DEFAULT_FOLDER, archive, junk):
                 if folder and folder != trash and folder not in sources:
                     sources.append(folder)
 

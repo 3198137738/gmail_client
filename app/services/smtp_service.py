@@ -1,4 +1,4 @@
-"""SMTP send service for Gmail (SSL on 465, with optional STARTTLS on 587)."""
+"""SMTP send service for Gmail / Outlook (SSL on 465, or STARTTLS on 587)."""
 from __future__ import annotations
 
 import logging
@@ -13,9 +13,9 @@ from email.utils import formataddr, formatdate
 from pathlib import Path
 from typing import Iterable, Optional
 
-from ..config import SMTP_HOST, SMTP_SSL_PORT, SMTP_STARTTLS_PORT, SMTP_TIMEOUT_SEC
+from ..config import SMTP_TIMEOUT_SEC
 from ..crypto import decrypt_password
-from . import google_oauth
+from . import google_oauth, mail_providers
 
 logger = logging.getLogger(__name__)
 
@@ -153,11 +153,12 @@ def send_email(
     )
     recipients = to_list + cc_list + bcc_list
 
-    if google_oauth.is_oauth_secret(password):
+    provider = mail_providers.for_secret(password)
+    if mail_providers.is_oauth_secret(password):
         try:
-            token = google_oauth.access_token_for_secret(password)
-        except google_oauth.OAuthError as exc:
-            raise SMTPSendError(f"Google 授权已失效：{exc}") from exc
+            token = mail_providers.access_token(from_email, password)
+        except mail_providers.OAuthError as exc:
+            raise SMTPSendError(f"{provider.oauth_name} 授权已失效：{exc}") from exc
 
         def authenticate(server) -> None:
             server.ehlo()
@@ -168,14 +169,15 @@ def send_email(
 
     context = ssl.create_default_context()
     try:
-        if use_ssl:
+        # Outlook 只提供 587（STARTTLS），忽略 use_ssl
+        if use_ssl and provider.smtp_ssl_port:
             with smtplib.SMTP_SSL(
-                SMTP_HOST, SMTP_SSL_PORT, timeout=SMTP_TIMEOUT_SEC, context=context
+                provider.smtp_host, provider.smtp_ssl_port, timeout=SMTP_TIMEOUT_SEC, context=context
             ) as server:
                 authenticate(server)
                 refused = server.send_message(msg, from_addr=from_email, to_addrs=recipients)
         else:
-            with smtplib.SMTP(SMTP_HOST, SMTP_STARTTLS_PORT, timeout=SMTP_TIMEOUT_SEC) as server:
+            with smtplib.SMTP(provider.smtp_host, provider.smtp_starttls_port, timeout=SMTP_TIMEOUT_SEC) as server:
                 server.ehlo()
                 server.starttls(context=context)
                 server.ehlo()

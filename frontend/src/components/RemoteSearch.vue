@@ -1,5 +1,5 @@
 <script setup>
-// 在 Gmail 服务器上搜索的结果：按账号分组。本地已有的邮件在本客户端打开，其余在 Gmail 网页版打开。
+// 在邮箱服务器（Gmail / Outlook）上搜索的结果：按账号分组。本地已有的邮件在本客户端打开，其余在网页版邮箱打开。
 import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { NAlert, NEmpty, NIcon, NModal, NSpin, NTag } from "naive-ui";
@@ -58,19 +58,19 @@ function open(item) {
   <NModal
     :show="show"
     preset="card"
-    :title="`在 Gmail 服务器上搜索：${q}`"
+    :title="`在邮箱服务器上搜索：${q}`"
     :bordered="false"
     style="width: min(760px, calc(100vw - 32px))"
     @update:show="(v) => emit('update:show', v)"
   >
     <div class="gm-remote">
       <div v-if="loading" class="gm-remote-loading">
-        <NSpin size="small" /> 正在搜索 Gmail（包括未同步、已归档的邮件）…
+        <NSpin size="small" /> 正在搜索邮箱服务器（包括未同步、已归档的邮件）…
       </div>
       <NAlert v-else-if="error" type="error">{{ error }}</NAlert>
       <template v-else-if="data">
-        <div class="gm-remote-summary">共找到 {{ totalFound }} 封，每个账号显示最新的 30 封。本地已同步的邮件会在这里直接打开，其余在 Gmail 网页版中打开。</div>
-        <NEmpty v-if="!groups.length" description="Gmail 中也没有找到相符的邮件" />
+        <div class="gm-remote-summary">共找到 {{ totalFound }} 封，每个账号显示最新的 30 封。本地已同步的邮件会在这里直接打开，其余在网页版邮箱（Gmail / Outlook）中打开。</div>
+        <NEmpty v-if="!groups.length" description="邮箱服务器中也没有找到相符的邮件" />
         <section v-for="g in groups" :key="g.account_id" class="gm-remote-group">
           <div class="gm-remote-account">
             {{ g.account_email }}
@@ -90,7 +90,7 @@ function open(item) {
             <span class="gm-remote-from" :title="it.from">{{ nameOf(it.from) }}</span>
             <span class="gm-remote-subject">{{ it.subject || "(无主题)" }}</span>
             <NTag v-if="it.local_id" size="small" type="info" :bordered="false">已同步</NTag>
-            <NIcon v-else :component="OpenInNewOutlined" :size="14" class="gm-remote-ext" title="在 Gmail 中打开" />
+            <NIcon v-else :component="OpenInNewOutlined" :size="14" class="gm-remote-ext" :title="g.provider === 'outlook' ? '在 Outlook 网页版中打开' : '在 Gmail 中打开'" />
             <span class="gm-remote-date">{{ listDate(it.date) }}</span>
           </div>
         </section>

@@ -97,7 +97,9 @@ function startEdit(a) {
   editForm.sync_gmail_name = false;
 }
 
-const NAME_SOURCES = { gmail: "已从 Gmail 获取姓名", sent: "Gmail 未提供姓名，已按已发送邮件的发件人名称填入" };
+const NAME_SOURCES = { gmail: "已从 Gmail 获取姓名", sent: "已按已发送邮件的发件人名称填入" };
+
+const isOutlook = (a) => a.provider === "outlook";
 
 async function fetchGmailName(a) {
   fetchingName.value = true;
@@ -105,7 +107,7 @@ async function fetchGmailName(a) {
   fetchingName.value = false;
   if (!result) return;
   if (!result.name) {
-    ui.message.warning("没有取到姓名：Gmail 中未设置，也没有可参考的已发送邮件");
+    ui.message.warning(isOutlook(a) ? "没有取到姓名：还没有可参考的已发送邮件" : "没有取到姓名：Gmail 中未设置，也没有可参考的已发送邮件");
     return;
   }
   editForm.display_name = result.name;
@@ -114,7 +116,7 @@ async function fetchGmailName(a) {
 
 async function saveEdit(a) {
   const body = { display_name: editForm.display_name, group_name: editForm.group_name || "" };
-  if (a.oauth && editForm.sync_gmail_name) body.sync_gmail_name = true;
+  if (a.oauth && !isOutlook(a) && editForm.sync_gmail_name) body.sync_gmail_name = true;
   if (editForm.password) body.password = editForm.password;
   if (sigEditor) body.signature_html = sigEditor.getInnerHtml();
   if (await run(post(`/api/accounts/${a.id}/update`, body), (r) => (r.gmail_name ? "已保存，Gmail 中的姓名已同步修改" : "已保存"))) {
@@ -174,6 +176,11 @@ function oauthStart() {
   // 需要整页跳转到 Google 授权页面
   hardNavigate("/accounts/oauth/start");
 }
+
+function msOauthStart() {
+  // 需要整页跳转到 Microsoft 授权页面
+  hardNavigate("/accounts/oauth/microsoft/start");
+}
 </script>
 
 <template>
@@ -186,7 +193,7 @@ function oauthStart() {
         <section class="gm-settings-row">
           <div class="gm-settings-label">
             邮箱账号：
-            <div class="gm-settings-hint">通过 IMAP / SMTP 和应用专用密码收发 Gmail 邮件</div>
+            <div class="gm-settings-hint">通过 IMAP / SMTP 收发 Gmail 和 Outlook 邮件</div>
           </div>
           <div class="gm-settings-content">
             <div class="gm-settings-actions">
@@ -214,7 +221,9 @@ function oauthStart() {
                 <div class="gm-acct-badges">
                   <NTag v-if="a.group_name" size="small" type="info" :bordered="false">{{ a.group_name }}</NTag>
                   <NTag v-if="!a.enabled" size="small" :bordered="false">已停用</NTag>
-                  <NTag v-if="a.oauth" size="small" type="success" :bordered="false" title="通过 Google 账号授权登录（OAuth2）">Google 授权</NTag>
+                  <NTag v-if="isOutlook(a)" size="small" type="info" :bordered="false" title="Outlook / Hotmail / Microsoft 365 邮箱">Outlook</NTag>
+                  <NTag v-if="isOutlook(a)" size="small" type="success" :bordered="false" title="通过 Microsoft 账号授权登录（OAuth2）">Microsoft 授权</NTag>
+                  <NTag v-else-if="a.oauth" size="small" type="success" :bordered="false" title="通过 Google 账号授权登录（OAuth2）">Google 授权</NTag>
                   <NTag v-else size="small" :bordered="false" title="使用应用专用密码登录">应用专用密码</NTag>
                   <NTag v-if="a.busy" size="small" type="info" :bordered="false">同步中…</NTag>
                   <NTag v-if="a.backfilling" size="small" type="warning" :bordered="false" title="正在后台同步更早的历史邮件">同步历史邮件中…</NTag>
@@ -247,15 +256,21 @@ function oauthStart() {
                     <div class="gm-name-field">
                       <div class="gm-name-row">
                         <NInput v-model:value="editForm.display_name" :maxlength="255" />
-                        <NButton secondary :loading="fetchingName" title="读取 Gmail 中设置的姓名" @click="fetchGmailName(a)">从 Gmail 获取</NButton>
+                        <NButton
+                          secondary
+                          :loading="fetchingName"
+                          :title="isOutlook(a) ? '按已发送邮件的发件人名称填入' : '读取 Gmail 中设置的姓名'"
+                          @click="fetchGmailName(a)"
+                        >{{ isOutlook(a) ? "从已发送邮件获取" : "从 Gmail 获取" }}</NButton>
                       </div>
-                      <NCheckbox v-if="a.oauth" v-model:checked="editForm.sync_gmail_name" :disabled="!editForm.display_name.trim()">
+                      <div v-if="isOutlook(a)" class="gm-settings-hint">Outlook 中的姓名请在 Microsoft 账号中修改</div>
+                      <NCheckbox v-else-if="a.oauth" v-model:checked="editForm.sync_gmail_name" :disabled="!editForm.display_name.trim()">
                         保存时同时修改 Gmail 中的姓名
                       </NCheckbox>
                       <div v-else class="gm-settings-hint">应用专用密码账号无法修改 Gmail 中的姓名，改为 Google 授权登录后可修改</div>
                     </div>
                   </NFormItem>
-                  <NFormItem label="新应用专用密码（留空则不修改）">
+                  <NFormItem v-if="!isOutlook(a)" label="新应用专用密码（留空则不修改）">
                     <NInput v-model:value="editForm.password" type="password" show-password-on="click" :input-props="{ autocomplete: 'new-password' }" />
                   </NFormItem>
                   <NFormItem label="签名（写邮件时自动添加，留空则不添加）">
@@ -290,7 +305,7 @@ function oauthStart() {
             <div class="gm-settings-hint">
               应用专用密码在
               <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener noreferrer">Google 账号 › 应用专用密码</a>
-              生成（需先开启两步验证）
+              生成（需先开启两步验证）。Outlook 邮箱已不支持密码登录，请用上方的 Microsoft 授权添加
             </div>
           </div>
           <div class="gm-settings-content">
@@ -302,6 +317,14 @@ function oauthStart() {
               <div v-else class="gm-settings-hint">
                 想用 Google 账号授权（OAuth2）代替应用专用密码？在 <code>.env</code> 中设置
                 <code>GOOGLE_OAUTH_CLIENT_ID</code> 与 <code>GOOGLE_OAUTH_CLIENT_SECRET</code> 后重启。
+              </div>
+              <template v-if="data.ms_oauth_configured">
+                <NButton type="primary" secondary @click="msOauthStart">使用 Microsoft 账号授权添加 Outlook 邮箱</NButton>
+                <div class="gm-settings-hint">支持 Outlook.com、Hotmail、Live 和 Microsoft 365 邮箱；已有的 Outlook 账号授权失效时再授权一次即可。</div>
+              </template>
+              <div v-else class="gm-settings-hint">
+                添加 Outlook / Hotmail 邮箱需要 Microsoft 账号授权：在 <code>.env</code> 中设置
+                <code>MICROSOFT_OAUTH_CLIENT_ID</code> 与 <code>MICROSOFT_OAUTH_CLIENT_SECRET</code> 后重启。
               </div>
             </div>
             <NTabs type="segment" size="small" class="gm-add-tabs">

@@ -61,6 +61,10 @@ IMAP_PORT = 993
 SMTP_HOST = "smtp.gmail.com"
 SMTP_SSL_PORT = 465
 SMTP_STARTTLS_PORT = 587
+# Outlook（Outlook.com / Hotmail / Microsoft 365）：只能用 Microsoft 账号授权（OAuth2）登录，
+# SMTP 只提供 587 端口（STARTTLS）
+OUTLOOK_IMAP_HOST = "outlook.office365.com"
+OUTLOOK_SMTP_HOST = "smtp.office365.com"
 IMAP_TIMEOUT_SEC = 30
 SMTP_TIMEOUT_SEC = 30
 
@@ -234,6 +238,14 @@ WEB_AUTH_2FA_RESET = _get_bool("WEB_AUTH_2FA_RESET", False)
 # https://<你的域名>/accounts/oauth/callback
 GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "").strip()
 GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
+# 用 Microsoft 账号授权（OAuth2）添加 Outlook 邮箱（Outlook.com / Hotmail / Microsoft 365）。
+# 在 Azure 门户「应用注册」中新建应用：支持的账户类型选「任何组织目录中的帐户和个人 Microsoft 帐户」，
+# 平台选「Web」，重定向 URI 填 https://<你的域名>/accounts/oauth/microsoft/callback；
+# 在「证书和密码」中新建客户端密码。API 权限无需手动添加（授权时按需申请）。
+MICROSOFT_OAUTH_CLIENT_ID = os.getenv("MICROSOFT_OAUTH_CLIENT_ID", "").strip()
+MICROSOFT_OAUTH_CLIENT_SECRET = os.getenv("MICROSOFT_OAUTH_CLIENT_SECRET", "").strip()
+# 租户：common（个人账号和工作/学校账号都可以）、consumers（只允许个人账号）、organizations 或租户 ID
+MICROSOFT_OAUTH_TENANT = os.getenv("MICROSOFT_OAUTH_TENANT", "").strip() or "common"
 WEB_AUTH_MAX_FAILURES = _get_positive_int("WEB_AUTH_MAX_FAILURES", 3)
 WEB_AUTH_LOCKOUT_MINUTES = _get_positive_int("WEB_AUTH_LOCKOUT_MINUTES", 30)
 WEB_AUTH_PERMANENT_BLOCK_AFTER_FAILURES = _get_bool(

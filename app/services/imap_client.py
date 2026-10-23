@@ -15,8 +15,8 @@ from typing import Optional
 from imapclient import IMAPClient
 from imapclient.exceptions import IMAPClientError, LoginError
 
-from ..config import DEFAULT_FOLDER, IMAP_HOST, IMAP_PORT, IMAP_TIMEOUT_SEC
-from . import google_oauth
+from ..config import DEFAULT_FOLDER, IMAP_TIMEOUT_SEC
+from . import mail_providers
 from .background import submit_bg
 
 logger = logging.getLogger(__name__)
@@ -103,22 +103,23 @@ def is_account_busy(account_id: int) -> bool:
 @contextmanager
 def _imap_client(email: str, password: str, *, timeout: Optional[int] = None):
     ssl_context = ssl.create_default_context()
+    provider = mail_providers.for_secret(password)
     client: Optional[IMAPClient] = None
     try:
         client = IMAPClient(
-            host=IMAP_HOST,
-            port=IMAP_PORT,
+            host=provider.imap_host,
+            port=provider.imap_port,
             ssl=True,
             ssl_context=ssl_context,
             timeout=timeout or IMAP_TIMEOUT_SEC,
         )
         try:
-            if google_oauth.is_oauth_secret(password):
+            if mail_providers.is_oauth_secret(password):
                 # OAuth2 授权的账号：用 refresh token 换取访问令牌，以 XOAUTH2 方式登录
                 try:
-                    token = google_oauth.access_token_for_secret(password)
-                except google_oauth.OAuthError as exc:
-                    raise IMAPSyncError(f"Google 授权已失效：{exc}") from exc
+                    token = mail_providers.access_token(email, password)
+                except mail_providers.OAuthError as exc:
+                    raise IMAPSyncError(f"{provider.oauth_name} 授权已失效：{exc}") from exc
                 client.oauth2_login(email, token)
             else:
                 client.login(email, password)
@@ -144,6 +145,14 @@ def _flag_to_str(flag) -> str:
     return str(flag)
 
 
+_FALLBACK_FOLDER_NAMES = {
+    "\\sent": ("sent items", "sent"),
+    "\\trash": ("deleted items", "deleted"),
+    "\\junk": ("junk email", "junk"),
+    "\\archive": ("archive",),
+}
+
+
 def _discover_special_folder(client: IMAPClient, flag: str) -> Optional[str]:
     """Return the IMAP folder name carrying the given special-use flag (e.g. ``\\Sent``)."""
     try:
@@ -152,10 +161,18 @@ def _discover_special_folder(client: IMAPClient, flag: str) -> Optional[str]:
         logger.warning("IMAP LIST failed during %s folder discovery", flag, exc_info=True)
         return None
     wanted = flag.lower()
+    names: list[str] = []
     for entry in folders:
         flags, name = entry[0], entry[2]  # entry[1] 是层级分隔符
+        name = name if isinstance(name, str) else name.decode("utf-8", errors="replace")
         if any(_flag_to_str(f).lower() == wanted for f in (flags or ())):
-            return name if isinstance(name, str) else name.decode("utf-8", errors="replace")
+            return name
+        names.append(name)
+    # 服务器没有标出特殊用途时，按 Outlook / Exchange 的默认文件夹名查找
+    for candidate in _FALLBACK_FOLDER_NAMES.get(wanted, ()):
+        for name in names:
+            if name.lower() == candidate:
+                return name
     return None
 
 

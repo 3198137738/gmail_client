@@ -98,9 +98,9 @@ const accountOptions = computed(() =>
 const totalSize = computed(() => files.value.reduce((n, f) => n + f.size, 0));
 
 // ---- 发件人姓名 ----
-// 账号没设置显示名称时，发出的邮件只带邮箱地址；从 Gmail 读取姓名作为建议，一键设为该账号的显示名称。
+// 账号没设置显示名称时，发出的邮件只带邮箱地址；从邮箱读取姓名作为建议（Gmail 设置或已发送邮件），一键设为该账号的显示名称。
 const currentAccount = computed(() => accounts.value.find((a) => a.id === form.accountId) || null);
-const fetchedNames = reactive({});   // 账号 id → Gmail 姓名（"" 表示没取到）
+const fetchedNames = reactive({});   // 账号 id → 邮箱中的姓名（"" 表示没取到）
 const savingName = ref(false);
 const suggestedName = computed(() => (currentAccount.value ? fetchedNames[currentAccount.value.id] : undefined));
 
@@ -662,7 +662,7 @@ const fullScreen = computed(() => isMobile.value || winState.value === "max");
           <NIcon :component="WarningAmberOutlined" :size="16" />
           <span>未设置发件人姓名，收件人只会看到邮箱地址。</span>
           <NButton v-if="suggestedName" text type="primary" size="small" :loading="savingName" @click="useSuggestedName">
-            使用 Gmail 中的姓名「{{ suggestedName }}」
+            使用邮箱中的姓名「{{ suggestedName }}」
           </NButton>
           <RouterLink v-else to="/accounts/" @click="closeCompose">去设置</RouterLink>
         </div>
@@ -719,7 +719,7 @@ const fullScreen = computed(() => isMobile.value || winState.value === "max");
             </span>
           </div>
           <div v-if="totalSize > MAX_TOTAL" class="gm-size-warning">
-            <NIcon :component="WarningAmberOutlined" :size="16" /> 附件总大小超过 25 MB，Gmail 可能拒收。
+            <NIcon :component="WarningAmberOutlined" :size="16" /> 附件总大小超过 25 MB，邮件服务器可能拒收。
           </div>
         </div>
 

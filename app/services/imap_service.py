@@ -40,6 +40,7 @@ Strategy
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import shutil
 import threading
@@ -129,6 +130,13 @@ def _int_or_none(value) -> Optional[int]:
         return int(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def header_thread_id(root: Optional[str]) -> Optional[int]:
+    """会话第一封邮件的 Message-ID → 会话 id（63 位正整数，按账号区分，与 Gmail 的会话 id 不会混用）。"""
+    if not root:
+        return None
+    return int.from_bytes(hashlib.sha256(root.encode("utf-8", "replace")).digest()[:8], "big") >> 1
 
 
 def _has_gmail_ext(client) -> bool:
@@ -320,10 +328,12 @@ def _parse_fetched_messages(
     blocked_senders: set[str],
     failed_uids: Optional[set[int]] = None,
     blocked_uids: Optional[list[int]] = None,
+    header_threads: bool = False,
 ) -> list[dict]:
     """解析下载到的邮件；传入 ``failed_uids`` 时，把没能解析的 UID 记进去。
 
     屏蔽发件人的邮件不入库；传入 ``blocked_uids`` 时把它们的 UID 记进去。
+    ``header_threads``：服务器没有 Gmail 会话 id（Outlook 等）时，按邮件头计算会话 id。
     """
     records: list[dict] = []
     for uid, data in fetched_items:
@@ -374,7 +384,10 @@ def _parse_fetched_messages(
                 "body_html": parsed.body_html,
                 "is_read": bool(_is_seen(data.get(b"FLAGS") or ())),
                 "is_starred": _has_flag(data.get(b"FLAGS"), FLAGGED_FLAG),
-                "thread_id": _int_or_none(data.get(b"X-GM-THRID")),
+                "thread_id": (
+                    header_thread_id(parsed.thread_root) if header_threads
+                    else _int_or_none(data.get(b"X-GM-THRID"))
+                ),
                 "labels": gmail_labels.parse_labels(data.get(b"X-GM-LABELS")),
                 "has_attachments": parsed.has_attachments,
                 # 自己发出的邮件不识别验证码
@@ -734,6 +747,7 @@ def _ingest_uids(
             fetched_items=new_items,
             blocked_senders=blocked_senders,
             failed_uids=failed_uids,
+            header_threads=not _has_gmail_ext(client),
             blocked_uids=blocked_uids,
         )
         if trusted_senders:

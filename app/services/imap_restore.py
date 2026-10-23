@@ -16,6 +16,7 @@ from .events import publish_new_mail
 from .imap_client import IMAPSyncError, _account_lock, _discover_sent_folder, _imap_client, _release_account_lock
 from .imap_service import (
     _existing_uids,
+    _has_gmail_ext,
     _normalize_sender_email,
     _parse_fetched_messages,
     _persist_parsed_messages,
@@ -76,6 +77,7 @@ def _restore_sender_from_folder(
             folder_kind=folder_kind,
             fetched_items=new_items,
             blocked_senders=set(),
+            header_threads=not _has_gmail_ext(client),
         )
         if not records:
             continue
