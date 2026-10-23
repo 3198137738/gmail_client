@@ -162,6 +162,9 @@ def list_accounts(request: Request, db: Session = Depends(get_db)):
         },
         "oauth_configured": google_oauth.is_configured(),
         "ms_oauth_configured": ms_oauth.is_configured(),
+        # 设置页的配置说明中显示，需原样登记到 Google Cloud / Azure
+        "oauth_redirect_uri": _oauth_redirect_uri(request),
+        "ms_oauth_redirect_uri": _ms_oauth_redirect_uri(request),
         "flash": {"message": flash[0], "level": flash[1]} if flash else None,
     }
 

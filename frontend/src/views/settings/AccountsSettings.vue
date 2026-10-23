@@ -100,6 +100,9 @@ function startEdit(a) {
 const NAME_SOURCES = { gmail: "已从 Gmail 获取姓名", sent: "已按已发送邮件的发件人名称填入" };
 
 const isOutlook = (a) => a.provider === "outlook";
+// 与后端 mail_providers.OUTLOOK_DOMAINS 一致：这些地址不能用密码添加
+const OUTLOOK_DOMAIN_RE = /@(outlook\.|hotmail\.|live\.|msn\.com$|windowslive\.com$|passport\.com$)/i;
+const singleIsOutlook = computed(() => OUTLOOK_DOMAIN_RE.test(single.email.trim()));
 
 async function fetchGmailName(a) {
   fetchingName.value = true;
@@ -303,36 +306,48 @@ function msOauthStart() {
           <div class="gm-settings-label">
             添加邮箱账号：
             <div class="gm-settings-hint">
-              应用专用密码在
+              Gmail 可用 Google 授权或应用专用密码（在
               <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener noreferrer">Google 账号 › 应用专用密码</a>
-              生成（需先开启两步验证）。Outlook 邮箱已不支持密码登录，请用上方的 Microsoft 授权添加
+              生成，需先开启两步验证）；Outlook 只能用 Microsoft 授权
             </div>
           </div>
           <div class="gm-settings-content">
-            <div class="gm-oauth-box">
-              <template v-if="data.oauth_configured">
-                <NButton type="primary" @click="oauthStart">使用 Google 账号授权添加（推荐）</NButton>
-                <div class="gm-settings-hint">无需应用专用密码；已有的账号再授权一次即可改为授权登录，随时可在 Google 账号中撤销。</div>
-              </template>
-              <div v-else class="gm-settings-hint">
-                想用 Google 账号授权（OAuth2）代替应用专用密码？在 <code>.env</code> 中设置
-                <code>GOOGLE_OAUTH_CLIENT_ID</code> 与 <code>GOOGLE_OAUTH_CLIENT_SECRET</code> 后重启。
+            <div class="gm-provider-cards">
+              <div class="gm-provider-card">
+                <div class="gm-provider-title">Gmail</div>
+                <NButton type="primary" :disabled="!data.oauth_configured" @click="oauthStart">使用 Google 账号授权添加</NButton>
+                <div v-if="data.oauth_configured" class="gm-settings-hint">推荐。无需应用专用密码，已有账号再授权一次即可改为授权登录。</div>
+                <div v-else class="gm-settings-hint">
+                  未配置 Google 授权，可用下方的应用专用密码添加。启用授权：在 <code>.env</code> 中设置
+                  <code>GOOGLE_OAUTH_CLIENT_ID</code> 与 <code>GOOGLE_OAUTH_CLIENT_SECRET</code> 后重启，重定向 URI 填
+                  <code class="gm-copy">{{ data.oauth_redirect_uri }}</code>
+                </div>
               </div>
-              <template v-if="data.ms_oauth_configured">
-                <NButton type="primary" secondary @click="msOauthStart">使用 Microsoft 账号授权添加 Outlook 邮箱</NButton>
-                <div class="gm-settings-hint">支持 Outlook.com、Hotmail、Live 和 Microsoft 365 邮箱；已有的 Outlook 账号授权失效时再授权一次即可。</div>
-              </template>
-              <div v-else class="gm-settings-hint">
-                添加 Outlook / Hotmail 邮箱需要 Microsoft 账号授权：在 <code>.env</code> 中设置
-                <code>MICROSOFT_OAUTH_CLIENT_ID</code> 与 <code>MICROSOFT_OAUTH_CLIENT_SECRET</code> 后重启。
+              <div class="gm-provider-card">
+                <div class="gm-provider-title">Outlook / Hotmail / Microsoft 365</div>
+                <NButton type="primary" :disabled="!data.ms_oauth_configured" @click="msOauthStart">使用 Microsoft 账号授权添加</NButton>
+                <div v-if="data.ms_oauth_configured" class="gm-settings-hint">Outlook 邮箱只能用授权添加；授权失效时再授权一次即可。</div>
+                <ol v-else class="gm-settings-hint gm-setup-steps">
+                  <li>
+                    在 <a href="https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noopener noreferrer">Azure 门户 › 应用注册</a>
+                    新建应用（只需一次，所有 Outlook 邮箱共用），账户类型选「任何组织目录中的帐户和个人 Microsoft 帐户」
+                  </li>
+                  <li>平台选「Web」，重定向 URI 填 <code class="gm-copy">{{ data.ms_oauth_redirect_uri }}</code></li>
+                  <li>在「证书和密码」中新建客户端密码</li>
+                  <li>在 <code>.env</code> 中设置 <code>MICROSOFT_OAUTH_CLIENT_ID</code>（应用程序 ID）与 <code>MICROSOFT_OAUTH_CLIENT_SECRET</code>（密码的值）后重启</li>
+                </ol>
               </div>
             </div>
+            <div class="gm-add-title">用应用专用密码添加 Gmail</div>
             <NTabs type="segment" size="small" class="gm-add-tabs">
               <NTabPane name="single" tab="单个添加">
                 <NForm class="gm-form" label-placement="top" @submit.prevent="addSingle">
                   <NFormItem label="Gmail 地址">
                     <NInput v-model:value="single.email" placeholder="you@gmail.com" :input-props="{ type: 'email' }" />
                   </NFormItem>
+                  <NAlert v-if="singleIsOutlook" type="warning" :show-icon="false" class="gm-outlook-warn">
+                    Outlook / Hotmail 邮箱已不支持密码登录，请使用上方的「使用 Microsoft 账号授权添加」。
+                  </NAlert>
                   <NFormItem label="显示名称（可选）">
                     <NInput v-model:value="single.display_name" placeholder="收件人看到的发件人名称" />
                   </NFormItem>
@@ -346,7 +361,7 @@ function msOauthStart() {
                   </NFormItem>
                   <NCheckbox v-model:checked="single.verify">添加前通过 IMAP 验证一次（约 3–5 秒）</NCheckbox>
                   <div class="gm-form-actions">
-                    <NButton type="primary" attr-type="submit" :loading="adding" :disabled="!single.email || !single.password">添加账号</NButton>
+                    <NButton type="primary" attr-type="submit" :loading="adding" :disabled="!single.email || !single.password || singleIsOutlook">添加账号</NButton>
                   </div>
                 </NForm>
               </NTabPane>
@@ -437,7 +452,13 @@ function msOauthStart() {
 .gm-acct-edit-actions { display: flex; gap: 8px; }
 .gm-sig-editor { display: flex; flex-direction: column; width: 100%; min-height: 120px; padding: 0 10px; border: 1px solid var(--gm-border); border-radius: var(--gm-radius); }
 .gm-sig-editor :deep(.gm-editor) { min-height: 80px; }
-.gm-oauth-box { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-bottom: 16px; }
+.gm-provider-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; max-width: 860px; margin-bottom: 20px; }
+.gm-provider-card { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 14px 16px; border: 1px solid var(--gm-border); border-radius: var(--gm-radius); }
+.gm-provider-title { font-weight: 600; }
+.gm-setup-steps { margin: 0; padding-left: 18px; line-height: 1.7; }
+.gm-copy { user-select: all; word-break: break-all; }
+.gm-add-title { font-weight: 600; margin-bottom: 8px; }
+.gm-outlook-warn { margin-bottom: 12px; }
 .gm-add-tabs { max-width: 520px; }
 .gm-form { padding-top: 12px; }
 .gm-form-actions { margin-top: 16px; }
