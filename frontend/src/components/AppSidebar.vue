@@ -146,11 +146,11 @@ function accountItem(a) {
 }
 
 // 设置了分组的账号放进可折叠的分组里（显示组内未读合计），没有分组的排在后面
-const accountOptions = computed(() => {
-  const items = [{ key: "all", label: "全部账号", icon: icon(LayersOutlined) }];
+function groupedAccountItems(accounts, keyPrefix) {
+  const items = [];
   const groups = new Map();
   const ungrouped = [];
-  for (const a of nav.value?.accounts || []) {
+  for (const a of accounts) {
     if (a.group) {
       if (!groups.has(a.group)) groups.set(a.group, []);
       groups.get(a.group).push(a);
@@ -161,7 +161,7 @@ const accountOptions = computed(() => {
   for (const [name, members] of [...groups].sort(([x], [y]) => x.localeCompare(y, "zh-CN"))) {
     const unread = members.reduce((n, a) => n + a.unread_inbox, 0);
     items.push({
-      key: `grp-${name}`,
+      key: `grp-${keyPrefix}${name}`,
       label: () =>
         h("span", { class: "gm-nav-label", title: `${name}（${members.length} 个账号）` }, [
           h("span", { class: "gm-nav-text" }, name),
@@ -173,8 +173,51 @@ const accountOptions = computed(() => {
   }
   items.push(...ungrouped.map(accountItem));
   return items;
+}
+
+// 同时有 Gmail 和 Outlook 账号时按服务商分区显示，各区有带颜色的标题
+const PROVIDERS = [
+  { key: "gmail", name: "Gmail", color: "#d93025" },
+  { key: "outlook", name: "Outlook", color: "#0078d4" },
+];
+
+function providerHeader(p, members) {
+  const unread = members.reduce((n, a) => n + a.unread_inbox, 0);
+  return () =>
+    h("span", { class: "gm-nav-provider", style: { "--provider-color": p.color } }, [
+      h(NIcon, { component: MailOutlined, color: p.color, size: 16 }),
+      h("span", { class: "gm-nav-provider-name" }, p.name),
+      h("span", { class: "gm-nav-provider-count" }, `${members.length} 个账号${unread ? ` · ${unread} 未读` : ""}`),
+    ]);
+}
+
+const accountOptions = computed(() => {
+  const items = [{ key: "all", label: "全部账号", icon: icon(LayersOutlined) }];
+  const accounts = nav.value?.accounts || [];
+  const present = PROVIDERS.filter((p) => accounts.some((a) => (a.provider || "gmail") === p.key));
+  if (present.length <= 1) return [...items, ...groupedAccountItems(accounts, "")];
+  for (const p of present) {
+    const members = accounts.filter((a) => (a.provider || "gmail") === p.key);
+    items.push({
+      type: "group",
+      key: `prov-${p.key}`,
+      label: providerHeader(p, members),
+      children: groupedAccountItems(members, `${p.key}-`),
+    });
+  }
+  return items;
 });
-const groupKeys = computed(() => accountOptions.value.filter((o) => o.children).map((o) => o.key));
+const groupKeys = computed(() => {
+  const keys = [];
+  const walk = (opts) => {
+    for (const o of opts) {
+      if (o.children && o.type !== "group") keys.push(o.key);
+      if (o.children) walk(o.children);
+    }
+  };
+  walk(accountOptions.value);
+  return keys;
+});
 
 // 分组默认展开；用户折叠过的分组记在 localStorage
 const COLLAPSED_KEY = "gm:collapsed-groups";
@@ -351,6 +394,24 @@ const mobileMenu = computed(() =>
     line-height: 18px;
     text-align: center;
 }
+/* 按服务商分区的标题（Gmail / Outlook）：左侧色条 + 名称 + 账号数 */
+.gm-nav :deep(.gm-nav-provider) {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    box-sizing: border-box;
+    width: 100%;
+    margin-top: 6px;
+    padding: 4px 8px;
+    border-left: 3px solid var(--provider-color);
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--provider-color) 8%, transparent);
+    color: var(--gm-text);
+}
+.gm-nav :deep(.gm-nav-provider-name) { font-weight: 600; font-size: 13px; color: var(--provider-color); }
+.gm-nav :deep(.gm-nav-provider-count) { margin-left: auto; font-size: 12px; color: var(--gm-text-3); }
+/* 分区标题所在的分组标题行：去掉 Naive 的左缩进，让色条与账号对齐、撑满整行 */
+.gm-nav :deep(.n-menu-item-group-title) { padding-left: 12px !important; padding-right: 12px; }
 .gm-nav-heading {
     display: flex;
     align-items: center;

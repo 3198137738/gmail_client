@@ -301,6 +301,7 @@ def nav_payload(request: Request) -> dict:
                 "unread_inbox": a.unread_inbox,
                 "unread_junk": a.unread_junk,
                 "group": a.group,
+                "provider": a.provider,
             }
             for a in nav.accounts
         ],

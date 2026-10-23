@@ -11,8 +11,10 @@ from typing import Optional
 from fastapi import Request
 from sqlalchemy import func, select
 
+from .crypto import decrypt_password
 from .database import session_scope
 from .models import Account, Draft, Label, Message, ScheduledSend
+from .services import mail_providers
 
 # 与 routes/messages.py 中记住所选账号的 cookie 一致
 PREFERRED_ACCOUNT_COOKIE = "gc_preferred_account"
@@ -30,6 +32,14 @@ class NavAccount:
     unread_inbox: int = 0
     unread_junk: int = 0
     group: str = ""
+    provider: str = mail_providers.GMAIL   # gmail / outlook，侧栏按服务商分区显示
+
+
+def _provider(account: Account) -> str:
+    try:
+        return mail_providers.key_for_secret(decrypt_password(account.encrypted_password))
+    except ValueError:
+        return mail_providers.GMAIL
 
 
 @dataclass
@@ -75,6 +85,7 @@ def _load(request: Request) -> Sidebar:
                 name=a.display_name or a.email,
                 color=LABEL_COLORS[(int(a.id) - 1) % len(LABEL_COLORS)],
                 group=a.group_name or "",
+                provider=_provider(a),
             )
             for a in rows
         ]
