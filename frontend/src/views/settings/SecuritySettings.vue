@@ -129,7 +129,7 @@ async function renewCert() {
   const text = force
     ? `证书还有 ${days} 天才到期，certbot 默认不会续订。确定强制重新签发吗？
 Let's Encrypt 限制同一证书每周最多签发 5 次。`
-    : "确定立即续订 HTTPS 证书吗？服务器会执行 certbot renew 并重新加载 nginx。";
+    : "确定立即续订 HTTPS 证书吗？服务器会重新签发证书并重新加载 nginx。";
   if (!(await confirm(text, { title: force ? "强制续订证书" : "续订证书", positiveText: force ? "强制续订" : "续订" }))) return;
   const result = await run(post("/api/cert/renew", { force }), (r) => r.message);
   if (result) {
