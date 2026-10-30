@@ -307,6 +307,18 @@ AUDIT_ALERT_NEW_IP = _get_bool("AUDIT_ALERT_NEW_IP", True)
 AUDIT_ALERT_IP_BLOCKED = _get_bool("AUDIT_ALERT_IP_BLOCKED", True)
 LOCAL_TIMEZONE = os.getenv("TZ", "").strip() or "Asia/Shanghai"
 
+# --- HTTPS 证书检测与续订 -------------------------------------------------------
+# 每天检测网站正在使用的证书，到期前 CERT_WARN_DAYS 天或证书无效时用 Telegram 提醒。
+# 检测的域名；留空时使用浏览器访问本站时的域名（打开一次「设置 › 安全」后记住）
+CERT_DOMAIN = os.getenv("CERT_DOMAIN", "").strip().lower()
+# 连接地址：默认直接连接域名。容器内连不通自己的公网域名时，可填宿主机地址 172.19.0.1
+# （仍按域名发送 SNI、校验证书）
+CERT_CHECK_ADDRESS = os.getenv("CERT_CHECK_ADDRESS", "").strip()
+CERT_CHECK_PORT = _get_positive_int("CERT_CHECK_PORT", 443)
+CERT_WARN_DAYS = _get_positive_int("CERT_WARN_DAYS", 14)
+# 与宿主机上的续订脚本（tools/cert_renew.sh）交换续订请求和结果的目录（data/ 已挂载到宿主机）
+CERT_DIR = DATA_DIR / "cert"
+
 LOG_MAX_MB = _get_positive_int("LOG_MAX_MB", 10)
 LOG_BACKUP_COUNT = _get_positive_int("LOG_BACKUP_COUNT", 5)
 

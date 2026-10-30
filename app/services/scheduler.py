@@ -21,7 +21,7 @@ from ..config import (
 )
 from ..database import session_scope
 from ..models import Account
-from . import audit, image_proxy, login_sessions
+from . import audit, cert_monitor, image_proxy, login_sessions
 from .background import submit_bg
 from .backup import safe_run_backup
 from .imap_backfill import schedule_all_backfills
@@ -142,6 +142,30 @@ def start_scheduler() -> BackgroundScheduler:
         max_instances=1,
         coalesce=True,
         misfire_grace_time=3600,
+    )
+    # HTTPS 证书：启动后检测一次，之后每天检测；每分钟查看宿主机续订脚本有没有写回结果
+    sched.add_job(
+        cert_monitor.safe_check_now,
+        "cron",
+        hour=9,
+        minute=7,
+        timezone=LOCAL_TIMEZONE,
+        next_run_time=datetime.now(timezone.utc) + timedelta(seconds=90),
+        id="cert-check",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+    sched.add_job(
+        cert_monitor.safe_poll_result,
+        "interval",
+        minutes=1,
+        next_run_time=datetime.now(timezone.utc) + timedelta(seconds=35),
+        id="cert-renew-result",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
     )
     if BACKUP_ENABLED:
         sched.add_job(

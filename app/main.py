@@ -42,6 +42,7 @@ from .routes import send as send_routes
 from .routes import sync as sync_routes
 from .routes import files as files_routes
 from .routes import cleanup as cleanup_routes
+from .routes import cert as cert_routes
 from .routes import rules as rules_routes
 from .routes import templates as templates_routes
 from .services import image_proxy as image_proxy_service
@@ -238,6 +239,7 @@ app.include_router(templates_routes.router)
 app.include_router(rules_routes.router)
 app.include_router(files_routes.router)
 app.include_router(cleanup_routes.router)
+app.include_router(cert_routes.router)
 app.include_router(send_routes.router)
 app.include_router(send_routes.body_router)
 app.include_router(attachments_routes.router)

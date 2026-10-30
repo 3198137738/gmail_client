@@ -42,6 +42,8 @@ EVENT_LABELS = {
     "rule_deleted": "删除自动规则",
     "rule_applied": "执行自动规则",
     "mail_cleanup": "批量清理邮件",
+    "cert_renew_requested": "请求续订 HTTPS 证书",
+    "cert_renewed": "HTTPS 证书续订",
     "mail_deleted": "删除邮件",
     "sender_purged": "永久删除发件人邮件",
     "sent_record_deleted": "删除发件记录",
