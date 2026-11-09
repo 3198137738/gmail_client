@@ -23,17 +23,11 @@ from typing import Any, Optional
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from ..config import (
-    TELEGRAM_API_TIMEOUT_SEC,
-    TELEGRAM_BOT_TOKEN,
-    TELEGRAM_CHAT_IDS,
-    TELEGRAM_NOTIFY_ENABLED,
-    TELEGRAM_NOTIFY_JUNK,
-    TELEGRAM_NOTIFY_SENT,
-)
+from ..config import TELEGRAM_API_TIMEOUT_SEC
 from ..database import session_scope
 from ..models import Account, Message
 from .attachment_restore import local_path
+from .telegram_settings import current as settings
 
 logger = logging.getLogger(__name__)
 
@@ -52,12 +46,12 @@ _ATTACHMENT_MAX_PER_MESSAGE = 8
 
 def is_configured() -> bool:
     """True when both a bot token and at least one chat id are set."""
-    return bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_IDS)
+    return settings().configured
 
 
 def is_enabled() -> bool:
     """True when configured *and* notifications are turned on."""
-    return is_configured() and TELEGRAM_NOTIFY_ENABLED
+    return is_configured() and settings().notify_enabled
 
 
 def _shorten(value: Optional[str], length: int) -> str:
@@ -67,12 +61,16 @@ def _shorten(value: Optional[str], length: int) -> str:
     return text if len(text) <= length else text[: length - 1] + "\u2026"
 
 
-def api_call(method: str, payload: dict[str, Any], *, timeout: Optional[int] = None) -> tuple[bool, Any]:
-    """Call a Bot API ``method``. Returns ``(ok, result_or_error_string)``."""
-    if not TELEGRAM_BOT_TOKEN:
-        return False, "未配置 TELEGRAM_BOT_TOKEN"
+def api_call(
+    method: str, payload: dict[str, Any], *, timeout: Optional[int] = None, bot_token: Optional[str] = None
+) -> tuple[bool, Any]:
+    """Call a Bot API ``method``. Returns ``(ok, result_or_error_string)``.
+    ``bot_token`` 用于保存设置前试发；默认用当前设置。"""
+    token = bot_token or settings().bot_token
+    if not token:
+        return False, "未配置机器人令牌"
 
-    url = f"{_API_BASE}/bot{TELEGRAM_BOT_TOKEN}/{method}"
+    url = f"{_API_BASE}/bot{token}/{method}"
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
     try:
@@ -89,9 +87,29 @@ def api_call(method: str, payload: dict[str, Any], *, timeout: Optional[int] = N
             detail = str(json.loads(raw).get("description") or raw)
         except Exception:
             detail = str(exc)
-        return False, f"HTTP {exc.code}: {detail}"
+        hint = _error_hint(exc.code, detail)
+        return False, f"{hint}（HTTP {exc.code}: {detail}）" if hint else f"HTTP {exc.code}: {detail}"
     except Exception as exc:  # network / DNS / timeout
         return False, str(exc)
+
+
+# Bot API 常见错误的处理办法（description 原文保留在括号里）
+_ERROR_HINTS = [
+    (403, "bot was blocked by the user", "你在 Telegram 中屏蔽了机器人：打开与机器人的对话，点「取消屏蔽」或「重新启动」后再试"),
+    (403, "user is deactivated", "接收通知的 Telegram 账号已注销，请修改 Chat ID"),
+    (403, "bot was kicked", "机器人已被移出群组，请重新把机器人加入群组"),
+    (403, "bot can't initiate conversation", "还没有和机器人对话过：在 Telegram 中打开机器人并发送 /start 后再试"),
+    (400, "chat not found", "找不到 Chat ID 对应的对话：确认 ID 正确，并先在 Telegram 中给机器人发送 /start"),
+    (401, "unauthorized", "机器人令牌无效，请在 @BotFather 中确认机器人令牌"),
+]
+
+
+def _error_hint(code: int, detail: str) -> str:
+    text = (detail or "").lower()
+    for hint_code, needle, hint in _ERROR_HINTS:
+        if code == hint_code and needle in text:
+            return hint
+    return ""
 
 
 def send_message(
@@ -103,9 +121,9 @@ def send_message(
     """Send an HTML message. With no ``chat_id``, broadcasts to all configured
     chats. Returns ``(ok, detail)`` where ``ok`` is True if at least one send
     succeeded."""
-    targets = [chat_id] if chat_id else list(TELEGRAM_CHAT_IDS)
+    targets = [chat_id] if chat_id else list(settings().chat_ids)
     if not targets:
-        return False, "未配置 TELEGRAM_CHAT_ID"
+        return False, "未配置 Chat ID"
 
     any_ok = False
     last_detail = "ok"
@@ -170,11 +188,12 @@ def send_document(
     timeout: Optional[int] = None,
 ) -> tuple[bool, str]:
     """Upload one document so Telegram users can download attachments."""
-    targets = [chat_id] if chat_id else list(TELEGRAM_CHAT_IDS)
+    targets = [chat_id] if chat_id else list(settings().chat_ids)
     if not targets:
-        return False, "未配置 TELEGRAM_CHAT_ID"
-    if not TELEGRAM_BOT_TOKEN:
-        return False, "未配置 TELEGRAM_BOT_TOKEN"
+        return False, "未配置 Chat ID"
+    token = settings().bot_token
+    if not token:
+        return False, "未配置机器人令牌"
     if not os.path.isfile(file_path):
         return False, "文件不存在"
 
@@ -200,7 +219,7 @@ def send_document(
             file_bytes=content,
             file_content_type=content_type,
         )
-        url = f"{_API_BASE}/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
+        url = f"{_API_BASE}/bot{token}/sendDocument"
         req = urllib.request.Request(
             url,
             data=body,
@@ -258,13 +277,27 @@ def get_me() -> tuple[bool, Any]:
     return api_call("getMe", {})
 
 
-def send_test_message() -> tuple[bool, str]:
-    """Send a fixed test message to all configured chats."""
-    return send_message(
-        "\u2705 <b>Telegram 通知已连接</b>\n"
-        "这是一条来自 Gmail 客户端的测试消息。\n"
-        "发送 /help 查看可用命令。"
-    )
+def send_test_message(
+    *, bot_token: Optional[str] = None, chat_ids: Optional[tuple[str, ...]] = None
+) -> tuple[bool, str]:
+    """给每个 Chat 发一条测试消息。全部成功才算成功；失败时列出每个失败的 Chat。"""
+    targets = list(chat_ids or settings().chat_ids)
+    if not targets:
+        return False, "未配置 Chat ID"
+    failures = []
+    for target in targets:
+        payload = {"chat_id": target, "text": _TEST_TEXT, "parse_mode": "HTML"}
+        ok, detail = api_call("sendMessage", payload, bot_token=bot_token)
+        if not ok:
+            failures.append(f"{target}：{detail}" if len(targets) > 1 else str(detail))
+    return not failures, "ok" if not failures else "；".join(failures)
+
+
+_TEST_TEXT = (
+    "\u2705 <b>Telegram 通知已连接</b>\n"
+    "这是一条来自邮件客户端的测试消息。\n"
+    "发送 /help 查看可用命令。"
+)
 
 
 def _action_keyboard(message_id: int, *, junk: bool = False) -> dict:
@@ -436,8 +469,8 @@ def notify_new_mail(account_id: int, *, inbox: int = 0, sent: int = 0, junk: int
         return
     inbox = max(int(inbox or 0), 0)
     sent = max(int(sent or 0), 0)
-    junk = max(int(junk or 0), 0) if TELEGRAM_NOTIFY_JUNK else 0
-    notify_sent = TELEGRAM_NOTIFY_SENT and sent > 0
+    junk = max(int(junk or 0), 0) if settings().notify_junk else 0
+    notify_sent = settings().notify_sent and sent > 0
     if inbox <= 0 and junk <= 0 and not notify_sent:
         return
 

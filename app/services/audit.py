@@ -57,6 +57,7 @@ EVENT_LABELS = {
     "backup_failed": "备份失败",
     "backup_uploaded": "异地备份完成",
     "backup_upload_failed": "异地备份失败",
+    "telegram_settings_changed": "修改 Telegram 设置",
 }
 
 # 需要在页面上突出显示的事件

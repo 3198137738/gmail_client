@@ -214,6 +214,8 @@ TELEGRAM_CHAT_IDS = tuple(
 TELEGRAM_NOTIFY_ENABLED = _get_bool(
     "TELEGRAM_NOTIFY_ENABLED", bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_IDS)
 )
+# .env 是否明确写了开关（没写时，在网页上配置好 Telegram 后自动开启）
+TELEGRAM_NOTIFY_ENABLED_SET = bool(os.getenv("TELEGRAM_NOTIFY_ENABLED", "").strip())
 # Also notify when new messages appear in the Sent folder (off by default).
 TELEGRAM_NOTIFY_SENT = _get_bool("TELEGRAM_NOTIFY_SENT", False)
 # 垃圾邮件文件夹收到新邮件时也推送通知（需同时开启 SYNC_JUNK_ENABLED）。

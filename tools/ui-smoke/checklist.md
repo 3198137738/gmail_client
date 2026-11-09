@@ -60,7 +60,8 @@
 - [x] 规则、安全、屏蔽与信任加载失败可重试 — `settings-error-retry`
 - [x] 手机：分区列表 → 详情（顶部返回） — `settings-mobile`
 - [x] 设置页不显示文件夹面板和邮件搜索 — `settings-groups-signature`
-- ☐ 两步验证开启 / 关闭、设备登出、IP 拉黑 / 解除、立即备份、证书检测 / 续订、规则与模板编辑、通知（Telegram、各账号开关）
+- [x] 通知：在网页上填写 Telegram 机器人令牌、Chat ID 和各推送开关，保存后立即生效（覆盖 .env）、令牌只显示末 4 位、格式校验、恢复为 .env — `settings-telegram`（后端：`tests/test_telegram_settings.py`）
+- ☐ 两步验证开启 / 关闭、设备登出、IP 拉黑 / 解除、立即备份、证书检测 / 续订、规则与模板编辑、Telegram 测试消息、各账号推送开关
 
 ## 打磨（阶段 6）
 - ☐ 键盘 Tab 时焦点框清晰；系统开启「减少动态效果」时没有过渡动画

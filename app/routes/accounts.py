@@ -16,7 +16,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import serializers as ser
-from ..config import TELEGRAM_CHAT_ID, TELEGRAM_NOTIFY_SENT
 from ..crypto import decrypt_password, encrypt_password
 from ..database import get_db
 from ..models import Account, Message, SyncState
@@ -27,7 +26,9 @@ from ..navigation import LABEL_COLORS
 from ..services import (
     audit, backup, gmail_profile, google_oauth, login_sessions, mail_providers, ms_oauth, telegram_service,
 )
+from ..services import telegram_settings
 from ..services.html_sanitizer import sanitize_compose_html
+from ..services.telegram_bot import restart_bot
 from ..services.idle_service import reconcile_idle
 from ..services.background import submit_bg
 from ..services.imap_backfill import is_backfilling, sync_then_backfill
@@ -155,12 +156,7 @@ def list_accounts(request: Request, db: Session = Depends(get_db)):
             }
             for a in accounts
         ],
-        "telegram": {
-            "configured": telegram_service.is_configured(),
-            "enabled": telegram_service.is_enabled(),
-            "chat_id": TELEGRAM_CHAT_ID,
-            "notify_sent": TELEGRAM_NOTIFY_SENT,
-        },
+        "telegram": _telegram_state(),
         "oauth_configured": google_oauth.is_configured(),
         "ms_oauth_configured": ms_oauth.is_configured(),
         # 设置页的配置说明中显示，需原样登记到 Google Cloud / Azure
@@ -316,12 +312,84 @@ def batch_delete_accounts(request: Request, body: IdsBody, db: Session = Depends
     return {"ok": True, "deleted": deleted}
 
 
+def _telegram_state() -> dict:
+    cfg = telegram_settings.current()
+    return {
+        "configured": cfg.configured,
+        "enabled": telegram_service.is_enabled(),
+        "token_masked": telegram_settings.masked_token(cfg.bot_token),
+        "chat_ids": list(cfg.chat_ids),
+        "chat_id": ",".join(cfg.chat_ids),
+        "notify_enabled": cfg.notify_enabled,
+        "notify_sent": cfg.notify_sent,
+        "notify_junk": cfg.notify_junk,
+        "commands_enabled": cfg.commands_enabled,
+        # 哪些项是网页上保存的（其余来自 .env）
+        "overridden": sorted(cfg.overridden),
+    }
+
+
+class TelegramSettingsBody(BaseModel):
+    bot_token: Optional[str] = None
+    clear_token: bool = False
+    chat_ids: Optional[str] = None
+    notify_enabled: Optional[bool] = None
+    notify_sent: Optional[bool] = None
+    notify_junk: Optional[bool] = None
+    commands_enabled: Optional[bool] = None
+    reset: bool = False
+
+
+@router.get("/telegram/settings", name="telegram.settings")
+def telegram_settings_get():
+    return _telegram_state()
+
+
+@router.post("/telegram/settings", name="telegram.settings_save")
+def telegram_settings_save(body: TelegramSettingsBody, request: Request):
+    """保存网页上的 Telegram 设置（覆盖 .env），立即生效。"""
+    before = telegram_settings.current()
+    try:
+        after = telegram_settings.save(body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    changes = []
+    if after.bot_token != before.bot_token:
+        changes.append("机器人令牌")
+    if after.chat_ids != before.chat_ids:
+        changes.append("Chat ID")
+    names = {"notify_enabled": "推送开关", "notify_sent": "已发送通知", "notify_junk": "垃圾邮件通知", "commands_enabled": "机器人命令"}
+    changes += [label for key, label in names.items() if getattr(after, key) != getattr(before, key)]
+    if body.reset:
+        changes.insert(0, "恢复为 .env 配置")
+    audit.record_request(request, "telegram_settings_changed", "、".join(changes) or "无变化")
+    if (after.bot_token, after.chat_ids, after.commands_enabled) != (before.bot_token, before.chat_ids, before.commands_enabled):
+        restart_bot()
+    logger.info("telegram settings saved changes=%s", changes)
+    return {**_telegram_state(), "message": "Telegram 设置已保存" if changes else "没有修改"}
+
+
+class TelegramTestBody(BaseModel):
+    # 不填则用已保存的设置；填了则用这里的值试发（不保存），方便保存前验证
+    bot_token: Optional[str] = None
+    chat_ids: Optional[str] = None
+
+
 @router.post("/accounts/telegram-test", name="accounts.telegram_test")
-def telegram_test():
+def telegram_test(body: Optional[TelegramTestBody] = None):
     """发一条 Telegram 测试消息，检查机器人配置。"""
-    if not telegram_service.is_configured():
-        return {"ok": False, "message": "Telegram 未配置"}
-    ok, detail = telegram_service.send_test_message()
+    body = body or TelegramTestBody()
+    token = (body.bot_token or "").strip()
+    chats = telegram_settings._parse_chat_ids(body.chat_ids or "")
+    if token or chats:
+        error = (token and telegram_settings.validate_token(token)) or telegram_settings.validate_chat_ids(chats)
+        if error:
+            return {"ok": False, "message": error}
+        ok, detail = telegram_service.send_test_message(bot_token=token or None, chat_ids=chats or None)
+    elif not telegram_service.is_configured():
+        return {"ok": False, "message": "Telegram 未配置：请先填写机器人令牌和 Chat ID"}
+    else:
+        ok, detail = telegram_service.send_test_message()
     logger.info("telegram-test ok=%s", ok)
     return {"ok": ok, "message": "Telegram 测试消息已发送，请查收" if ok else f"Telegram 发送失败：{detail}"}
 

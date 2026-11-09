@@ -920,6 +920,38 @@ export const steps = [
     },
   },
   {
+    name: "settings-telegram",
+    allow: [/^400 \/api\/telegram\/settings/],   // 故意填错令牌格式
+    async run(t) {
+      const { page, base } = t;
+      await t.login();
+      await page.goto(`${base}/settings/notifications`);
+      await page.locator(".gm-nt-status", { hasText: "未配置" }).waitFor();
+      const save = page.locator(".gm-nt-form button", { hasText: "保存" });
+      t.expect(await save.isDisabled(), "没有修改时「保存」应不可用");
+      // 格式不对时提示
+      await page.locator(".gm-nt-form input[type=password]").fill("bad-token");
+      await save.click();
+      await page.locator(".gm-snackbar", { hasText: "BotFather" }).waitFor();
+      // 保存后立即生效（推送中），令牌只显示末 4 位
+      await page.locator(".gm-nt-form input[type=password]").fill("123456789:AAHabcdefghijklmnopqrstuvwxyz012345");
+      await page.locator(".gm-nt-form input[placeholder^='接收通知']").fill("111, -100222");
+      // 冒烟环境的 .env 写了 TELEGRAM_NOTIFY_ENABLED=false：在网页上打开
+      await page.locator(".gm-nt-switch", { hasText: "推送新邮件" }).locator(".n-switch").click();
+      await save.click();
+      await page.locator(".gm-snackbar", { hasText: "Telegram 设置已保存" }).waitFor();
+      await page.locator(".gm-nt-status", { hasText: "推送中" }).waitFor();
+      await page.waitForTimeout(300);
+      t.expect(await save.isDisabled(), "保存后表单应回到无修改状态");
+      t.expect((await page.locator(".gm-nt-form input[type=password]").getAttribute("placeholder")).includes("123456789:…2345"), "令牌应只显示末 4 位");
+      await t.shot("saved");
+      // 恢复为 .env
+      await page.locator(".gm-nt-form button", { hasText: "恢复为 .env 配置" }).click();
+      await page.locator(".n-dialog .n-button", { hasText: "恢复" }).click();
+      await page.locator(".gm-nt-status", { hasText: "未配置" }).waitFor();
+    },
+  },
+  {
     name: "settings-error-retry",
     // 下面故意让接口返回 500
     allow: [/^500 \/api\/(rules|security|senders)/],

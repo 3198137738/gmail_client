@@ -5,7 +5,7 @@ Runs one daemon thread that polls ``getUpdates`` and reacts to:
 * inline button presses on notifications - ``read:<id>`` / ``del:<id>``;
 * text commands - ``/start``, ``/help``, ``/unread``, ``/status``.
 
-Only chats listed in ``TELEGRAM_CHAT_IDS`` are honoured; everything else is
+Only the configured chats (telegram_settings) are honoured; everything else is
 ignored. The loop is fully self-healing: any API/network error backs off and
 retries without taking the process down. Disabled when commands are turned off
 or the bot is not configured.
@@ -17,13 +17,10 @@ import threading
 from html import escape
 from typing import Any, Optional
 
-from ..config import (
-    TELEGRAM_BOT_COMMANDS_ENABLED,
-    TELEGRAM_CHAT_IDS,
-    TELEGRAM_POLL_TIMEOUT_SEC,
-)
+from ..config import TELEGRAM_POLL_TIMEOUT_SEC
 from . import audit
 from . import telegram_service as tg
+from .telegram_settings import current as settings
 from .message_actions import (
     count_unread,
     delete_by_id,
@@ -56,7 +53,7 @@ def _format_unread(counts: dict[str, int]) -> str:
 
 
 def _authorized() -> set[str]:
-    return {str(c) for c in TELEGRAM_CHAT_IDS}
+    return {str(c) for c in settings().chat_ids}
 
 
 class TelegramBot(threading.Thread):
@@ -72,6 +69,9 @@ class TelegramBot(threading.Thread):
         logger.info("Telegram bot listener started")
         while not self._stop.is_set():
             ok, result = tg.get_updates(self._offset, TELEGRAM_POLL_TIMEOUT_SEC)
+            if self._stop.is_set():
+                # 设置修改后已由新线程接手：这批更新留给新线程处理，避免重复执行
+                break
             if not ok:
                 logger.warning("Telegram getUpdates failed: %s", result)
                 if self._stop.wait(_ERROR_BACKOFF_SEC):
@@ -203,8 +203,8 @@ _lock = threading.Lock()
 
 def start_bot() -> None:
     global _bot
-    if not TELEGRAM_BOT_COMMANDS_ENABLED:
-        logger.info("Telegram bot commands disabled (TELEGRAM_BOT_COMMANDS_ENABLED=false)")
+    if not settings().commands_enabled:
+        logger.info("Telegram bot commands disabled")
         return
     if not tg.is_configured():
         logger.info("Telegram bot not configured; listener not started")
@@ -223,3 +223,9 @@ def shutdown_bot() -> None:
         _bot = None
     if bot is not None:
         bot.stop()
+
+
+def restart_bot() -> None:
+    """设置修改后按新令牌 / 开关重启监听。旧线程在当前长轮询返回后退出。"""
+    shutdown_bot()
+    start_bot()
