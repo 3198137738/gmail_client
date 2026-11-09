@@ -247,6 +247,9 @@ def test_remote_search_outlook(client, monkeypatch):
             self.calls = []
             self.folder = None
 
+        def capabilities(self):
+            return (b"IMAP4REV1", b"LITERAL+")
+
         def list_folders(self):
             return [
                 ((b"\\HasNoChildren",), b"/", "Inbox"),

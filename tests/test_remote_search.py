@@ -64,3 +64,77 @@ def test_remote_search(client, monkeypatch):
     assert items[1]["local_id"] == local and items[0]["local_id"] is None
     assert items[0]["unread"] is True and items[1]["unread"] is False
     assert items[0]["gmail_url"].endswith(f"#all/{1012:x}")
+
+
+class FakeOutlookIMAP:
+    """模拟 imapclient 3.0.1 的行为：没取过服务器能力时，发送非 ASCII 条件（literal）会因为
+    _cached_capabilities 为 None 抛 TypeError。"""
+
+    def __init__(self):
+        self._cached_capabilities = None
+        self.searches = []
+
+    def capabilities(self):
+        self._cached_capabilities = (b"IMAP4REV1", b"LITERAL+")
+        return self._cached_capabilities
+
+    def list_folders(self):
+        return [((b"\HasNoChildren",), b"/", "INBOX")]
+
+    def select_folder(self, folder, readonly=False):
+        pass
+
+    def search(self, criteria, charset=None):
+        if charset and b"LITERAL+" in self._cached_capabilities:
+            pass
+        self.searches.append((criteria, charset))
+        return [7]
+
+    def fetch(self, uids, items):
+        return {7: {
+            b"BODY[HEADER.FIELDS (FROM TO SUBJECT MESSAGE-ID)]": b"From: Google <no-reply@accounts.google.com>\r\n"
+            b"Subject: =?utf-8?b?44GT44GuIEdvb2dsZSDjgqLjgqvjgqbjg7Pjg4g=?=\r\nMessage-ID: <o1@x>\r\n\r\n",
+            b"INTERNALDATE": datetime(2026, 11, 1),
+            b"FLAGS": (),
+        }}
+
+
+def test_outlook_search_with_non_ascii_query(monkeypatch):
+    import app.services.remote_search as rs
+    from app.services import mail_providers
+
+    fake = FakeOutlookIMAP()
+
+    @contextmanager
+    def fake_client(email, password, **kw):
+        yield fake
+
+    monkeypatch.setattr(rs, "_imap_client", fake_client)
+    monkeypatch.setattr(rs, "decrypt_password", lambda enc: "secret")
+    monkeypatch.setattr(rs.mail_providers, "key_for_secret", lambda pw: mail_providers.OUTLOOK)
+    result = rs._search_account(1, "me@outlook.com", "x", "この Google アカウント", "この Google アカウント")
+    assert result["error"] is None
+    assert fake.searches == [(["TEXT", "この Google アカウント"], "UTF-8")]
+    assert result["items"][0]["subject"] == "この Google アカウント"
+
+
+def test_unexpected_error_only_affects_that_account(client, monkeypatch):
+    import app.services.remote_search as rs
+
+    good = FakeIMAP()
+
+    @contextmanager
+    def fake_client(email, password, **kw):
+        if email == "broken@example.com":
+            raise TypeError("argument of type 'NoneType' is not iterable")
+        yield good
+
+    monkeypatch.setattr(rs, "_imap_client", fake_client)
+    login(client)
+    ok_acc = create_account("fine@example.com")
+    bad_acc = create_account("broken@example.com")
+    resp = client.get("/api/messages/remote-search", params={"q": "季度"})
+    assert resp.status_code == 200
+    by_id = {a["account_id"]: a for a in resp.json()["accounts"]}
+    assert by_id[bad_acc]["error"] == "搜索出错：TypeError" and by_id[bad_acc]["items"] == []
+    assert by_id[ok_acc]["error"] is None and len(by_id[ok_acc]["items"]) == 2

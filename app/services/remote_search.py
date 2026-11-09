@@ -149,6 +149,10 @@ def _search_imap(client, email: str, query: str, result: dict) -> None:
     """标准 IMAP 搜索（Outlook）：收件箱、存档、已发送邮件分别查找后按时间合并。"""
     criteria = to_imap_criteria(query)
     ascii_only = all(isinstance(c, date) or str(c).isascii() for c in criteria)
+    if not ascii_only:
+        # 中文等非 ASCII 条件以 literal 发送，imapclient 发送前要查服务器能力（LITERAL+），
+        # 但不会自己去取：登录响应没带能力列表时（Outlook）会因为 None 抛 TypeError。先取一次。
+        client.capabilities()
     folders = ["INBOX"]
     for flag in ("\\Archive", "\\Sent"):
         folder = _discover_special_folder(client, flag)
@@ -188,6 +192,11 @@ def _search_account(account_id: int, email: str, encrypted: str, query: str, gma
     except (IMAPSyncError, IMAPClientError, OSError) as exc:
         logger.warning("Remote search failed account=%s: %s", account_id, exc)
         result["error"] = str(exc) or exc.__class__.__name__
+        result["items"] = []
+    except Exception as exc:
+        # 意外错误只影响这个账号，其他账号的结果照常返回
+        logger.exception("Remote search crashed account=%s", account_id)
+        result["error"] = f"搜索出错：{exc.__class__.__name__}"
         result["items"] = []
     return result
 
