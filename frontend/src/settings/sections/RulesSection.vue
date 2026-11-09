@@ -1,10 +1,10 @@
 <script setup>
 import { computed, onMounted, ref } from "vue";
 import { NButton, NCheckbox, NForm, NFormItem, NInput, NModal, NSelect, NSpin, NSwitch, NTag } from "naive-ui";
-import SettingsHeader from "../../components/SettingsHeader.vue";
+import GmEmptyState from "../../ui/GmEmptyState.vue";
 import { get, post } from "../../api";
 import { store } from "../../store";
-import { confirm, run, ui } from "../../ui";
+import { confirm, run, toast } from "../../ui";
 import { refreshNav } from "../../composables/common";
 
 const FIELD_NAMES = { from: "发件人", to: "收件人（含抄送）", subject: "主题", any: "发件人 / 收件人 / 主题" };
@@ -19,9 +19,14 @@ const accountOptions = computed(() => [
   ...(store.nav?.accounts || []).map((a) => ({ value: a.id, label: a.email })),
 ]);
 
+const loadError = ref("");
 async function load() {
-  const data = await run(get("/api/rules"));
-  if (data) items.value = data.items;
+  try {
+    items.value = (await get("/api/rules")).items;
+    loadError.value = "";
+  } catch (err) {
+    loadError.value = err.message || "加载失败";
+  }
 }
 onMounted(load);
 
@@ -68,12 +73,12 @@ async function remove(r) {
 
 async function applyExisting(r) {
   const text = r.delete
-    ? `对已有邮件执行「${r.name || r.contains}」？\n收件箱和垃圾邮件中所有匹配的邮件都会被删除（移到 Gmail 的已删除邮件）。`
+    ? `对已有邮件执行「${r.name || r.contains}」？\n收件箱和垃圾邮件中所有匹配的邮件都会被删除（移到邮箱服务器的已删除邮件）。`
     : `对已有邮件执行「${r.name || r.contains}」？收件箱和垃圾邮件中所有匹配的邮件都会执行这些动作。`;
   if (!(await confirm(text, { danger: r.delete, positiveText: "执行" }))) return;
   const result = await run(post(`/api/rules/${r.id}/apply`));
   if (result) {
-    ui.message.success(`已对 ${result.affected} 封邮件执行`);
+    toast(`已对 ${result.affected} 封邮件执行`);
     load();
     refreshNav();
     store.listVersion += 1;
@@ -82,18 +87,18 @@ async function applyExisting(r) {
 </script>
 
 <template>
-  <div class="gm-panel gm-settings-page">
-    <SettingsHeader />
+  <div class="gm-set-page">
     <div class="gm-settings">
       <section class="gm-settings-row">
         <div class="gm-settings-label">
-          自动规则：
+          自动规则
           <div class="gm-settings-hint">
-            收到新邮件时，按规则自动标为已读、加星标、加标签或删除，同时同步到 Gmail。只对之后收到的新邮件生效；已有的邮件可以点「对已有邮件执行」。
+            收到新邮件时，按规则自动标为已读、加星标、加标签或删除，同时同步到邮箱服务器。只对之后收到的新邮件生效；已有的邮件可以点「对已有邮件执行」。
           </div>
         </div>
         <div class="gm-settings-content">
-          <NSpin v-if="!items" />
+          <GmEmptyState v-if="loadError && !items" tone="error" title="加载失败" :hint="loadError" action-text="重试" @action="load" />
+          <NSpin v-else-if="!items" />
           <template v-else>
             <div v-for="r in items" :key="r.id" class="gm-rule" :class="{ 'is-off': !r.enabled }">
               <NSwitch :value="r.enabled" size="small" @update:value="(v) => toggle(r, v)" />
@@ -150,7 +155,7 @@ async function applyExisting(r) {
               <span>加标签</span>
               <NInput v-model:value="editing.label_name" size="small" placeholder="标签名，不存在时自动创建" />
             </div>
-            <NCheckbox v-model:checked="editing.delete">删除（移到 Gmail 的已删除邮件）</NCheckbox>
+            <NCheckbox v-model:checked="editing.delete">删除（移到邮箱服务器的已删除邮件）</NCheckbox>
           </div>
         </NFormItem>
         <NFormItem label="启用">
@@ -168,7 +173,6 @@ async function applyExisting(r) {
 </template>
 
 <style scoped>
-.gm-settings-page { overflow-y: auto; background: var(--gm-bg); }
 .gm-rule { display: flex; align-items: flex-start; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--gm-divider); }
 .gm-rule.is-off .gm-rule-main { opacity: .55; }
 .gm-rule-main { flex: 1; min-width: 0; }

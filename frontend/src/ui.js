@@ -1,4 +1,5 @@
-import { reactive } from "vue";
+import { h, reactive, ref } from "vue";
+import { NInput } from "naive-ui";
 
 // 在组件之外也能使用 Naive UI 的提示、对话框（由 App.vue 中的 UiBridge 注入实例）。
 export const ui = {
@@ -35,6 +36,67 @@ export function confirm(content, { title = "确认", positiveText = "确定", da
       onMaskClick: () => done(false),
       onAfterLeave: () => done(false),
     });
+  });
+}
+
+// 输入对话框（插入链接、保存模板等），返回 Promise<输入的文字 | null（取消）>。
+// validate(value) 返回错误文字时不关闭对话框并提示。
+export function prompt({ title, label = "", value = "", placeholder = "", positiveText = "确定", validate } = {}) {
+  return new Promise((resolve) => {
+    if (!ui.dialog) {
+      resolve(window.prompt(title, value));
+      return;
+    }
+    const text = ref(value);
+    const error = ref("");
+    // 对话框完全关闭（焦点交还页面）后才返回结果：调用方随后要把焦点放回编辑器等位置
+    let result = null;
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+    const dialog = ui.dialog.create({
+      title,
+      showIcon: false,
+      autoFocus: false,
+      content: () =>
+        h("div", { class: "gm-prompt" }, [
+          label ? h("div", { class: "gm-prompt-label" }, label) : null,
+          h(NInput, {
+            value: text.value,
+            placeholder,
+            autofocus: true,
+            status: error.value ? "error" : undefined,
+            "onUpdate:value": (v) => {
+              text.value = v;
+              error.value = "";
+            },
+            onKeydown: (ev) => {
+              if (ev.key === "Enter") {
+                ev.preventDefault();
+                submit();
+              }
+            },
+          }),
+          error.value ? h("div", { class: "gm-prompt-error" }, error.value) : null,
+        ]),
+      positiveText,
+      negativeText: "取消",
+      onPositiveClick: () => submit(),
+      onAfterLeave: done,
+    });
+    function submit() {
+      const message = validate?.(text.value);
+      if (message) {
+        error.value = message;
+        return false;
+      }
+      result = text.value;
+      dialog.destroy();
+      return true;
+    }
   });
 }
 

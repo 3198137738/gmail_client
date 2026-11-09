@@ -371,7 +371,7 @@ const emptyText = computed(() => {
   if (!d) return null;
   if (d.unread_only) return { title: "没有未读邮件", hint: "所有邮件都已读", link: "查看全部邮件", action: () => toggleUnreadOnly("all") };
   if (d.q) return { title: "没有与搜索条件相符的邮件", icon: SearchOffOutlined, link: "清除搜索", action: () => list.goView({ q: undefined, page: undefined }) };
-  if (!d.has_accounts) return { title: "还没有添加邮箱账号", hint: "先到设置添加 Gmail 或 Outlook 账号", link: "前往设置", action: () => router.push("/accounts/") };
+  if (!d.has_accounts) return { title: "还没有添加邮箱账号", hint: "先到设置添加 Gmail 或 Outlook 账号", link: "前往设置", action: () => router.push("/settings/accounts") };
   if (d.current_label) return { title: `没有带「${d.current_label.name}」标签的邮件` };
   if (d.kind === "snoozed") return { title: "没有延后的邮件", hint: "在邮件上点「延后」，邮件会在指定时间回到收件箱最上面" };
   if (d.kind === "starred") return { title: "没有已加星标的邮件", hint: "点邮件旁边的星形图标即可加星标，方便以后查找" };

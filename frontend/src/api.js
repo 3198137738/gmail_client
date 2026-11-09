@@ -81,4 +81,29 @@ export async function api(path, options = {}) {
 }
 
 export const get = (path, query, options) => api(path, { ...options, query });
+
+// 带上传进度的表单提交（附件上传）。onProgress(0..1)；返回 { promise, abort }。
+export function upload(path, form, onProgress) {
+  const xhr = new XMLHttpRequest();
+  const promise = new Promise((resolve, reject) => {
+    xhr.open("POST", path);
+    xhr.setRequestHeader("Accept", "application/json");
+    if (store.session?.csrf_token) xhr.setRequestHeader("X-CSRF-Token", store.session.csrf_token);
+    xhr.upload.onprogress = (ev) => ev.lengthComputable && onProgress?.(ev.loaded / ev.total);
+    xhr.onload = () => {
+      let data = null;
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch {
+        /* 非 JSON */
+      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else reject(new ApiError(data?.detail || `上传失败（${xhr.status}）`, xhr.status, data));
+    };
+    xhr.onerror = () => reject(new ApiError("网络错误，上传失败", 0));
+    xhr.onabort = () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+    xhr.send(form);
+  });
+  return { promise, abort: () => xhr.abort() };
+}
 export const post = (path, json, options) => api(path, { ...options, method: "POST", json: json ?? {} });

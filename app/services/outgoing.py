@@ -10,12 +10,43 @@ from fastapi import UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..config import ATTACHMENTS_DIR
 from ..models import Account, Attachment, Draft, SentMessage
 from . import audit
 from .attachment_restore import local_path, restore_message_files
 from .smtp_service import SMTPSendError, send_email
 
 logger = logging.getLogger(__name__)
+
+# 草稿附件：attachments/drafts/<草稿 id>/
+DRAFTS_DIR = ATTACHMENTS_DIR / "drafts"
+
+
+def draft_dir(draft_id: int) -> Path:
+    return DRAFTS_DIR / str(int(draft_id))
+
+
+def remove_draft_files(draft_id: Optional[int]) -> None:
+    """删除草稿的附件文件（草稿记录删除后调用）。"""
+    if draft_id:
+        shutil.rmtree(draft_dir(draft_id), ignore_errors=True)
+
+
+def copy_draft_attachments(draft: Optional[Draft], target_dir: Path) -> list[Path]:
+    """把草稿里的附件复制到发信目录（草稿在发送成功后才删除，失败时附件仍在草稿里）。"""
+    if draft is None:
+        return []
+    target_dir.mkdir(parents=True, exist_ok=True)
+    paths: list[Path] = []
+    for att in draft.attachments:
+        src = Path(att.path)
+        if not src.is_file():
+            logger.warning("Draft attachment missing on disk: %s", att.path)
+            continue
+        dest = unique_path(target_dir, att.filename)
+        shutil.copyfile(src, dest)
+        paths.append(dest)
+    return paths
 
 
 def unique_path(directory: Path, name: str) -> Path:
@@ -144,6 +175,8 @@ def deliver(
     if status != "failed" and draft is not None:
         db.delete(draft)   # 已发出，草稿不再需要
     db.commit()
+    if status != "failed" and draft is not None:
+        remove_draft_files(draft_id)
     return record
 
 

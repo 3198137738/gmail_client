@@ -35,6 +35,8 @@ class Account(Base):
     signature_html: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # 分组名（如「工作」「注册用」），侧栏按分组折叠显示；为空表示不分组
     group_name: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
+    # 发信连接方式：False 为 SSL（465 端口，默认），True 为 STARTTLS（587 端口）；Outlook 固定用 STARTTLS
+    smtp_starttls: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0", nullable=False)
     encrypted_password: Mapped[str] = mapped_column(Text, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     notify_enabled: Mapped[bool] = mapped_column(
@@ -315,7 +317,28 @@ class Draft(Base):
     )
 
     account = relationship("Account", back_populates="drafts")
+    attachments = relationship(
+        "DraftAttachment", back_populates="draft", cascade="all, delete-orphan", order_by="DraftAttachment.id"
+    )
 
+
+
+class DraftAttachment(Base):
+    """草稿的附件：文件保存在 attachments/drafts/<草稿 id>/，发送或删除草稿时一起删除。"""
+
+    __tablename__ = "draft_attachments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    draft_id: Mapped[int] = mapped_column(
+        ForeignKey("drafts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    path: Mapped[str] = mapped_column(Text, nullable=False)
+    size: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    mime_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
+
+    draft = relationship("Draft", back_populates="attachments")
 
 class ScheduledSend(Base):
     """定时发送：到 send_at 时由后台任务发出。附件在安排时就保存到 attachments_dir。"""

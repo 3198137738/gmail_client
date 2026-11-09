@@ -1,13 +1,17 @@
 <script setup>
-// 批量清理：跨账号按发件人汇总邮件数量，选中发件人（或只按时间）后先预览再一次删除，同步到 Gmail
+// 批量清理：跨账号按发件人汇总邮件数量，选中发件人（或只按时间）后先预览再一次删除，同步到邮箱服务器。
+// 星标和已延后的邮件始终保留。
 import { computed, reactive, ref, watch } from "vue";
-import { NButton, NCheckbox, NIcon, NInput, NRadioButton, NRadioGroup, NSelect, NSpin } from "naive-ui";
-import { SearchOutlined } from "@vicons/material";
+import { NButton, NCheckbox, NIcon, NInput, NSelect } from "naive-ui";
+import { CleaningServicesOutlined, SearchOutlined } from "@vicons/material";
+import GmPage from "../ui/GmPage.vue";
+import GmAvatar from "../ui/GmAvatar.vue";
 import { post } from "../api";
 import { store } from "../store";
 import { confirm, run, toast } from "../ui";
 import { refreshNav } from "../composables/common";
-import { avatarColor, initial, listDate } from "../format";
+import { useResource } from "../composables/useResource";
+import { listDate } from "../format";
 
 const SCOPES = [
   { value: "inbox", label: "收件箱" },
@@ -24,8 +28,8 @@ const AGES = [
 ];
 
 const filters = reactive({ scope: "inbox", account_id: 0, older_than_days: 0, only_read: false });
-const data = ref(null);
-const loading = ref(false);
+const res = useResource(() => post("/api/cleanup/senders", { ...filters, senders: [] }), { immediate: false });
+const data = res.data;
 const deleting = ref(false);
 const selected = ref(new Set());
 const keyword = ref("");
@@ -49,25 +53,17 @@ const allVisibleChecked = computed(() =>
   visibleSenders.value.length > 0 && visibleSenders.value.every((s) => selected.value.has(s.email)),
 );
 
-function body() {
-  return { ...filters, senders: [...selected.value] };
-}
-
 async function load() {
-  loading.value = true;
-  const result = await run(post("/api/cleanup/senders", { ...filters, senders: [] }));
-  loading.value = false;
+  const result = await res.reload();
   if (!result) return;
-  data.value = result;
   const present = new Set(result.senders.map((s) => s.email));
   selected.value = new Set([...selected.value].filter((e) => present.has(e)));
 }
-
 watch(filters, load, { immediate: true });
 
-function toggle(email, checked) {
+function toggle(email) {
   const next = new Set(selected.value);
-  checked ? next.add(email) : next.delete(email);
+  next.has(email) ? next.delete(email) : next.add(email);
   selected.value = next;
 }
 
@@ -78,7 +74,8 @@ function toggleAll(checked) {
 }
 
 async function clean() {
-  const preview = await run(post("/api/cleanup/preview", body()));
+  const body = { ...filters, senders: [...selected.value] };
+  const preview = await run(post("/api/cleanup/preview", body));
   if (!preview) return;
   if (!preview.count) {
     toast("没有符合条件的邮件");
@@ -91,7 +88,7 @@ async function clean() {
   );
   if (!ok) return;
   deleting.value = true;
-  const result = await run(post("/api/cleanup/delete", body()));
+  const result = await run(post("/api/cleanup/delete", body));
   deleting.value = false;
   if (!result) return;
   toast(`已删除 ${result.deleted} 封邮件`);
@@ -103,141 +100,138 @@ async function clean() {
 </script>
 
 <template>
-  <div class="gm-panel">
-    <div class="gm-toolbar">
-      <div class="gm-toolbar-start">
-        <span class="gm-toolbar-title">批量清理</span>
-        <NRadioGroup v-model:value="filters.scope" size="small">
-          <NRadioButton v-for="s in SCOPES" :key="s.value" :value="s.value">{{ s.label }}</NRadioButton>
-        </NRadioGroup>
-        <NSelect
-          v-if="accountOptions.length > 2"
-          v-model:value="filters.account_id"
-          :options="accountOptions"
-          size="small"
-          class="gm-cleanup-account"
-        />
-        <NSelect v-model:value="filters.older_than_days" :options="AGES" size="small" class="gm-cleanup-age" />
-        <NCheckbox v-model:checked="filters.only_read">只清理已读</NCheckbox>
+  <GmPage
+    title="批量清理"
+    :count="data ? `${data.total} 封邮件` : ''"
+    :loading="res.loading.value"
+    :ready="!!data"
+    :error="res.error.value"
+    :empty="!!data && !visibleSenders.length"
+    empty-title="没有符合条件的邮件"
+    :empty-hint="keyword ? '换个关键字试试' : '调整上方的范围和时间条件'"
+    :empty-icon="CleaningServicesOutlined"
+    @retry="load"
+  >
+    <template #toolbar>
+      <div class="gm-cl-seg" role="radiogroup" aria-label="范围">
+        <button
+          v-for="s in SCOPES"
+          :key="s.value"
+          type="button"
+          role="radio"
+          :aria-checked="filters.scope === s.value"
+          :class="{ 'is-on': filters.scope === s.value }"
+          @click="filters.scope = s.value"
+        >{{ s.label }}</button>
       </div>
-    </div>
+      <NSelect v-if="accountOptions.length > 2" v-model:value="filters.account_id" :options="accountOptions" size="small" class="gm-cl-account" />
+      <NSelect v-model:value="filters.older_than_days" :options="AGES" size="small" class="gm-cl-age" />
+      <NCheckbox v-model:checked="filters.only_read">只清理已读</NCheckbox>
+    </template>
 
-    <div class="gm-panel-body">
-      <div class="gm-cleanup-head">
+    <template #banner>
+      <div v-if="data" class="gm-cl-head">
         <NCheckbox
           :checked="allVisibleChecked"
           :indeterminate="!allVisibleChecked && visibleSenders.some((s) => selected.has(s.email))"
           :disabled="!visibleSenders.length"
+          aria-label="全选发件人"
           @update:checked="toggleAll"
         />
-        <span class="gm-cleanup-summary">
-          <template v-if="data">共 {{ data.total }} 封邮件，按发件人数量排序（星标、已延后的邮件不计入）</template>
-        </span>
-        <NInput v-model:value="keyword" size="small" placeholder="筛选发件人" clearable class="gm-cleanup-filter">
+        <span class="gm-cl-summary">按发件人的邮件数排序（星标、已延后的邮件不计入）</span>
+        <NInput v-model:value="keyword" size="small" placeholder="筛选发件人" clearable class="gm-cl-filter">
           <template #prefix><NIcon :component="SearchOutlined" /></template>
         </NInput>
       </div>
-      <NSpin v-if="loading && !data" class="gm-cleanup-loading" />
-      <template v-else-if="data">
-        <div
-          v-for="s in visibleSenders"
-          :key="s.email"
-          class="gm-sender"
-          :class="{ 'is-selected': selected.has(s.email) }"
-          role="checkbox"
-          :aria-checked="selected.has(s.email)"
-          tabindex="0"
-          @click="toggle(s.email, !selected.has(s.email))"
-          @keydown.space.prevent="toggle(s.email, !selected.has(s.email))"
-        >
-          <NCheckbox :checked="selected.has(s.email)" :focusable="false" />
-          <span class="gm-sender-avatar" :style="{ background: avatarColor(s.name || s.email) }">{{ initial(s.name || s.email) }}</span>
-          <span class="gm-sender-main">
-            <span class="gm-sender-name">{{ s.name || s.email }}</span>
-            <span v-if="s.name" class="gm-sender-email">{{ s.email }}</span>
-          </span>
-          <span class="gm-sender-latest">最近 {{ listDate(s.latest) }}</span>
-          <span class="gm-sender-count">
-            <b>{{ s.count }}</b> 封<template v-if="s.unread">，{{ s.unread }} 封未读</template>
-          </span>
-        </div>
-        <div v-if="!visibleSenders.length" class="gm-empty">
-          <div class="gm-empty-title">没有符合条件的邮件</div>
-        </div>
-      </template>
+    </template>
+
+    <div role="list">
+      <div
+        v-for="s in visibleSenders"
+        :key="s.email"
+        class="gm-cl-sender"
+        :class="{ 'is-selected': selected.has(s.email) }"
+        role="checkbox"
+        :aria-checked="selected.has(s.email)"
+        tabindex="0"
+        @click="toggle(s.email)"
+        @keydown.space.prevent="toggle(s.email)"
+      >
+        <NCheckbox :checked="selected.has(s.email)" :focusable="false" />
+        <GmAvatar :name="s.name || s.email" :size="32" />
+        <span class="gm-cl-main">
+          <span class="gm-cl-name">{{ s.name || s.email }}</span>
+          <span v-if="s.name" class="gm-cl-email">{{ s.email }}</span>
+        </span>
+        <span class="gm-cl-latest">最近 {{ listDate(s.latest) }}</span>
+        <span class="gm-cl-count"><b>{{ s.count }}</b> 封<template v-if="s.unread">，{{ s.unread }} 封未读</template></span>
+      </div>
     </div>
 
-    <div class="gm-cleanup-bar">
-      <span v-if="selected.size">已选 {{ selected.size }} 个发件人，共 {{ selectedCount }} 封</span>
-      <span v-else-if="canDeleteAll">未选发件人：将清理所有符合上方条件的邮件</span>
-      <span v-else class="gm-cleanup-hint">选择要清理的发件人，或设置「早于」时间</span>
-      <NButton
-        type="error"
-        :disabled="!selected.size && !canDeleteAll"
-        :loading="deleting"
-        @click="clean"
-      >预览并删除</NButton>
-    </div>
-  </div>
+    <template #footer>
+      <span v-if="selected.size" class="gm-cl-hint is-strong">已选 {{ selected.size }} 个发件人，共 {{ selectedCount }} 封</span>
+      <span v-else-if="canDeleteAll" class="gm-cl-hint">未选发件人：将清理所有符合上方条件的邮件</span>
+      <span v-else class="gm-cl-hint">选择要清理的发件人，或设置「早于」时间</span>
+      <NButton type="error" class="gm-cl-go" :disabled="!selected.size && !canDeleteAll" :loading="deleting" @click="clean">预览并删除</NButton>
+    </template>
+  </GmPage>
 </template>
 
 <style scoped>
-.gm-cleanup-account { width: 220px; }
-.gm-cleanup-age { width: 130px; }
-.gm-cleanup-loading { display: flex; justify-content: center; padding: 64px 0; }
-.gm-cleanup-head {
+.gm-cl-seg { display: inline-flex; padding: 2px; border-radius: var(--r-md); background: var(--gm-surface-2); }
+.gm-cl-seg button {
+    height: 28px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: none;
+    color: var(--gm-text-3);
+    font: inherit;
+    font-size: var(--fs-sm);
+    cursor: pointer;
+}
+.gm-cl-seg button.is-on { background: var(--gm-surface); color: var(--gm-text); font-weight: 600; box-shadow: var(--gm-shadow-1); }
+.gm-cl-account { width: 220px; }
+.gm-cl-age { width: 130px; }
+.gm-cl-head {
     position: sticky;
     top: 0;
     z-index: 1;
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 8px 16px;
+    gap: var(--sp-3);
+    padding: var(--sp-2) var(--sp-5);
     border-bottom: 1px solid var(--gm-divider);
     background: var(--gm-surface);
 }
-.gm-cleanup-summary { flex: 1; min-width: 0; font-size: 12px; color: var(--gm-text-3); }
-.gm-cleanup-filter { width: 200px; }
-.gm-sender {
+.gm-cl-summary { flex: 1; min-width: 0; font-size: var(--fs-xs); color: var(--gm-text-3); }
+.gm-cl-filter { width: 200px; }
+.gm-cl-sender {
     display: grid;
-    grid-template-columns: auto 32px 1fr auto 140px;
+    grid-template-columns: auto 32px 1fr auto 150px;
     align-items: center;
-    gap: 12px;
-    padding: 8px 16px;
+    gap: var(--sp-3);
+    padding: var(--sp-2) var(--sp-5);
     border-bottom: 1px solid var(--gm-divider);
     cursor: pointer;
+    outline: none;
 }
-.gm-sender:hover { background: var(--gm-hover); }
-.gm-sender.is-selected { background: var(--gm-selected); }
-.gm-sender-avatar {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    color: #fff;
-    font-weight: 600;
-}
-.gm-sender-main { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.gm-sender-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gm-sender-email { font-size: 12px; color: var(--gm-text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gm-sender-latest { font-size: 12px; color: var(--gm-text-3); white-space: nowrap; }
-.gm-sender-count { text-align: right; white-space: nowrap; color: var(--gm-text-2); }
-.gm-cleanup-bar {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 16px;
-    padding: 10px 16px;
-    border-top: 1px solid var(--gm-divider);
-}
-.gm-cleanup-hint { color: var(--gm-text-3); }
+.gm-cl-sender:hover { background: var(--gm-hover); }
+.gm-cl-sender:focus-visible { box-shadow: inset 3px 0 0 var(--gm-primary); }
+.gm-cl-sender.is-selected { background: var(--gm-selected); }
+.gm-cl-main { display: flex; align-items: baseline; gap: var(--sp-2); min-width: 0; }
+.gm-cl-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gm-cl-email { font-size: var(--fs-xs); color: var(--gm-text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gm-cl-latest { font-size: var(--fs-xs); color: var(--gm-text-3); white-space: nowrap; }
+.gm-cl-count { text-align: right; white-space: nowrap; color: var(--gm-text-2); }
+.gm-cl-hint { color: var(--gm-text-3); }
+.gm-cl-hint.is-strong { color: var(--gm-text); font-weight: 600; }
+.gm-cl-go { margin-left: auto; }
 @media (max-width: 768px) {
-    .gm-cleanup-account, .gm-cleanup-age { width: 100%; }
-    .gm-cleanup-filter { width: 120px; }
-    .gm-sender { grid-template-columns: auto 32px 1fr auto; }
-    .gm-sender-latest { display: none; }
-    .gm-sender-main { flex-direction: column; gap: 0; }
+    .gm-cl-account, .gm-cl-age { width: calc(50% - 4px); }
+    .gm-cl-filter { width: 120px; }
+    .gm-cl-sender { grid-template-columns: auto 32px 1fr auto; padding: var(--sp-2) var(--sp-3); }
+    .gm-cl-latest { display: none; }
+    .gm-cl-main { flex-direction: column; gap: 0; }
 }
 </style>

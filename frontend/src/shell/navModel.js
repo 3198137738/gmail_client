@@ -3,7 +3,6 @@
 import { computed } from "vue";
 import {
   AttachFileOutlined,
-  BlockOutlined,
   CleaningServicesOutlined,
   DeleteOutlined,
   DraftsOutlined,
@@ -45,7 +44,6 @@ export const PAGES = [
   { path: "/files", section: "files", label: "附件", icon: AttachFileOutlined, rail: true },
   { path: "/cleanup", section: "cleanup", label: "批量清理", icon: CleaningServicesOutlined, rail: true },
   { path: "/compose/sent", section: "sent_log", label: "发件记录", icon: OutboxOutlined },
-  { path: "/messages/blocked-senders", section: "blocked", label: "屏蔽的发件人", icon: BlockOutlined },
 ];
 
 const ACCOUNT_KINDS = new Set(["inbox", "sent", "junk", "trash", "blocked", "all", "starred", "snoozed"]);

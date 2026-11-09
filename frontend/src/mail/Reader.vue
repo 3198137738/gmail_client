@@ -180,7 +180,7 @@ function toggleAll() {
 }
 
 function viewBlocked() {
-  router.push({ path: "/messages/blocked-senders", query: { account_id: msg.value.account_id, q: msg.value.sender_email } });
+  router.push({ path: "/settings/senders", query: { account_id: msg.value.account_id, q: msg.value.sender_email } });
 }
 
 function onLabels(labels) {

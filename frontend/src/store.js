@@ -20,14 +20,14 @@ export const store = reactive({
   // 实时推送连接状态：off / connecting / connected / offline
   realtime: "off",
   realtimeTitle: "",
-  // 当前打开的写邮件窗口：{ key, params }，params 为 reply_to / mode / forward / draft
-  compose: null,
-  // 写邮件窗口里有尚未保存到草稿的修改
-  composeBusy: false,
-  // 写邮件窗口处于「撤销发送」等待期或正在发送（窗口已隐藏）
-  composePending: false,
-  // 递增时让已打开的写邮件窗口恢复显示（从最小化还原）
-  composeFocus: 0,
+  // 打开的写邮件窗口（可以同时开几个）：
+  // { key, params, state: normal / min / max, busy（有未保存到草稿的修改）, pending（撤销等待期 / 发送中，窗口隐藏）, title }
+  // params 为 reply_to / mode / forward / draft
+  composes: [],
+  // 最近操作的写邮件窗口（快捷键、聚焦用）
+  composeActive: null,
+  // 打开的窗口已达上限且都有未保存内容时递增（写信区提示）
+  composeLimitHit: 0,
   // 快捷键帮助
   shortcutHelp: false,
 });
@@ -37,23 +37,55 @@ export function setThemeMode(mode) {
 }
 
 let composeSeq = 0;
+// 最多同时打开的写邮件窗口
+export const MAX_COMPOSES = 3;
+
+function sameTarget(a, b) {
+  return ["draft", "reply_to", "forward"].some((k) => a[k] && String(a[k]) === String(b[k])) && (a.mode || "") === (b.mode || "");
+}
+
 // 打开写邮件窗口。params：{ reply_to, mode: 'all', forward, draft }
-// 只保留一个窗口：上一封还在等待发送时不打开新窗口；已打开的窗口有未保存的内容时恢复显示它，
-// 否则（内容已存进草稿）直接替换。返回是否打开了新窗口。
+// 同一封草稿 / 回复 / 转发已经打开时恢复显示那个窗口；打开新窗口时把其他窗口最小化。
+// 已达到上限时，没有未保存内容的最早的窗口让位，否则提示。返回是否打开了新窗口。
 export function openCompose(params = {}) {
-  if (store.compose && (store.composePending || store.composeBusy)) {
-    store.composeFocus += 1;
+  const existing = store.composes.find((c) => !c.pending && sameTarget(c.params, params));
+  if (existing) {
+    focusCompose(existing.key);
     return false;
   }
+  const open = store.composes.filter((c) => !c.pending);
+  if (open.length >= MAX_COMPOSES) {
+    const idle = open.find((c) => !c.busy);
+    if (!idle) {
+      store.composeLimitHit = (store.composeLimitHit || 0) + 1;
+      return false;
+    }
+    closeCompose(idle.key);
+  }
   composeSeq += 1;
-  store.compose = { key: composeSeq, params };
+  for (const c of store.composes) if (c.state !== "min") c.state = "min";
+  store.composes.push({ key: composeSeq, params, state: "normal", busy: false, pending: false, title: "" });
+  store.composeActive = composeSeq;
   return true;
 }
 
-export function closeCompose() {
-  store.compose = null;
-  store.composeBusy = false;
-  store.composePending = false;
+// 展开一个窗口：电脑端同时只展开一个，其余最小化（并排放不下）
+export function focusCompose(key) {
+  const target = store.composes.find((c) => c.key === key);
+  if (!target) return;
+  for (const c of store.composes) if (c !== target && c.state !== "min") c.state = "min";
+  if (target.state === "min") target.state = "normal";
+  store.composeActive = key;
+}
+
+// 关闭写邮件窗口；不传 key 时关闭当前（最近操作的）窗口
+export function closeCompose(key = store.composeActive) {
+  store.composes = store.composes.filter((c) => c.key !== key);
+  if (store.composeActive === key) store.composeActive = store.composes[store.composes.length - 1]?.key ?? null;
+}
+
+export function composeOf(key) {
+  return store.composes.find((c) => c.key === key) || null;
 }
 
 export function navAccount(id) {

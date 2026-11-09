@@ -37,8 +37,31 @@
 - [x] 悬停预加载（不标已读），打开时立即显示 — `triage-prefetch`
 - [x] 手机阅读底部：归档 / 删除 / 延后 — `mail-mobile-gestures`
 
-## 写邮件（阶段 3 起自动化）
-- ☐ 最小化 / 最大化；回复 / 回复全部 / 转发；切换发件账号时替换签名；插入 / 保存模板；自动保存草稿；拖入附件；25MB 提示；撤销发送；定时发送；纯文本；发件人姓名提示；地址补全
+## 写邮件（阶段 3）
+- [x] 多个写邮件窗口停靠在右下角（最多 3 个），打开新窗口时其余最小化，超过上限提示 — `compose-multi`
+- [x] 草稿附件：上传进度、关闭后从草稿重新打开仍在、删除附件 — `compose-draft-attachments`（后端：`tests/test_compose_upgrade.py`）
+- [x] 编辑器：格式工具栏、选中浮动工具条、`Ctrl+K` 插入链接、粘贴清洗、`Ctrl+Shift+V` 纯文本、粘贴图片内嵌 — `compose-editor`
+- [x] 回复引用默认折叠、可展开 — `compose-reply-quote`
+- [x] 发送失败提示并保留窗口 — `compose-send-error`
+- [x] 手机全屏写邮件、隐藏标签栏 — `compose-mobile`
+- [x] 地址输入：粘贴多个地址、退格 / 双击编辑 — `compose-address-input`
+- ☐ 切换发件账号时替换签名；插入 / 保存模板；25MB 提示；撤销发送；定时发送；纯文本；发件人姓名提示
 
-## 设置（阶段 5 起自动化）
-- ☐ 账号（OAuth 回调 `/accounts/?...` 提示）、两步验证、设备登出、IP 拉黑 / 解除、立即备份、证书检测 / 续订、规则、模板、屏蔽与信任、审计日志
+## 功能页（阶段 4）
+- [x] 草稿、定时发送、发件记录、附件、批量清理加载失败时显示错误和重试 — `pages-error-retry`
+- [x] 定时发送显示发送时间、取消定时后打开草稿继续编辑 — `pages-scheduled`
+- [x] 手机上列表行操作总是可见（「⋯」菜单），不依赖悬停 — `pages-mobile-actions`
+- ☐ 批量清理进度卡；附件按类型筛选与下载
+
+## 设置（阶段 5）
+- [x] 旧设置地址跳到 `/settings/...`（OAuth 回调 `/accounts/?...` 保留参数）；电脑端 `/settings` 打开第一个分区；12 个分区都能打开且导航高亮；添加账号页 — `settings-sections`、`shell-old-pages`
+- [x] 外观：主题、密度即时生效并在刷新后保持 — `settings-appearance`
+- [x] 分组重命名同步到文件夹面板；签名保存 / 清除 — `settings-groups-signature`
+- [x] 规则、安全、屏蔽与信任加载失败可重试 — `settings-error-retry`
+- [x] 手机：分区列表 → 详情（顶部返回） — `settings-mobile`
+- [x] 设置页不显示文件夹面板和邮件搜索 — `settings-groups-signature`
+- ☐ 两步验证开启 / 关闭、设备登出、IP 拉黑 / 解除、立即备份、证书检测 / 续订、规则与模板编辑、通知（Telegram、各账号开关）
+
+## 打磨（阶段 6）
+- ☐ 键盘 Tab 时焦点框清晰；系统开启「减少动态效果」时没有过渡动画
+- ☐ Outlook 账号的界面文案不出现 Gmail 专属说法

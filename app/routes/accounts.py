@@ -135,6 +135,7 @@ def list_accounts(request: Request, db: Session = Depends(get_db)):
                 "display_name": a.display_name or "",
                 "signature_html": a.signature_html or "",
                 "group_name": a.group_name or "",
+                "smtp_starttls": bool(a.smtp_starttls),
                 "color": LABEL_COLORS[(int(a.id) - 1) % len(LABEL_COLORS)],
                 "enabled": bool(a.enabled),
                 "notify_enabled": bool(a.notify_enabled),
@@ -330,6 +331,8 @@ class AccountUpdateBody(BaseModel):
     password: Optional[str] = None
     signature_html: Optional[str] = None
     group_name: Optional[str] = None
+    # 发信连接方式：True 为 STARTTLS（587），False 为 SSL（465）；Outlook 固定 STARTTLS，不受影响
+    smtp_starttls: Optional[bool] = None
     # 同时把显示名称改到 Gmail 中（仅 Google 授权账号）
     sync_gmail_name: bool = False
 
@@ -373,6 +376,8 @@ def update_account(request: Request, account_id: int, body: AccountUpdateBody, d
     if body.signature_html is not None:
         # 签名会插入写邮件编辑器，与草稿一样先清洗
         account.signature_html = sanitize_compose_html(body.signature_html).strip() or None
+    if body.smtp_starttls is not None:
+        account.smtp_starttls = bool(body.smtp_starttls)
     changes = [
         c for c, on in (
             ("显示名称", body.display_name is not None),
@@ -380,6 +385,7 @@ def update_account(request: Request, account_id: int, body: AccountUpdateBody, d
             ("应用专用密码", bool(body.password)),
             ("签名", body.signature_html is not None),
             ("分组", body.group_name is not None),
+            ("发信连接方式", body.smtp_starttls is not None),
         ) if on
     ]
     audit.record_request(request, "account_updated", f"{account.email}：{'、'.join(changes) or '无变化'}")

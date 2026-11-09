@@ -4,7 +4,7 @@
 import { onBeforeUnmount, onMounted, reactive, watch } from "vue";
 import { NIcon, NProgress, NSpin } from "naive-ui";
 import { CheckCircleOutlined, CloseOutlined, ErrorOutlineOutlined, ExpandLessOutlined, ExpandMoreOutlined } from "@vicons/material";
-import IconBtn from "./IconBtn.vue";
+import GmIconButton from "../ui/GmIconButton.vue";
 import { store } from "../store";
 import { onRealtime } from "../realtime";
 import { dismissPurgeJob, loadPurgeJobs, purgeJobs, upsertPurgeJob } from "../purgeJobs";
@@ -91,13 +91,14 @@ onBeforeUnmount(() => {
           :size="18"
         />
         <span class="gm-purge-title">{{ job.permanent === false ? "屏蔽地址的邮件移到已删除" : "永久删除屏蔽地址的邮件" }}（{{ job.done }}/{{ job.total }}）</span>
-        <IconBtn
+        <GmIconButton
           :icon="expanded.has(job.id) ? ExpandLessOutlined : ExpandMoreOutlined"
           :title="expanded.has(job.id) ? '收起详情' : '展开详情'"
-          size="tiny"
+          :size="26"
+          :icon-size="18"
           @click="toggle(job.id)"
         />
-        <IconBtn v-if="job.finished" :icon="CloseOutlined" title="关闭" size="tiny" @click="dismissPurgeJob(job.id)" />
+        <GmIconButton v-if="job.finished" :icon="CloseOutlined" title="关闭" :size="26" :icon-size="18" @click="dismissPurgeJob(job.id)" />
       </div>
       <NProgress
         type="line"

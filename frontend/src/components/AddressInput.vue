@@ -1,6 +1,7 @@
 <script setup>
 // 收件人输入框（Gmail 地址块）：回车 / 逗号 / 分号 / 失去焦点时把输入的文字变成地址块，
-// 按最近联系人自动补全（↑↓ 选择，回车 / Tab 确认），退格删除最后一个，无效地址标红。
+// 按最近联系人自动补全（↑↓ 选择，回车 / Tab 确认），无效地址标红。
+// 粘贴一串地址时直接拆成多个地址块；输入框为空时按退格把最后一个地址放回输入框编辑；双击地址块也可编辑。
 import { computed, ref } from "vue";
 import { NTag } from "naive-ui";
 import { isValidEmail, parseAddress, splitAddresses } from "../address";
@@ -97,8 +98,27 @@ function onKeydown(ev) {
       ev.preventDefault();
     }
   } else if (ev.key === "Backspace" && !text.value && props.value.length) {
-    remove(props.value.length - 1);
+    ev.preventDefault();
+    edit(props.value.length - 1);
   }
+}
+
+// 把地址块放回输入框编辑
+function edit(index) {
+  const a = props.value[index];
+  if (!a) return;
+  remove(index);
+  text.value = a.name && a.name !== a.email ? `${a.name} <${a.email}>` : a.email;
+  input.value?.focus();
+}
+
+// 粘贴多个地址（逗号、分号、换行分隔）：直接变成地址块
+function onPaste(ev) {
+  const pasted = ev.clipboardData?.getData("text/plain") || "";
+  if (!/[,;，；\n]/.test(pasted)) return;
+  ev.preventDefault();
+  text.value = `${text.value}${pasted.replace(/\r?\n+/g, ",")}`;
+  commit();
 }
 
 function onBlur() {
@@ -125,6 +145,7 @@ defineExpose({
       :title="isValidEmail(a.email) ? a.email : `无效的邮箱地址：${a.email}`"
       class="gm-addr-chip"
       @close="remove(i)"
+      @dblclick="edit(i)"
     >
       <template #avatar>
         <span class="gm-avatar gm-chip-avatar" :style="{ background: avatarColor(a.name || a.email) }">{{ initial(a.name || a.email) }}</span>
@@ -141,6 +162,7 @@ defineExpose({
       :aria-label="label"
       @input="onInput"
       @keydown="onKeydown"
+      @paste="onPaste"
       @focus="focused = true"
       @blur="onBlur"
     />

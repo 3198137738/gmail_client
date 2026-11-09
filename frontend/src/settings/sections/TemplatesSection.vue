@@ -1,7 +1,7 @@
 <script setup>
 import { onMounted, ref } from "vue";
 import { NButton, NInput, NModal, NSpin } from "naive-ui";
-import SettingsHeader from "../../components/SettingsHeader.vue";
+import GmEmptyState from "../../ui/GmEmptyState.vue";
 import RichEditor from "../../components/RichEditor.vue";
 import { get, post } from "../../api";
 import { confirm, run } from "../../ui";
@@ -14,9 +14,14 @@ const editor = ref(null);
 const saving = ref(false);
 let editSeq = 0;
 
+const loadError = ref("");
 async function load() {
-  const data = await run(get("/api/templates"));
-  if (data) items.value = data.items;
+  try {
+    items.value = (await get("/api/templates")).items;
+    loadError.value = "";
+  } catch (err) {
+    loadError.value = err.message || "加载失败";
+  }
 }
 onMounted(load);
 
@@ -52,16 +57,16 @@ function preview(html) {
 </script>
 
 <template>
-  <div class="gm-panel gm-settings-page">
-    <SettingsHeader />
+  <div class="gm-set-page">
     <div class="gm-settings">
       <section class="gm-settings-row">
         <div class="gm-settings-label">
-          邮件模板：
+          邮件模板
           <div class="gm-settings-hint">保存常用的回复内容，写邮件时点工具栏的「模板」按钮一键插入；也可以在写邮件时把当前正文保存为模板。</div>
         </div>
         <div class="gm-settings-content">
-          <NSpin v-if="!items" />
+          <GmEmptyState v-if="loadError && !items" tone="error" title="加载失败" :hint="loadError" action-text="重试" @action="load" />
+          <NSpin v-else-if="!items" />
           <template v-else>
             <div v-for="t in items" :key="t.id" class="gm-tpl">
               <div class="gm-tpl-main">
@@ -106,7 +111,6 @@ function preview(html) {
 </template>
 
 <style scoped>
-.gm-settings-page { overflow-y: auto; background: var(--gm-bg); }
 .gm-tpl { display: flex; align-items: flex-start; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--gm-divider); }
 .gm-tpl-main { flex: 1; min-width: 0; }
 .gm-tpl-name { font-weight: 600; }

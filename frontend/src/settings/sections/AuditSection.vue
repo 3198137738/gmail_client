@@ -2,7 +2,7 @@
 import { computed, h, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { NButton, NDataTable, NTag } from "naive-ui";
-import SettingsHeader from "../../components/SettingsHeader.vue";
+import GmEmptyState from "../../ui/GmEmptyState.vue";
 import { get, post } from "../../api";
 import { confirm, run } from "../../ui";
 import { dateTime } from "../../format";
@@ -11,19 +11,24 @@ const route = useRoute();
 const router = useRouter();
 const data = ref(null);
 const loading = ref(false);
+const loadError = ref("");
 
 const page = computed(() => Math.max(1, Number(route.query.page) || 1));
 
 async function load() {
   loading.value = true;
-  const result = await run(get("/api/security/audit", { page: page.value }));
+  try {
+    data.value = await get("/api/security/audit", { page: page.value });
+    loadError.value = "";
+  } catch (err) {
+    loadError.value = err.message || "加载失败";
+  }
   loading.value = false;
-  if (result) data.value = result;
 }
 watch(page, load, { immediate: true });
 
 function goPage(n) {
-  router.push({ path: "/accounts/security/audit", query: n > 1 ? { page: n } : {} });
+  router.push({ path: "/settings/audit", query: n > 1 ? { page: n } : {} });
 }
 
 async function ban(ip) {
@@ -57,13 +62,14 @@ const rowClassName = (row) => (row.warn ? "is-warn" : "");
 </script>
 
 <template>
-  <div class="gm-panel gm-settings-page">
-    <SettingsHeader />
+  <div class="gm-set-page">
     <div class="gm-settings">
       <p class="gm-settings-hint gm-audit-hint">
         登录、删信、发信、账号变更、备份等操作记录<template v-if="data">，共 {{ data.total }} 条</template>。新 IP 登录、IP 被封禁、访问密码修改时会通过 Telegram 提醒。
       </p>
+      <GmEmptyState v-if="loadError && !data" tone="error" title="加载失败" :hint="loadError" action-text="重试" @action="load" />
       <NDataTable
+        v-else
         :columns="columns"
         :data="data?.rows || []"
         :loading="loading"
@@ -74,7 +80,7 @@ const rowClassName = (row) => (row.warn ? "is-warn" : "");
         :bordered="false"
         :single-line="false"
       />
-      <div v-if="data" class="gm-audit-pager">
+      <div v-if="data && (page > 1 || data.has_next)" class="gm-audit-pager">
         <NButton quaternary :disabled="page <= 1" @click="goPage(page - 1)">上一页</NButton>
         <span class="gm-settings-hint">第 {{ page }} 页</span>
         <NButton quaternary :disabled="!data.has_next" @click="goPage(page + 1)">下一页</NButton>
@@ -84,12 +90,8 @@ const rowClassName = (row) => (row.warn ? "is-warn" : "");
 </template>
 
 <style scoped>
-.gm-settings-page { overflow-y: auto; background: var(--gm-bg); }
 .gm-audit-hint { margin: 16px 0 12px; }
 .gm-audit-pager { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
 :deep(.is-warn td) { background: var(--gm-warning-soft) !important; }
 :deep(.gm-audit-ip) { display: inline-flex; align-items: center; gap: 8px; }
-@media (max-width: 768px) {
-    .gm-settings-page { border-radius: 0; }
-}
 </style>

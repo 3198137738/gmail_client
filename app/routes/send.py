@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session, selectinload
 from .. import serializers as ser
 from ..config import ATTACHMENTS_DIR, SYNC_SENT_ENABLED
 from ..database import get_db
-from ..models import Account, Draft, Message, ScheduledSend, SentMessage
+from ..models import Account, Draft, DraftAttachment, Message, ScheduledSend, SentMessage
 from ..services.mail_body import (
     body_document_response,
     body_has_remote_images,
@@ -28,7 +28,15 @@ from ..services.mail_body import (
 )
 from ..services import audit
 from ..services.background import submit_bg
-from ..services.outgoing import deliver, remove_files, stage_attachments
+from ..services.outgoing import (
+    copy_draft_attachments,
+    deliver,
+    draft_dir,
+    remove_draft_files,
+    remove_files,
+    stage_attachments,
+    unique_path,
+)
 from ..services.scheduled import SCHEDULED_DIR, process_due
 from ..services.html_sanitizer import sanitize_compose_html
 from ..navigation import sidebar_data
@@ -235,6 +243,7 @@ def _build_draft_prefill(db: Session, draft: Draft) -> dict:
         "in_reply_to": draft.in_reply_to or "",
         "references": draft.references or "",
         "is_reply": bool(draft.in_reply_to),
+        "attachments": [_draft_attachment(a) for a in draft.attachments],
     }
     if draft.forward_message_id:
         original = db.execute(
@@ -254,6 +263,17 @@ def _build_draft_prefill(db: Session, draft: Draft) -> dict:
 
 def _draft_is_empty(*values: Optional[str]) -> bool:
     return not any((v or "").strip() for v in values)
+
+
+def _draft_attachment(att: DraftAttachment) -> dict:
+    return {"id": int(att.id), "name": att.filename, "size": int(att.size or 0), "mime_type": att.mime_type or ""}
+
+
+def _use_ssl(account: Account, value: Optional[str]) -> bool:
+    """发信连接方式：表单里指定了就用指定的（兼容旧版前端），否则用账号设置（默认 SSL 465）。"""
+    if value is not None:
+        return value == "on"
+    return not bool(account.smtp_starttls)
 
 
 # ---- 写邮件 -------------------------------------------------------------------
@@ -367,16 +387,21 @@ class DraftBody(BaseModel):
     in_reply_to: Optional[str] = None
     references: Optional[str] = None
     forward_message_id: Optional[int] = None
+    # 内容为空也保留草稿（先添加附件、还没写内容时需要草稿 id）
+    keep_empty: bool = False
 
 
 @router.post("/drafts", name="compose.save_draft")
 def save_draft(body: DraftBody, db: Session = Depends(get_db)):
     """写邮件时自动保存草稿（新建或更新）。内容全部清空时删除草稿。"""
     record = db.get(Draft, body.draft_id) if body.draft_id else None
-    if _draft_is_empty(body.to, body.cc, body.bcc, body.subject, body.body_text):
+    has_files = record is not None and bool(record.attachments)
+    if _draft_is_empty(body.to, body.cc, body.bcc, body.subject, body.body_text) and not has_files and not body.keep_empty:
         if record is not None:
+            draft_id = int(record.id)
             db.delete(record)
             db.commit()
+            remove_draft_files(draft_id)
         return {"id": None}
     account = db.get(Account, body.account_id or 0)
     if account is None:
@@ -404,6 +429,50 @@ def delete_draft(draft_id: int, db: Session = Depends(get_db)):
     if record is not None:
         db.delete(record)
         db.commit()
+        remove_draft_files(draft_id)
+    return {"ok": True}
+
+
+# 单个草稿附件的大小上限（发信时整封邮件仍受邮箱服务商限制，Gmail / Outlook 约 25 MB）
+DRAFT_ATTACHMENT_MAX = 30 * 1024 * 1024
+
+
+@router.post("/drafts/{draft_id}/attachments", name="compose.draft_attachment_add")
+def add_draft_attachment(draft_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """给草稿添加一个附件（每次一个文件，前端可显示每个文件的上传进度）。"""
+    draft = db.get(Draft, draft_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="草稿不存在")
+    directory = draft_dir(draft_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    dest = unique_path(directory, Path(file.filename or "attachment").name)
+    size = 0
+    with dest.open("wb") as out:
+        while chunk := file.file.read(1024 * 1024):
+            size += len(chunk)
+            if size > DRAFT_ATTACHMENT_MAX:
+                out.close()
+                dest.unlink(missing_ok=True)
+                raise HTTPException(status_code=400, detail="单个附件不能超过 30 MB")
+            out.write(chunk)
+    att = DraftAttachment(
+        draft_id=draft_id, filename=Path(file.filename or dest.name).name, path=str(dest),
+        size=size, mime_type=file.content_type or None,
+    )
+    db.add(att)
+    db.commit()
+    return _draft_attachment(att)
+
+
+@router.post("/drafts/{draft_id}/attachments/{att_id}/delete", name="compose.draft_attachment_delete")
+def delete_draft_attachment(draft_id: int, att_id: int, db: Session = Depends(get_db)):
+    att = db.get(DraftAttachment, att_id)
+    if att is None or att.draft_id != draft_id:
+        raise HTTPException(status_code=404, detail="附件不存在")
+    path = Path(att.path)
+    db.delete(att)
+    db.commit()
+    path.unlink(missing_ok=True)
     return {"ok": True}
 
 
@@ -421,6 +490,7 @@ def drafts_list(db: Session = Depends(get_db)):
                 "subject": d.subject or "",
                 "snippet": ser.snippet(d.body_text),
                 "updated_at": ser.iso_utc(d.updated_at),
+                "attachment_count": len(d.attachments),
             }
             for d in drafts
         ]
@@ -439,7 +509,7 @@ def send(
     subject: str = Form(""),
     body_text: Optional[str] = Form(None),
     body_html: Optional[str] = Form(None),
-    use_ssl: Optional[str] = Form("on"),
+    use_ssl: Optional[str] = Form(None),
     in_reply_to: Optional[str] = Form(None),
     references: Optional[str] = Form(None),
     forward_message_id: Optional[str] = Form(None),
@@ -447,7 +517,7 @@ def send(
     attachments: List[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
 ):
-    """发送邮件。发送失败返回 400，前端保留已填写的内容（含附件）以便重试。"""
+    """发送邮件。草稿里已上传的附件一起发出。发送失败返回 400，前端保留已填写的内容（含附件）以便重试。"""
     account = db.get(Account, account_id)
     if account is None or not account.enabled:
         raise HTTPException(status_code=400, detail="Selected account is not available")
@@ -459,10 +529,12 @@ def send(
     saved_paths: list[Path] = []
     try:
         saved_paths = stage_attachments(db, session_dir, attachments, _coerce_int(forward_message_id))
+        draft = db.get(Draft, _coerce_int(draft_id)) if _coerce_int(draft_id) else None
+        saved_paths += copy_draft_attachments(draft, session_dir)
         record = deliver(
             db, account,
             to=to, cc=cc, bcc=bcc, subject=subject, body_text=body_text, body_html=body_html,
-            use_ssl=(use_ssl == "on"), in_reply_to=in_reply_to, references=references,
+            use_ssl=_use_ssl(account, use_ssl), in_reply_to=in_reply_to, references=references,
             attachments=saved_paths, draft_id=_coerce_int(draft_id), audit_ip=audit.request_ip(request),
         )
         if record.status == "failed":
@@ -488,7 +560,7 @@ def schedule_send(
     subject: str = Form(""),
     body_text: Optional[str] = Form(None),
     body_html: Optional[str] = Form(None),
-    use_ssl: Optional[str] = Form("on"),
+    use_ssl: Optional[str] = Form(None),
     in_reply_to: Optional[str] = Form(None),
     references: Optional[str] = Form(None),
     forward_message_id: Optional[str] = Form(None),
@@ -511,18 +583,21 @@ def schedule_send(
         account_id=account_id, to_addr=to, cc_addr=cc, bcc_addr=bcc, subject=subject,
         body_text=body_text, body_html=body_html, in_reply_to=in_reply_to or None,
         references=references or None, forward_message_id=_coerce_int(forward_message_id),
-        use_ssl=(use_ssl == "on"), send_at=send_at, status="pending",
+        use_ssl=_use_ssl(account, use_ssl), send_at=send_at, status="pending",
     )
     db.add(item)
     db.flush()
     directory = SCHEDULED_DIR / str(item.id)
     paths = stage_attachments(db, directory, attachments, item.forward_message_id)
+    draft = db.get(Draft, _coerce_int(draft_id)) if _coerce_int(draft_id) else None
+    paths += copy_draft_attachments(draft, directory)
     item.attachments_dir = str(directory)
     item.attachment_names = "\n".join(p.name for p in paths) or None
-    draft = db.get(Draft, _coerce_int(draft_id)) if _coerce_int(draft_id) else None
     if draft is not None:
         db.delete(draft)
     db.commit()
+    if draft is not None:
+        remove_draft_files(int(draft.id))
     audit.record_request(
         request, "mail_scheduled",
         f"{account.email} → {', '.join(x for x in (to, cc, bcc) if x)[:200]}：「{(subject or '(无主题)')[:80]}」",
@@ -562,22 +637,34 @@ def _get_scheduled(db: Session, item_id: int) -> ScheduledSend:
 
 @router.post("/scheduled/{item_id}/cancel", name="compose.scheduled_cancel")
 def scheduled_cancel(request: Request, item_id: int, db: Session = Depends(get_db)):
-    """取消定时发送，内容转为草稿（附件不能保存在草稿里，需要重新添加）。"""
+    """取消定时发送，内容（连同附件）转为草稿。转发的原邮件附件已复制进来，草稿里不再标记转发，避免发两份。"""
     item = _get_scheduled(db, item_id)
+    directory = Path(item.attachments_dir) if item.attachments_dir else None
+    names = [n for n in (item.attachment_names or "").split("\n") if n]
     draft = Draft(
         account_id=item.account_id, to_addr=item.to_addr, cc_addr=item.cc_addr, bcc_addr=item.bcc_addr,
         subject=item.subject, body_text=item.body_text, body_html=item.body_html,
-        in_reply_to=item.in_reply_to, references=item.references, forward_message_id=item.forward_message_id,
+        in_reply_to=item.in_reply_to, references=item.references,
+        forward_message_id=None if names else item.forward_message_id,
     )
     db.add(draft)
-    directory = Path(item.attachments_dir) if item.attachments_dir else None
-    had_files = bool(item.attachment_names)
+    db.flush()
+    target = draft_dir(int(draft.id))
+    for name in names:
+        src = directory / name if directory else None
+        if src is None or not src.is_file():
+            continue
+        target.mkdir(parents=True, exist_ok=True)
+        dest = unique_path(target, name)
+        src.replace(dest)
+        db.add(DraftAttachment(draft_id=int(draft.id), filename=name, path=str(dest), size=dest.stat().st_size))
+    subject = item.subject
     db.delete(item)
     db.commit()
     if directory is not None:
         remove_files([], directory)
-    audit.record_request(request, "mail_schedule_cancelled", f"「{(item.subject or '(无主题)')[:80]}」")
-    return {"ok": True, "draft_id": int(draft.id), "attachments_dropped": had_files}
+    audit.record_request(request, "mail_schedule_cancelled", f"「{(subject or '(无主题)')[:80]}」")
+    return {"ok": True, "draft_id": int(draft.id), "attachments_dropped": False}
 
 
 @router.post("/scheduled/{item_id}/send-now", name="compose.scheduled_send_now")

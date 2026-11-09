@@ -6,6 +6,16 @@ import { APP_NAME } from "./brand";
 import AppShell from "./shell/AppShell.vue";
 // 列表页和详情页用同一个组件实例（分栏阅读），必须是同一个组件对象
 import MailSplit from "./views/MailSplit.vue";
+import { SECTIONS } from "./settings/sections";
+
+const LEGACY_SETTINGS = {
+  "accounts/": "/settings/accounts",
+  "accounts/rules": "/settings/rules",
+  "accounts/templates": "/settings/templates",
+  "accounts/security": "/settings/security",
+  "accounts/security/audit": "/settings/audit",
+  "messages/blocked-senders": "/settings/senders",
+};
 
 // 只允许站内相对路径，防止登录后被跳转到外部网站
 export function safeNext(value, fallback = "/messages/") {
@@ -24,12 +34,6 @@ const routes = [
     children: [
       { path: "", redirect: "/messages/" },
       { path: "messages/", name: "list", component: MailSplit },
-      {
-        path: "messages/blocked-senders",
-        name: "blocked",
-        component: () => import("./views/settings/BlockedSettings.vue"),
-        meta: { title: "设置 - 屏蔽的地址", settings: "blocked", section: "blocked" },
-      },
       { path: "messages/:id(\\d+)", name: "message", component: MailSplit },
       {
         // 旧版的整页写邮件地址：在当前界面打开写邮件窗口
@@ -48,35 +52,29 @@ const routes = [
       { path: "cleanup", name: "cleanup", component: () => import("./views/CleanupView.vue"), meta: { title: "批量清理", section: "cleanup" } },
       { path: "compose/sent/:id(\\d+)", name: "sentDetail", component: () => import("./mail/SentReader.vue"), meta: { section: "sent_log" } },
       {
-        path: "accounts/",
-        name: "accounts",
-        component: () => import("./views/settings/AccountsSettings.vue"),
-        meta: { title: "设置 - 账号和导入", settings: "accounts", section: "settings" },
+        path: "settings",
+        component: () => import("./settings/SettingsShell.vue"),
+        children: [
+          { path: "", name: "settings", component: { render: () => null }, meta: { title: "设置", section: "settings" } },
+          {
+            path: "accounts/add",
+            name: "settings-accounts-add",
+            component: () => import("./settings/sections/AddAccountSection.vue"),
+            meta: { title: "设置 - 添加账号", section: "settings", settingsSection: "accounts-add" },
+          },
+          ...SECTIONS.map((s) => ({
+            path: s.key,
+            name: `settings-${s.key}`,
+            component: s.component,
+            meta: { title: `设置 - ${s.label}`, section: "settings", settingsSection: s.key },
+          })),
+        ],
       },
-      {
-        path: "accounts/rules",
-        name: "rules",
-        component: () => import("./views/settings/RulesSettings.vue"),
-        meta: { title: "设置 - 自动规则", settings: "rules", section: "settings" },
-      },
-      {
-        path: "accounts/templates",
-        name: "templates",
-        component: () => import("./views/settings/TemplatesSettings.vue"),
-        meta: { title: "设置 - 模板", settings: "templates", section: "settings" },
-      },
-      {
-        path: "accounts/security",
-        name: "security",
-        component: () => import("./views/settings/SecuritySettings.vue"),
-        meta: { title: "设置 - 安全", settings: "security", section: "settings" },
-      },
-      {
-        path: "accounts/security/audit",
-        name: "audit",
-        component: () => import("./views/settings/AuditLog.vue"),
-        meta: { title: "设置 - 审计日志", settings: "audit", section: "settings" },
-      },
+      // 旧版设置地址（书签、OAuth 授权回调 /accounts/?...）：带上参数跳到新地址
+      ...Object.entries(LEGACY_SETTINGS).map(([path, target]) => ({
+        path,
+        redirect: (to) => ({ path: target, query: to.query, hash: to.hash }),
+      })),
       { path: ":pathMatch(.*)*", name: "notFound", component: () => import("./views/NotFound.vue"), meta: { title: "找不到页面" } },
     ],
   },

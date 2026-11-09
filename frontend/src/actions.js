@@ -19,8 +19,8 @@ export async function syncAccount(accountId) {
 export function resetAfterLogout() {
   stopRealtime();
   store.nav = null;
-  store.compose = null;
-  store.composeBusy = false;
+  store.composes = [];
+  store.composeActive = null;
   if (store.session) store.session.authenticated = false;
 }
 

@@ -1,8 +1,11 @@
 """SMTP send service for Gmail / Outlook (SSL on 465, or STARTTLS on 587)."""
 from __future__ import annotations
 
+import base64
+import binascii
 import logging
 import mimetypes
+import re
 import smtplib
 import socket
 import ssl
@@ -50,6 +53,37 @@ def _split_recipients(value: Optional[str]) -> list[str]:
     return [item.strip() for item in value.replace(";", ",").split(",") if item.strip()]
 
 
+# 正文里粘贴的图片（data URI）：发信时转成内嵌附件（multipart/related + Content-ID），
+# 收件人的邮件客户端大多不显示 data URI 图片
+_DATA_IMAGE_RE = re.compile(
+    r"""src=(["'])data:image/(png|jpe?g|gif|webp|bmp);base64,([A-Za-z0-9+/=\s]+?)\1""",
+    re.IGNORECASE,
+)
+MAX_INLINE_IMAGE_BYTES = 15 * 1024 * 1024
+
+
+def extract_inline_images(html: str, domain: str) -> tuple[str, list[tuple[str, str, bytes]]]:
+    """把 HTML 里的 data URI 图片换成 cid: 引用。返回 (新 HTML, [(cid, 子类型, 数据)])。"""
+    images: list[tuple[str, str, bytes]] = []
+    total = 0
+
+    def repl(match: re.Match) -> str:
+        nonlocal total
+        quote, subtype, payload = match.group(1), match.group(2).lower(), match.group(3)
+        try:
+            data = base64.b64decode(re.sub(r"\s+", "", payload), validate=True)
+        except (binascii.Error, ValueError):
+            return match.group(0)
+        total += len(data)
+        if total > MAX_INLINE_IMAGE_BYTES:
+            raise SMTPSendError("正文中的图片过大（合计超过 15 MB），请删掉部分图片或改为附件")
+        cid = f"{uuid.uuid4().hex}@{domain}"
+        images.append((cid, "jpeg" if subtype == "jpg" else subtype, data))
+        return f"src={quote}cid:{cid}{quote}"
+
+    return _DATA_IMAGE_RE.sub(repl, html), images
+
+
 def build_message(
     *,
     from_email: str,
@@ -89,7 +123,12 @@ def build_message(
 
     msg.set_content(body_text or "")
     if body_html:
-        msg.add_alternative(body_html, subtype="html")
+        html, images = extract_inline_images(body_html, from_email.split("@")[-1])
+        msg.add_alternative(html, subtype="html")
+        if images:
+            html_part = msg.get_payload()[-1]
+            for cid, subtype, data in images:
+                html_part.add_related(data, maintype="image", subtype=subtype, cid=f"<{cid}>")
 
     for path in attachments:
         p = Path(path)

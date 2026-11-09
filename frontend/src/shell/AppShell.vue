@@ -23,12 +23,14 @@ import { startDesktopNotify } from "../desktopNotify";
 import { orderedAccounts, switchAccount } from "./navModel";
 
 // 不常用的浮层按需加载，减小首屏体积
-const ComposeWindow = defineAsyncComponent(() => import("../components/ComposeWindow.vue"));
+const ComposeDock = defineAsyncComponent(() => import("../compose/ComposeDock.vue"));
 const CommandPalette = defineAsyncComponent(() => import("./CommandPalette.vue"));
 const ShortcutHelp = defineAsyncComponent(() => import("../components/ShortcutHelp.vue"));
 
 const route = useRoute();
 const reading = computed(() => route.name === "message");
+// 设置有自己的分区导航，不显示文件夹面板和邮件搜索
+const inSettings = computed(() => route.meta.section === "settings");
 
 // 非邮件列表 / 详情页面：导航中不高亮任何文件夹
 watch(
@@ -41,7 +43,7 @@ watch(
 
 // 文件夹面板：宽窗口时停靠（prefs.folderPanel 控制显示），窄窗口时是可开关的浮层
 const overlayOpen = ref(false);
-const panelDocked = computed(() => !isMobile.value && !isNarrow.value && prefs.folderPanel);
+const panelDocked = computed(() => !isMobile.value && !isNarrow.value && prefs.folderPanel && !inSettings.value);
 const panelOverlay = computed(() => !isMobile.value && isNarrow.value && overlayOpen.value);
 
 function togglePanel() {
@@ -57,7 +59,9 @@ watch(() => store.palette, (v) => v && (paletteLoaded.value = true));
 watch(() => store.shortcutHelp, (v) => v && (helpLoaded.value = true));
 
 // 手机端阅读或写邮件时隐藏底部标签栏和顶部搜索
-const hideMobileChrome = computed(() => isMobile.value && (reading.value || !!store.compose));
+const hideMobileChrome = computed(
+  () => isMobile.value && (reading.value || store.composes.some((c) => !c.pending && c.state !== "min")),
+);
 
 const disposers = [];
 onMounted(() => {
@@ -102,7 +106,7 @@ useGlobalShortcuts({
     </Transition>
 
     <main class="gm-app-main">
-      <header v-if="!hideMobileChrome" class="gm-app-top">
+      <header v-if="!hideMobileChrome && !inSettings" class="gm-app-top">
         <button
           v-if="!panelDocked && !isMobile"
           type="button"
@@ -126,7 +130,7 @@ useGlobalShortcuts({
     <AccountSwitcher />
     <CommandPalette v-if="paletteLoaded" />
     <ShortcutHelp v-if="helpLoaded" />
-    <ComposeWindow v-if="store.compose" :key="store.compose.key" :params="store.compose.params" />
+    <ComposeDock v-if="store.composes.length" />
     <PurgeProgress />
   </div>
 </template>

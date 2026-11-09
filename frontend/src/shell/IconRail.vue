@@ -153,7 +153,7 @@ function onMe(key) {
 
       <NTooltip placement="right" :delay="300">
         <template #trigger>
-          <RouterLink to="/accounts/" class="gm-rail-btn" :class="{ 'is-active': route.meta.section === 'settings' }" aria-label="设置">
+          <RouterLink to="/settings/accounts" class="gm-rail-btn" :class="{ 'is-active': route.meta.section === 'settings' }" aria-label="设置">
             <NIcon :component="SettingsOutlined" :size="22" />
           </RouterLink>
         </template>

@@ -23,15 +23,23 @@ import { prefs } from "../prefs";
 import { logout, syncAll } from "../actions";
 import { desktopNotify, setDesktopNotify } from "../desktopNotify";
 import { PAGES, accounts, folders, labels, switchAccount } from "./navModel";
+import { SECTIONS } from "../settings/sections";
 
-const SETTINGS = [
-  { path: "/accounts/", label: "账号和导入", keywords: "account 添加 授权 签名 分组" },
-  { path: "/accounts/rules", label: "自动规则", keywords: "rule filter 过滤器" },
-  { path: "/accounts/templates", label: "模板", keywords: "template 快捷回复" },
-  { path: "/messages/blocked-senders", label: "屏蔽的地址", keywords: "block 屏蔽 信任" },
-  { path: "/accounts/security", label: "安全", keywords: "security 两步验证 2fa 设备 备份 证书 https" },
-  { path: "/accounts/security/audit", label: "审计日志", keywords: "audit log 日志" },
-];
+// 命令面板里的设置分区额外的搜索关键词
+const SETTINGS_KEYWORDS = {
+  accounts: "account 添加 授权 导入 outlook gmail",
+  signatures: "signature 签名",
+  groups: "group 分组",
+  rules: "rule filter 过滤器",
+  templates: "template 快捷回复",
+  senders: "block 屏蔽 信任 黑名单",
+  appearance: "theme 主题 密度 阅读 滑动 swipe",
+  notifications: "notification telegram 通知 推送",
+  shortcuts: "keyboard 快捷键",
+  security: "security 两步验证 2fa 设备 ip",
+  backup: "backup 备份 证书 https cert",
+  audit: "audit log 日志",
+};
 
 // 其他模块（如阶段 1 的邮件操作）可以注册额外的命令来源：返回命令数组的函数
 // 响应式：页面挂载后注册的来源也会出现在已打开的命令面板里
@@ -79,9 +87,18 @@ export const commands = computed(() => {
       run: () => switchAccount(a.id),
     });
   }
-  for (const s of SETTINGS) {
-    list.push({ id: `settings-${s.path}`, group: "设置", label: `设置：${s.label}`, icon: SettingsOutlined, keywords: s.keywords, run: () => router.push(s.path) });
+  for (const s of SECTIONS) {
+    list.push({
+      id: `settings-${s.key}`,
+      group: "设置",
+      label: `设置：${s.label}`,
+      hint: s.hint,
+      icon: SettingsOutlined,
+      keywords: SETTINGS_KEYWORDS[s.key],
+      run: () => router.push(`/settings/${s.key}`),
+    });
   }
+  list.push({ id: "settings-add-account", group: "设置", label: "添加邮箱账号", icon: SettingsOutlined, keywords: "add account 新增", run: () => router.push("/settings/accounts/add") });
   list.push(
     { id: "theme-light", group: "外观", label: "外观：浅色", icon: LightModeOutlined, keywords: "theme light", run: () => setThemeMode("light") },
     { id: "theme-dark", group: "外观", label: "外观：深色", icon: DarkModeOutlined, keywords: "theme dark 暗色 夜间", run: () => setThemeMode("dark") },

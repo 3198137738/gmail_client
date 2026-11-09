@@ -11,12 +11,27 @@ const PAGES = [
   ["/compose/sent", "发件记录"],
   ["/files", "附件"],
   ["/cleanup", "批量清理"],
-  ["/accounts/", "账号"],
-  ["/accounts/rules", "规则"],
-  ["/accounts/templates", "模板"],
-  ["/accounts/security", "两步验证"],
-  ["/accounts/security/audit", "审计"],
-  ["/messages/blocked-senders", "屏蔽"],
+  ["/accounts/", "账号", "/settings/accounts"],
+  ["/accounts/rules", "规则", "/settings/rules"],
+  ["/accounts/templates", "模板", "/settings/templates"],
+  ["/accounts/security", "两步验证", "/settings/security"],
+  ["/accounts/security/audit", "审计", "/settings/audit"],
+  ["/messages/blocked-senders", "屏蔽", "/settings/senders"],
+];
+
+const SETTINGS_SECTIONS = [
+  ["accounts", "添加账号"],
+  ["signatures", "签名"],
+  ["groups", "分组"],
+  ["rules", "自动规则"],
+  ["templates", "邮件模板"],
+  ["senders", "屏蔽的地址"],
+  ["appearance", "滑动手势"],
+  ["notifications", "桌面通知"],
+  ["shortcuts", "快捷键"],
+  ["security", "两步验证"],
+  ["backup", "立即备份"],
+  ["audit", "事件"],
 ];
 
 const row = (page, text) => page.locator(".gm-mr", { hasText: text }).first();
@@ -121,7 +136,7 @@ export const steps = [
       await page.keyboard.press("Control+k");
       await page.keyboard.type("审计");
       await page.keyboard.press("Enter");
-      await page.waitForURL(/security\/audit/);
+      await page.waitForURL(/settings\/audit/);
     },
   },
   {
@@ -169,9 +184,10 @@ export const steps = [
     async run(t) {
       const { page, base } = t;
       await t.login();
-      for (const [path, word] of PAGES) {
+      for (const [path, word, target] of PAGES) {
         await page.goto(`${base}${path}`);
         await page.waitForLoadState("networkidle");
+        if (target) t.expect(new URL(page.url()).pathname === target, `${path} 应跳转到 ${target}，实际 ${page.url()}`);
         const text = await page.locator(".gm-app-content").innerText();
         t.expect(text.includes(word), `${path} 没有显示「${word}」`);
       }
@@ -184,7 +200,7 @@ export const steps = [
       const { page } = t;
       await t.login();
       await page.keyboard.press("c");
-      await page.waitForSelector(".gm-compose", { timeout: 10000 });
+      await page.waitForSelector(".gm-cw .gm-cw-subject", { timeout: 10000 });
       await t.shot("compose");
     },
   },
@@ -364,9 +380,16 @@ export const steps = [
       await target.locator(".gm-mr-star.is-on").waitFor();
       // 悬停操作：延后到明天上午 → 离开收件箱，出现在「已延后」
       const snoozeBtn = target.locator(".gm-mr-hover-btn[aria-label^='延后']");
-      await target.hover();
-      await snoozeBtn.waitFor({ state: "visible" });
-      await snoozeBtn.click();
+      // 前面步骤的删除提交后列表可能刷新、行位置移动：悬停落空时重新悬停
+      for (let i = 0; ; i++) {
+        await target.hover();
+        try {
+          await snoozeBtn.click({ timeout: 3000 });
+          break;
+        } catch (err) {
+          if (i >= 3) throw err;
+        }
+      }
       await page.locator(".n-modal").getByText("明天上午").click();
       await page.locator(".gm-snackbar", { hasText: "已延后到" }).waitFor();
       await page.locator(".gm-mr", { hasText: "测试邮件 2：" }).waitFor({ state: "detached" });
@@ -570,6 +593,368 @@ export const steps = [
       await page.locator(".gm-mr").nth(5).click();
       await page.waitForSelector(".gm-rd-thread", { timeout: 1500 });
       t.expect(!(await page.locator(".gm-rd-skeleton").count()), "预加载后打开不应显示加载骨架");
+    },
+  },
+
+  // ---------------- 阶段 3：写邮件 ----------------
+  {
+    name: "compose-multi",
+    async run(t) {
+      const { page } = t;
+      await t.login();
+      const openNew = async () => {
+        await page.locator(".gm-rail-compose").click();
+        await page.locator(".gm-cw:not(.is-min) .gm-cw-subject").waitFor();
+      };
+      await openNew();
+      await page.locator(".gm-cw:not(.is-min) .gm-cw-subject").fill("第一封");
+      await openNew();
+      await page.locator(".gm-cw:not(.is-min) .gm-cw-subject").fill("第二封");
+      t.expect((await page.locator(".gm-cw").count()) === 2, "应有两个写信窗口");
+      t.expect((await page.locator(".gm-cw.is-min").count()) === 1, "打开新窗口时旧窗口应最小化");
+      await openNew();
+      await page.locator(".gm-cw:not(.is-min) .gm-cw-subject").fill("第三封");
+      await t.shot("three");
+      // 都有未保存内容时不能再开第四个
+      await page.locator(".gm-rail-compose").click();
+      await page.locator(".gm-snackbar", { hasText: "最多同时写 3 封" }).waitFor();
+      // 点最小化的标签恢复
+      await page.locator(".gm-cw.is-min .gm-cw-head", { hasText: "第一封" }).click();
+      await page.locator(".gm-cw:not(.is-min) .gm-cw-title", { hasText: "第一封" }).waitFor();
+      // 全屏 / 退出
+      await page.locator(".gm-cw:not(.is-min) button[title='全屏']").click();
+      await page.waitForSelector(".gm-cw.is-max");
+      await page.locator(".gm-dock-backdrop").click({ position: { x: 5, y: 5 } });
+      await page.waitForSelector(".gm-cw.is-max", { state: "detached" });
+    },
+  },
+  {
+    name: "compose-draft-attachments",
+    async run(t) {
+      const { page, base } = t;
+      await t.login();
+      await page.keyboard.press("c");
+      const win = page.locator(".gm-cw").first();
+      await win.locator(".gm-cw-subject").waitFor();
+      await win.locator(".gm-cw-subject").fill("带附件的草稿");
+      await win.locator("input[type=file]:not([accept])").setInputFiles({ name: "计划.txt", mimeType: "text/plain", buffer: Buffer.from("plan") });
+      await win.locator(".gm-cw-att.is-done", { hasText: "计划.txt" }).waitFor({ timeout: 10000 });
+      await t.shot("uploaded");
+      await win.locator("button[title='保存草稿并关闭']").click();
+      await page.waitForSelector(".gm-cw", { state: "detached" });
+      await page.goto(`${base}/compose/drafts`);
+      await page.getByText("带附件的草稿").first().click();
+      await page.locator(".gm-cw .gm-cw-att", { hasText: "计划.txt" }).waitFor();
+    },
+  },
+  {
+    name: "compose-editor",
+    async run(t) {
+      const { page } = t;
+      await t.login();
+      await page.keyboard.press("c");
+      const win = page.locator(".gm-cw").first();
+      const editor = win.locator(".gm-editor");
+      await editor.waitFor();
+      await editor.click();
+      await page.keyboard.type("你好，");
+      // 粘贴图片：内嵌到正文
+      await page.evaluate(async () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = 40;
+        canvas.height = 30;
+        canvas.getContext("2d").fillRect(0, 0, 40, 30);
+        const blob = await new Promise((r) => canvas.toBlob(r, "image/png"));
+        const dt = new DataTransfer();
+        dt.items.add(new File([blob], "shot.png", { type: "image/png" }));
+        document.querySelector(".gm-cw .gm-editor").dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+      });
+      await editor.locator("img[src^='data:image/']").waitFor();
+      // 粘贴带格式的网页内容：去掉 class、脚本，保留粗体
+      await page.evaluate(() => {
+        const dt = new DataTransfer();
+        dt.setData("text/html", '<p class="MsoNormal" style="mso-line-height:1"><b>加粗</b><script>alert(1)</scr' + 'ipt></p>');
+        dt.setData("text/plain", "加粗");
+        document.querySelector(".gm-cw .gm-editor").dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+      });
+      const html = await editor.innerHTML();
+      t.expect(html.includes("<b>加粗</b>") && !html.includes("MsoNormal") && !html.includes("script"), `粘贴清洗不正确：${html.slice(0, 200)}`);
+      // Ctrl+K 插入链接（输入对话框）
+      await page.keyboard.press("Control+k");
+      await page.locator(".n-dialog input").fill("example.com");
+      await page.locator(".n-dialog .n-button", { hasText: "插入" }).click();
+      await editor.locator("a[href='https://example.com']").waitFor();
+      // 格式工具栏
+      await win.locator("button[title='格式工具栏']").click();
+      await win.locator(".gm-format-bar button[title^='撤销']").waitFor();
+      await t.shot("editor");
+    },
+  },
+  {
+    name: "compose-reply-quote",
+    async run(t) {
+      const { page } = t;
+      await t.login();
+      await openRow(page, "测试邮件 5：");
+      await page.keyboard.press("r");
+      const win = page.locator(".gm-cw").first();
+      await win.locator(".gm-cw-title", { hasText: "Re:" }).waitFor();
+      await win.locator(".gm-quote-toggle", { hasText: "显示引用内容" }).waitFor();
+      await win.locator(".gm-quote-toggle").click();
+      await win.locator(".gm-quote-toggle", { hasText: "隐藏引用内容" }).waitFor();
+      await t.shot("reply");
+    },
+  },
+  {
+    name: "compose-send-error",
+    allow: [/^400 \/api\/compose\/send/],   // 测试账号连不上 SMTP
+    async run(t) {
+      const { page } = t;
+      await page.addInitScript(() => {
+        // 没有撤销等待期，直接发送
+        const orig = window.fetch;
+        window.fetch = async (...args) => {
+          const resp = await orig(...args);
+          if (String(args[0]).includes("/api/session")) {
+            const data = await resp.clone().json();
+            if (data.config) data.config.undo_send_seconds = 0;
+            return new Response(JSON.stringify(data), { status: resp.status, headers: resp.headers });
+          }
+          return resp;
+        };
+      });
+      await t.login();
+      await page.keyboard.press("c");
+      const win = page.locator(".gm-cw").first();
+      await win.locator(".gm-chip-input").first().fill("zhang@example.com");
+      await win.locator(".gm-cw-subject").fill("会失败的邮件");
+      await win.locator(".gm-cw-send button", { hasText: "发送" }).click();
+      // 发送失败：窗口保留内容并显示错误
+      await win.locator(".n-alert").waitFor({ timeout: 40000 });
+      t.expect((await win.locator(".gm-cw-subject").inputValue()) === "会失败的邮件", "发送失败后内容应保留");
+    },
+  },
+  {
+    name: "compose-mobile",
+    viewport: MOBILE,
+    touch: true,
+    async run(t) {
+      const { page } = t;
+      await t.login();
+      await page.locator(".gm-tab.is-compose").tap();
+      await page.locator(".gm-cw.is-mobile .gm-cw-subject").waitFor();
+      t.expect(!(await page.locator(".gm-tabbar").count()), "写信时应隐藏标签栏");
+      await t.shot("compose");
+      await page.locator(".gm-cw.is-mobile button[title='保存草稿并关闭']").tap();
+      await page.locator(".gm-tabbar").waitFor();
+    },
+  },
+
+  // ---------------- 阶段 4：功能页 ----------------
+  {
+    name: "compose-address-input",
+    async run(t) {
+      const { page } = t;
+      await t.login();
+      await page.keyboard.press("c");
+      const to = page.locator(".gm-cw input[aria-label='收件人']");
+      await to.waitFor();
+      // 粘贴多个地址（逗号、换行分隔）一次拆成多个地址块
+      await to.evaluate((el) => {
+        const dt = new DataTransfer();
+        dt.setData("text/plain", "a@example.com, 小王 <b@example.com>\nc@example.com");
+        el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+      });
+      const chips = page.locator(".gm-cw .gm-addr-chip");
+      await page.waitForFunction(() => document.querySelectorAll(".gm-cw .gm-addr-chip").length === 3);
+      t.expect((await chips.nth(1).innerText()).includes("小王"), "带名称的地址应显示名称");
+      // 输入框为空时退格：最后一个地址块放回输入框编辑
+      await to.click();
+      await page.keyboard.press("Backspace");
+      await page.waitForFunction(() => document.querySelectorAll(".gm-cw .gm-addr-chip").length === 2);
+      t.expect((await to.inputValue()) === "c@example.com", `退格后输入框应为最后一个地址：${await to.inputValue()}`);
+      // 双击地址块编辑（输入框里正在编辑的地址先变回地址块）
+      await chips.nth(1).dblclick();
+      await page.waitForFunction(() => {
+        const names = [...document.querySelectorAll(".gm-cw .gm-addr-chip")].map((c) => c.innerText);
+        return names.length === 2 && !names.some((n) => n.includes("小王"));
+      });
+      t.expect((await to.inputValue()).includes("b@example.com"), "双击后应把该地址放回输入框");
+      await t.shot("address");
+    },
+  },
+  {
+    name: "pages-error-retry",
+    // 下面故意让接口返回 500
+    allow: [/^500 \/api\/(drafts|scheduled|sent|files|cleanup)/],
+    async run(t) {
+      const { page, base } = t;
+      await t.login();
+      const cases = [
+        ["/compose/drafts", "**/api/drafts", "草稿"],
+        ["/compose/scheduled", "**/api/scheduled", "定时发送"],
+        ["/compose/sent", "**/api/sent", "发件记录"],
+        ["/files", "**/api/files**", "附件"],
+        ["/cleanup", "**/api/cleanup/senders", "批量清理"],
+      ];
+      for (const [path, pattern, title] of cases) {
+        await page.route(pattern, (r) => r.fulfill({ status: 500, contentType: "application/json", body: '{"detail":"服务器出错了"}' }));
+        await page.goto(`${base}${path}`);
+        await page.locator(".gm-state.is-error", { hasText: `${title}加载失败` }).waitFor();
+        await page.unroute(pattern);
+        await page.locator(".gm-state.is-error button", { hasText: "重试" }).click();
+        await page.locator(".gm-state.is-error").waitFor({ state: "detached" });
+      }
+      await t.shot("cleanup");
+    },
+  },
+  {
+    name: "pages-scheduled",
+    async run(t) {
+      const { page, base } = t;
+      await t.login();
+      await page.goto(`${base}/compose/scheduled`);
+      const item = page.locator(".gm-lr", { hasText: "定时：生日祝福" });
+      await item.waitFor();
+      t.expect((await item.innerText()).includes("将于"), "定时发送应显示发送时间");
+      await t.shot("list");
+      await item.hover();
+      await item.locator("button[title='取消定时并编辑']").click();
+      await page.locator(".n-dialog .n-button", { hasText: "取消定时" }).click();
+      await page.locator(".gm-cw .gm-cw-subject").waitFor();
+      t.expect((await page.locator(".gm-cw .gm-cw-subject").inputValue()).includes("生日祝福"), "取消定时后应打开草稿继续编辑");
+    },
+  },
+  {
+    name: "pages-mobile-actions",
+    viewport: MOBILE,
+    touch: true,
+    async run(t) {
+      const { page, base } = t;
+      await t.login();
+      await page.goto(`${base}/compose/drafts`);
+      const row = page.locator(".gm-lr", { hasText: "下周计划" });
+      await row.waitFor();
+      // 触屏上操作总是可见（「⋯」菜单），不依赖悬停
+      await row.locator("button[title='操作']").tap();
+      await t.shot("menu");
+      await page.locator(".n-dropdown-option", { hasText: "舍弃草稿" }).tap();
+      await page.locator(".n-dialog .n-button", { hasText: "舍弃" }).tap();
+      await row.waitFor({ state: "detached" });
+    },
+  },
+  {
+    name: "settings-sections",
+    async run(t) {
+      const { page, base } = t;
+      await t.login();
+      // OAuth 授权回调回到旧地址 /accounts/?... 时保留参数跳到新地址
+      await page.goto(`${base}/accounts/?from=oauth`);
+      await page.waitForURL(/\/settings\/accounts\?from=oauth/);
+      // 电脑端 /settings 直接显示第一个分区
+      await page.goto(`${base}/settings`);
+      await page.waitForURL(/\/settings\/accounts$/);
+      for (const [key, word] of SETTINGS_SECTIONS) {
+        await page.locator(".gm-st-item", { hasText: { accounts: "账号", signatures: "签名", groups: "分组", rules: "自动规则", templates: "模板", senders: "屏蔽与信任", appearance: "外观与阅读", notifications: "通知", shortcuts: "快捷键", security: "安全", backup: "备份与证书", audit: "审计日志" }[key] }).first().click();
+        await page.waitForURL(new RegExp(`/settings/${key}$`));
+        await page.locator(".gm-st-content", { hasText: word }).waitFor({ timeout: 8000 });
+        t.expect(!(await page.locator(".gm-st-content .gm-state.is-error").count()), `${key} 显示了错误状态`);
+        t.expect(await page.locator(`.gm-st-item.is-active[href="/settings/${key}"]`).count() === 1, `${key} 导航没有高亮`);
+      }
+      await t.shot("audit");
+      await page.goto(`${base}/settings/accounts/add`);
+      await page.locator(".gm-st-content", { hasText: "使用 Google 账号授权添加" }).waitFor();
+      t.expect(await page.locator('.gm-st-item.is-active[href="/settings/accounts"]').count() === 1, "添加账号页应高亮「账号」");
+      await t.shot("add-account");
+    },
+  },
+  {
+    name: "settings-appearance",
+    async run(t) {
+      const { page, base } = t;
+      await t.login();
+      await page.goto(`${base}/settings/appearance`);
+      await page.locator(".gm-ap-theme", { hasText: "深色" }).click();
+      await page.waitForFunction(() => document.documentElement.dataset.theme === "dark");
+      await page.locator(".n-radio", { hasText: "紧凑" }).click();
+      await page.waitForFunction(() => document.documentElement.dataset.density === "compact");
+      await t.shot("dark");
+      await page.reload();
+      await page.waitForFunction(() => document.documentElement.dataset.theme === "dark" && document.documentElement.dataset.density === "compact");
+      await page.locator(".gm-ap-theme", { hasText: "浅色" }).click();
+      await page.locator(".n-radio", { hasText: "舒适" }).click();
+      await page.waitForFunction(() => document.documentElement.dataset.density !== "compact");
+    },
+  },
+  {
+    name: "settings-groups-signature",
+    async run(t) {
+      const { page, base } = t;
+      await t.login();
+      await page.goto(`${base}/settings/groups`);
+      const group = page.locator(".gm-gp-row", { hasText: "注册用" });
+      await group.locator("button", { hasText: "重命名" }).click();
+      const input = page.locator(".n-dialog input");
+      await input.fill("注册账号");
+      await page.locator(".n-dialog .n-button", { hasText: "保存" }).click();
+      await page.locator(".gm-snackbar", { hasText: "已重命名为「注册账号」" }).waitFor();
+      t.expect(!(await page.locator(".gm-fp").count()), "设置页不应显示文件夹面板");
+      await page.goto(`${base}/messages/`);
+      await page.locator(".gm-fp-group", { hasText: "注册账号" }).first().waitFor();
+      await page.goto(`${base}/settings/groups`);
+      await page.locator(".gm-gp-row", { hasText: "注册账号" }).locator("button", { hasText: "重命名" }).click();
+      await page.locator(".n-dialog input").fill("注册用");
+      await page.locator(".n-dialog .n-button", { hasText: "保存" }).click();
+      await page.locator(".gm-gp-row", { hasText: "注册用" }).waitFor();
+
+      await page.goto(`${base}/settings/signatures`);
+      const editor = page.locator(".gm-sg-editor [contenteditable=true]").first();
+      await editor.click();
+      await page.keyboard.type("张三 · 冒烟测试签名");
+      await page.locator("button", { hasText: "保存签名" }).click();
+      await page.locator(".gm-snackbar", { hasText: "签名已保存" }).waitFor();
+      await page.reload();
+      await page.locator(".gm-sg-editor", { hasText: "冒烟测试签名" }).waitFor();
+      await page.locator("button", { hasText: "清除签名" }).click();
+      await page.locator(".gm-snackbar", { hasText: "已清除签名" }).waitFor();
+    },
+  },
+  {
+    name: "settings-error-retry",
+    // 下面故意让接口返回 500
+    allow: [/^500 \/api\/(rules|security|senders)/],
+    async run(t) {
+      const { page, base } = t;
+      await t.login();
+      for (const [path, pattern] of [["/settings/rules", "**/api/rules"], ["/settings/security", "**/api/security"], ["/settings/senders", "**/api/senders**"]]) {
+        await page.route(pattern, (r) => r.fulfill({ status: 500, contentType: "application/json", body: '{"detail":"服务器出错了"}' }));
+        await page.goto(`${base}${path}`);
+        await page.locator(".gm-st-content .gm-state.is-error").waitFor();
+        await page.unroute(pattern);
+        await page.locator(".gm-st-content .gm-state.is-error button", { hasText: "重试" }).click();
+        await page.locator(".gm-st-content .gm-state.is-error").waitFor({ state: "detached" });
+      }
+    },
+  },
+  {
+    name: "settings-mobile",
+    viewport: MOBILE,
+    touch: true,
+    async run(t) {
+      const { page, base } = t;
+      await t.login();
+      await page.goto(`${base}/settings`);
+      await page.locator(".gm-st-item", { hasText: "两步验证" }).waitFor();
+      t.expect(!(await page.locator(".gm-st-main").count()), "手机上 /settings 应只显示分区列表");
+      await t.shot("list");
+      await page.locator(".gm-st-item", { hasText: "外观与阅读" }).tap();
+      await page.waitForURL(/\/settings\/appearance$/);
+      await page.locator(".gm-st-back", { hasText: "外观与阅读" }).waitFor();
+      t.expect(!(await page.locator(".gm-st-nav").count()), "手机上进入分区后应隐藏分区列表");
+      await t.shot("detail");
+      await page.locator(".gm-st-back button").tap();
+      await page.waitForURL(/\/settings$/);
+      await page.locator(".gm-st-nav").waitFor();
     },
   },
 ];

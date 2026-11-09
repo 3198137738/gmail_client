@@ -50,7 +50,7 @@ const THEMES = [
 const icon = (c) => () => h(NIcon, { component: c, size: 22 });
 const actions = computed(() => {
   const list = [
-    { key: "settings", label: "设置", icon: icon(SettingsOutlined), run: () => go("/accounts/") },
+    { key: "settings", label: "设置", icon: icon(SettingsOutlined), run: () => go("/settings") },
     { key: "sync", label: "同步所有账号", icon: icon(SyncOutlined), run: () => (close(), syncAll()) },
   ];
   if (desktopNotify.supported) {

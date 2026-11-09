@@ -595,6 +595,12 @@ class ConversationBody(BaseModel):
     on: bool = True
 
 
+@router.get("/conversation-view", name="messages.conversation_view_get")
+def get_conversation_view(request: Request):
+    """当前是否开启会话视图（设置页显示用；cookie 是 HttpOnly，页面读不到）。"""
+    return {"conversation": threads.conversation_mode(request)}
+
+
 @router.post("/conversation-view", name="messages.conversation_view")
 def set_conversation_view(body: ConversationBody):
     """开启 / 关闭会话视图（记在 cookie 中）。"""

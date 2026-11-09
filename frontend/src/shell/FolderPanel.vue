@@ -98,7 +98,7 @@ function openSwitcher() {
       <template v-if="multiAccount">
         <div class="gm-fp-heading">
           账号
-          <RouterLink to="/accounts/" class="gm-fp-heading-link" title="添加或管理账号" @click="emit('navigate')">管理</RouterLink>
+          <RouterLink to="/settings/accounts" class="gm-fp-heading-link" title="添加或管理账号" @click="emit('navigate')">管理</RouterLink>
         </div>
         <ul class="gm-fp-list">
           <li>
@@ -164,7 +164,7 @@ function openSwitcher() {
         </section>
       </template>
       <p v-else-if="store.nav && !accounts.length" class="gm-fp-empty">
-        还没有账号，<RouterLink to="/accounts/" @click="emit('navigate')">添加一个</RouterLink>
+        还没有账号，<RouterLink to="/settings/accounts" @click="emit('navigate')">添加一个</RouterLink>
       </p>
 
       <div class="gm-fp-heading">{{ mobile ? "工具" : "更多" }}</div>
