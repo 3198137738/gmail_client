@@ -15,6 +15,10 @@ function mediaRef(query) {
 export const isMobile = mediaRef("(max-width: 768px)");
 // 窄窗口（文件夹面板改为浮层，不占列宽）
 export const isNarrow = mediaRef("(max-width: 1279px)");
+// 放不下列表 + 阅读窗格（阅读时整页显示）
+export const isCramped = mediaRef("(max-width: 1023px)");
+// 触屏设备（没有悬停）：启用滑动手势、长按多选
+export const isTouch = mediaRef("(hover: none)");
 
 // 合并频繁的刷新请求：刷新进行中又被调用时只做标记，结束后立刻再刷新一次，
 // 既不丢失更新，也能把短时间内的多个事件合并成一次请求。

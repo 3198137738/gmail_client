@@ -46,7 +46,7 @@ const routes = [
       { path: "compose/sent", name: "sent", component: () => import("./views/SentView.vue"), meta: { title: "发件记录", section: "sent_log" } },
       { path: "files", name: "files", component: () => import("./views/FilesView.vue"), meta: { title: "附件", section: "files" } },
       { path: "cleanup", name: "cleanup", component: () => import("./views/CleanupView.vue"), meta: { title: "批量清理", section: "cleanup" } },
-      { path: "compose/sent/:id(\\d+)", name: "sentDetail", component: () => import("./views/SentDetailView.vue"), meta: { section: "sent_log" } },
+      { path: "compose/sent/:id(\\d+)", name: "sentDetail", component: () => import("./mail/SentReader.vue"), meta: { section: "sent_log" } },
       {
         path: "accounts/",
         name: "accounts",

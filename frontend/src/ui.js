@@ -39,15 +39,15 @@ export function confirm(content, { title = "确认", positiveText = "确定", da
 }
 
 // 执行一个接口操作：成功时提示 success（字符串，或根据返回值生成的函数），失败时提示错误信息。
-// 返回接口结果；失败时返回 null。
+// 提示统一显示在底部提示条（失败为红色）。返回接口结果；失败时返回 null。
 export async function run(promise, success) {
   try {
     const result = await promise;
     const text = typeof success === "function" ? success(result) : success;
-    if (text) ui.message?.success(text);
+    if (text) toast(text);
     return result ?? {};
   } catch (err) {
-    if (err?.status !== 401) ui.message?.error(err?.message || "操作失败");
+    if (err?.status !== 401) toast(err?.message || "操作失败", { tone: "error", duration: 6000 });
     return null;
   }
 }
@@ -58,14 +58,15 @@ export const snackbar = reactive({ item: null });
 let snackSeq = 0;
 let snackTimer = null;
 
-export function toast(text, { actionText, onAction, linkText, onLink, duration = 4000 } = {}) {
+// tone：normal / error（失败提示，红色）
+export function toast(text, { actionText, onAction, linkText, onLink, duration = 4000, tone = "normal" } = {}) {
   snackSeq += 1;
   const key = snackSeq;
   clearTimeout(snackTimer);
   const close = () => {
     if (snackbar.item?.key === key) snackbar.item = null;
   };
-  snackbar.item = { key, text, actionText, onAction, linkText, onLink, close };
+  snackbar.item = { key, text, actionText, onAction, linkText, onLink, close, tone };
   if (duration > 0) snackTimer = setTimeout(close, duration);
   return close;
 }

@@ -11,6 +11,8 @@ export const store = reactive({
   view: { kind: null, accountId: null, unreadOnly: false, section: null },
   // 分栏阅读时，详情页里改动了邮件（删除、星标、已读等）后递增，通知左侧列表刷新
   listVersion: 0,
+  // 最近一次显示的邮件列表地址：没带 back 参数打开邮件时（附件中心、通知等）回到这里
+  lastListPath: null,
   // 外壳上的弹层：命令面板（Ctrl+K）、账号切换器、手机端的文件夹 / 「我的」面板
   palette: false,
   accountSwitcher: false,

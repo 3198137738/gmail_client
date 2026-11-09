@@ -1,6 +1,6 @@
 // 命令面板（Ctrl+K）的命令：写邮件、跳转文件夹 / 页面 / 设置、切换账号、外观等。
 // 每条命令：{ id, group, label, hint?, icon?, keywords?, shortcut?, run() }
-import { computed } from "vue";
+import { computed, shallowReactive } from "vue";
 import {
   AccountCircleOutlined,
   BrightnessAutoOutlined,
@@ -34,7 +34,8 @@ const SETTINGS = [
 ];
 
 // 其他模块（如阶段 1 的邮件操作）可以注册额外的命令来源：返回命令数组的函数
-const sources = [];
+// 响应式：页面挂载后注册的来源也会出现在已打开的命令面板里
+const sources = shallowReactive([]);
 export function registerCommandSource(fn) {
   sources.push(fn);
   return () => {

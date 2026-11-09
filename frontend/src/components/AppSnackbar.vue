@@ -19,7 +19,14 @@ function onLink() {
 
 <template>
   <Transition name="gm-snack">
-    <div v-if="snackbar.item" :key="snackbar.item.key" class="gm-snackbar" role="status" aria-live="polite">
+    <div
+      v-if="snackbar.item"
+      :key="snackbar.item.key"
+      class="gm-snackbar"
+      :class="{ 'is-error': snackbar.item.tone === 'error' }"
+      :role="snackbar.item.tone === 'error' ? 'alert' : 'status'"
+      aria-live="polite"
+    >
       <span class="gm-snackbar-text">{{ snackbar.item.text }}</span>
       <button v-if="snackbar.item.linkText" type="button" class="gm-snackbar-btn" @click="onLink">
         {{ snackbar.item.linkText }}
@@ -44,12 +51,14 @@ function onLink() {
     min-width: 288px;
     max-width: min(560px, calc(100vw - 32px));
     padding: 6px 8px 6px 16px;
-    border-radius: var(--gm-radius);
-    background: #303033;
+    border-radius: var(--r-md);
+    background: #2b2d31;
     color: #f2f2f2;
     box-shadow: var(--gm-shadow-3);
     font-size: 14px;
 }
+.gm-snackbar.is-error { background: #b3261e; }
+.gm-snackbar.is-error .gm-snackbar-btn { color: #fff; }
 .gm-snackbar-text { flex: 1; padding: 8px 0; line-height: 1.4; }
 .gm-snackbar-btn {
     border: 0;
@@ -75,6 +84,7 @@ function onLink() {
 .gm-snack-enter-from, .gm-snack-leave-to { opacity: 0; transform: translateY(12px); }
 
 @media (max-width: 768px) {
-    .gm-snackbar { left: 8px; right: 8px; bottom: 8px; min-width: 0; }
+    /* 手机端在底部标签栏上方 */
+    .gm-snackbar { left: 8px; right: 8px; bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 8px); min-width: 0; }
 }
 </style>

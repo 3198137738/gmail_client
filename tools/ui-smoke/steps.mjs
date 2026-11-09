@@ -19,6 +19,38 @@ const PAGES = [
   ["/messages/blocked-senders", "屏蔽"],
 ];
 
+const row = (page, text) => page.locator(".gm-mr", { hasText: text }).first();
+
+async function openRow(page, text) {
+  await row(page, text).click();
+  await page.waitForURL(/\/messages\/\d+/);
+  // 阅读区加载新邮件时仍显示上一封，等主题变成这一封
+  await page.locator(".gm-rd-subject", { hasText: text }).waitFor();
+}
+
+// 触屏滑动（CDP 触摸事件）
+async function swipe(page, locator, dx) {
+  const box = await locator.boundingBox();
+  const y = box.y + box.height / 2;
+  const x0 = box.x + box.width / 2;
+  const cdp = await page.context().newCDPSession(page);
+  const send = (type, x) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints: type === "touchEnd" ? [] : [{ x, y }] });
+  await send("touchStart", x0);
+  for (let i = 1; i <= 8; i++) await send("touchMove", x0 + (dx * i) / 8);
+  await send("touchEnd", x0 + dx);
+  await cdp.detach();
+}
+
+async function longPress(page, locator) {
+  const box = await locator.boundingBox();
+  const cdp = await page.context().newCDPSession(page);
+  const p = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [p] });
+  await new Promise((r) => setTimeout(r, 650));
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await cdp.detach();
+}
+
 async function panelText(page) {
   return (await page.locator(".gm-fp").first().innerText()).replace(/\s+/g, " ");
 }
@@ -224,6 +256,250 @@ export const steps = [
       await page.waitForSelector(".gm-split-reader");
       t.expect(!(await page.locator(".gm-tabbar").count()), "阅读时应隐藏标签栏");
       await t.shot("reading");
+    },
+  },
+
+  // ---------------- 阶段 1：列表与阅读 ----------------
+  {
+    name: "mail-reader",
+    allow: [/^404 \/mail-image/],   // 种子数据里的外部图片地址不存在
+    async run(t) {
+      const { page } = t;
+      await t.login();
+      // 钓鱼提示
+      await openRow(page, "Apple ID");
+      await page.waitForSelector(".gm-tm-alert");
+      t.expect((await page.locator(".gm-tm-alert").innerText()).includes("钓鱼"), "没有钓鱼提示");
+      await t.shot("phishing");
+      // 验证码横幅 + 复制
+      await openRow(page, "阿里云");
+      await page.locator(".gm-tm-otp", { hasText: "825106" }).waitFor();
+      await page.locator(".gm-tm-otp button").click();
+      await page.locator(".gm-snackbar, .n-message", { hasText: "825106" }).first().waitFor();
+      // 外部图片：服务器设置为拦截时显示提示，点「显示图片」后正文改为带 images=1
+      await openRow(page, "新品上市");
+      if (await page.locator(".gm-tm-images button").count()) {
+        await page.locator(".gm-tm-images button").click();
+        await page.waitForSelector('iframe[src*="images=1"]');
+      }
+      // 会话（默认开启会话视图）：同一会话的 3 封合并显示，可全部展开
+      await openRow(page, "周报讨论");
+      const cards = page.locator(".gm-tm");
+      t.expect((await cards.count()) === 3, `会话应有 3 封，实际 ${await cards.count()}`);
+      await page.locator(".gm-rd-subject-actions button[title='全部展开']").click();
+      t.expect((await page.locator(".gm-tm.is-open").count()) === 3, "全部展开失败");
+      await t.shot("thread");
+      // j / k 上下封
+      const idOf = (url) => new URL(url).pathname.split("/").pop();
+      const before = idOf(page.url());
+      await page.keyboard.press("j");
+      await page.keyboard.press("k");   // 新邮件还没加载完时按 k 不应跳过头
+      await page.waitForFunction((id) => !location.pathname.endsWith(`/${id}`), before);
+      await page.locator(".gm-rd-subject", { hasText: "周报讨论" }).waitFor({ state: "detached" });
+      await page.keyboard.press("k");
+      await page.waitForFunction((id) => location.pathname.endsWith(`/${id}`), before);
+      await page.locator(".gm-rd-subject", { hasText: "周报讨论" }).waitFor();
+      // 星标（s）同步到列表
+      await page.keyboard.press("s");
+      await page.locator(".gm-mr.is-active .gm-mr-star.is-on").waitFor({ timeout: 5000 });
+      // 标签（l）
+      await page.keyboard.press("l");
+      await page.locator(".gm-lp").waitFor();
+      await page.locator(".gm-lp-item", { hasText: "账单" }).click();
+      await page.locator(".gm-lp-foot button", { hasText: "应用" }).click();
+      await page.locator(".gm-rd-tag.is-label", { hasText: "账单" }).waitFor();
+      // 标为未读不离开阅读
+      const url = page.url();
+      await page.keyboard.press("Shift+U");
+      await page.locator(".gm-snackbar", { hasText: "未读" }).waitFor();
+      t.expect(page.url() === url, "标为未读后不应离开阅读");
+      // Esc 关闭阅读窗格
+      await page.keyboard.press("Escape");
+      await page.waitForSelector(".gm-split-empty");
+    },
+  },
+  {
+    name: "mail-bulk-undo",
+    async run(t) {
+      const { page } = t;
+      await t.login();
+      const total = async () => Number((await page.locator(".gm-ml-range").innerText()).split("/")[1]);
+      const start = await total();
+      // x 选中两封（j 移动光标）
+      await page.keyboard.press("j");
+      await page.keyboard.press("x");
+      await page.keyboard.press("j");
+      await page.keyboard.press("x");
+      await page.locator(".gm-ml-selcount", { hasText: "已选 2" }).waitFor();
+      await t.shot("selected");
+      // 删除 → 撤销
+      await page.locator(".gm-ml-bulk button[title^='删除']").click();
+      await page.locator(".gm-snackbar", { hasText: "已删除 2 封" }).waitFor();
+      t.expect((await page.locator(".gm-mr").count()) <= 23, "删除后邮件没有隐藏");
+      await page.locator(".gm-snackbar-btn", { hasText: "撤销" }).click();
+      await page.waitForFunction(() => document.querySelectorAll(".gm-mr").length === 25);
+      // Shift 区间选择 3 封后删除，等待提交
+      await page.locator(".gm-mr").nth(2).locator(".gm-mr-lead").click();
+      await page.locator(".gm-mr").nth(4).locator(".gm-mr-lead").click({ modifiers: ["Shift"] });
+      await page.locator(".gm-ml-selcount", { hasText: "已选 3" }).waitFor();
+      await page.keyboard.press("#");
+      await page.waitForTimeout(5600);
+      await page.waitForFunction((n) => {
+        const el = document.querySelector(".gm-ml-range");
+        return el && Number(el.textContent.split("/")[1]) === n;
+      }, start - 3, { timeout: 8000 });
+    },
+  },
+  {
+    name: "mail-context-snooze",
+    async run(t) {
+      const { page, base } = t;
+      await t.login();
+      // 右键菜单 → 加星标
+      const target = row(page, "测试邮件 2：");
+      await target.click({ button: "right" });
+      await page.locator(".n-dropdown-option", { hasText: "加星标" }).waitFor();
+      await t.shot("menu");
+      await page.locator(".n-dropdown-option", { hasText: "加星标" }).click();
+      await target.locator(".gm-mr-star.is-on").waitFor();
+      // 悬停操作：延后到明天上午 → 离开收件箱，出现在「已延后」
+      await target.hover();
+      await target.locator(".gm-mr-hover-btn[aria-label^='延后']").click();
+      await page.locator(".n-modal").getByText("明天上午").click();
+      await page.locator(".gm-snackbar", { hasText: "已延后到" }).waitFor();
+      await page.locator(".gm-mr", { hasText: "测试邮件 2：" }).waitFor({ state: "detached" });
+      await page.goto(`${base}/messages/?kind=snoozed`);
+      await row(page, "测试邮件 2：").waitFor();
+      t.expect((await row(page, "测试邮件 2：").locator(".gm-mr-date.is-snoozed").count()) === 1, "已延后列表没有显示延后时间");
+    },
+  },
+  {
+    name: "mail-filters",
+    async run(t) {
+      const { page } = t;
+      await t.login();
+      await page.locator(".gm-ml-seg button", { hasText: "未读" }).click();
+      await page.waitForURL(/unread=1/);
+      await page.locator(".gm-ml-seg button.is-on", { hasText: "未读" }).waitFor();
+      // 会话视图开关
+      await page.locator("button[title^='会话视图']").click();
+      await page.locator(".gm-snackbar", { hasText: "会话视图" }).waitFor();
+      // 全部标为已读
+      await page.locator(".gm-ml-bar button[title='更多']").click();
+      await page.locator(".n-dropdown-option", { hasText: "全部标为已读" }).click();
+      await page.locator(".n-dialog .n-button", { hasText: "确定" }).click();
+      await page.locator(".gm-snackbar", { hasText: "标记为已读" }).waitFor();
+      await t.shot("unread");
+    },
+  },
+  {
+    name: "mail-pane-off",
+    async run(t) {
+      const { page } = t;
+      await t.login();
+      await page.locator(".gm-ml-bar button[title='更多']").click();
+      await page.locator(".n-dropdown-option", { hasText: "阅读窗格" }).hover();
+      await page.locator(".n-dropdown-option", { hasText: "关闭（整页阅读）" }).last().click();
+      await page.waitForSelector(".gm-mr.is-wide");
+      await t.shot("wide");
+      const scrolled = await page.locator(".gm-ml-scroll").evaluate((el) => {
+        el.scrollTop = 400;
+        return el.scrollTop;   // 内容不够高时实际滚动距离会小于 400
+      });
+      t.expect(scrolled > 50, `列表太短，无法测试滚动恢复：${scrolled}`);
+      await page.locator(".gm-mr").nth(14).click();
+      await page.waitForSelector(".gm-rd-thread");
+      t.expect(!(await page.locator(".gm-split-list").isVisible()), "整页阅读时列表应隐藏");
+      await page.keyboard.press("u");
+      await page.waitForSelector(".gm-mr.is-wide");
+      const top = await page.locator(".gm-ml-scroll").evaluate((el) => el.scrollTop);
+      t.expect(Math.abs(top - scrolled) < 5, `返回后滚动位置没有恢复：${scrolled} → ${top}`);
+    },
+  },
+  {
+    name: "mail-trash",
+    async run(t) {
+      const { page, base } = t;
+      await t.login();
+      await page.goto(`${base}/messages/?kind=trash`);
+      await row(page, "已删除的旧邮件").waitFor();
+      t.expect((await page.locator(".gm-banner-x").first().innerText()).includes("永久删除"), "已删除没有说明条");
+      await openRow(page, "已删除的旧邮件");
+      t.expect((await page.locator(".gm-rd-actions button[title^='移至收件箱']").count()) === 1, "已删除的邮件应能移回收件箱");
+      await page.locator(".gm-rd-actions button[title^='永久删除']").click();
+      await page.locator(".n-dialog", { hasText: "无法恢复" }).waitFor();
+      await page.locator(".n-dialog .n-button", { hasText: "取消" }).click();
+    },
+  },
+  {
+    name: "mail-sent-record",
+    async run(t) {
+      const { page, base } = t;
+      await t.login();
+      await page.goto(`${base}/compose/sent`);
+      await page.getByText("已发送：会议纪要").first().click();
+      await page.waitForURL(/compose\/sent\/\d+/);
+      await page.locator(".gm-sr-subject", { hasText: "会议纪要" }).waitFor();
+      await t.shot("detail");
+    },
+  },
+  {
+    name: "mail-palette-actions",
+    async run(t) {
+      const { page } = t;
+      await t.login();
+      await page.keyboard.press("j");
+      await page.keyboard.press("Control+k");
+      await page.locator(".gm-pal input:focus").waitFor();
+      await page.keyboard.type("加星标");
+      await page.locator(".gm-pal-item.is-active", { hasText: "加星标" }).waitFor();
+      await page.keyboard.press("Enter");
+      await page.locator(".gm-mr.is-focused .gm-mr-star.is-on").waitFor();
+    },
+  },
+  {
+    name: "mail-mobile-gestures",
+    viewport: MOBILE,
+    touch: true,
+    async run(t) {
+      const { page } = t;
+      await t.login();
+      // 左滑删除 → 撤销
+      const first = page.locator(".gm-mr").first();
+      const subject = await first.locator(".gm-mr-subject").innerText();
+      await swipe(page, first, -260);
+      await page.locator(".gm-snackbar", { hasText: "已删除" }).waitFor();
+      await page.locator(".gm-snackbar-btn", { hasText: "撤销" }).tap();
+      await page.locator(".gm-mr", { hasText: subject }).first().waitFor();
+      // 右滑：标为已读 / 未读
+      await swipe(page, page.locator(".gm-mr").nth(1), 260);
+      await page.waitForTimeout(500);
+      // 长按进入多选
+      await longPress(page, page.locator(".gm-mr").nth(2));
+      await page.locator(".gm-ml-selcount", { hasText: "已选 1" }).waitFor();
+      await page.locator(".gm-mr").nth(3).tap();
+      await page.locator(".gm-ml-selcount", { hasText: "已选 2" }).waitFor();
+      await t.shot("selection");
+      await page.locator("button[title^='取消选择']").tap();
+      // 阅读：底部操作栏
+      await page.locator(".gm-mr").nth(4).tap();
+      await page.waitForSelector(".gm-rd-dock");
+      await page.waitForSelector(".gm-rd-thread");
+      await t.shot("reader");
+      await page.locator(".gm-rd-dock-btn", { hasText: "星标" }).tap();
+      await page.locator(".gm-rd-dock-btn.is-on").waitFor();
+    },
+  },
+  {
+    name: "mail-dark",
+    dark: true,
+    async run(t) {
+      const { page } = t;
+      await page.addInitScript(() => localStorage.setItem("gm:prefs:v1", JSON.stringify({ theme: "dark" })));
+      await t.login();
+      await openRow(page, "阿里云");
+      await page.waitForTimeout(500);
+      await t.shot("reader");
     },
   },
 ];

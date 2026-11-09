@@ -147,7 +147,12 @@ async function main() {
         await step.run(t);
         await page.waitForTimeout(150);   // 收集最后的异步错误
       } catch (err) {
-        problems.unshift(`步骤失败：${err.message.split("\n")[0]}`);
+        // 第一行是错误类型；Playwright 调用日志里的「waiting for …」说明卡在哪个元素
+        const lines = err.message.split("\n");
+        const waiting = lines.find((l) => /waiting for/.test(l));
+        // eslint-disable-next-line no-control-regex
+        const clean = (text) => text.replace(/\x1b\[[0-9;]*m/g, "").trim();
+        problems.unshift(`步骤失败：${lines[0]}${waiting ? ` ← ${clean(waiting)}` : ""}`);
         await t.shot("failure").catch(() => {});
       }
       await context.close();
