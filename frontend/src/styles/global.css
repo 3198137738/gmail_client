@@ -30,7 +30,6 @@
     --gm-shadow-2: 0 3px 6px -4px rgba(0, 0, 0, .12), 0 6px 16px 0 rgba(0, 0, 0, .08), 0 9px 28px 8px rgba(0, 0, 0, .05);
     --gm-shadow-3: 0 6px 16px -9px rgba(0, 0, 0, .08), 0 9px 28px 0 rgba(0, 0, 0, .05), 0 12px 48px 16px rgba(0, 0, 0, .03);
     --gm-radius: 3px;
-    --gm-header-h: 56px;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -175,7 +174,7 @@ code {
 }
 
 @media print {
-    .no-print, .gm-header, .n-layout-sider, .gm-compose, .gm-snackbar, .gm-split-list { display: none !important; }
+    .no-print, .gm-rail, .gm-app-panel, .gm-app-top, .gm-tabbar, .gm-resizer, .gm-compose, .gm-snackbar, .gm-split-list { display: none !important; }
     html, body, #app { height: auto; background: #fff; }
-    .n-layout, .n-layout-scroll-container { position: static !important; overflow: visible !important; }
+    .gm-app, .gm-app-main, .gm-app-content { position: static !important; display: block !important; padding: 0 !important; overflow: visible !important; box-shadow: none !important; background: #fff !important; }
 }

@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref, watch } from "vue";
+import { APP_NAME } from "../brand";
 import { useRoute, useRouter } from "vue-router";
 import { NAlert, NButton, NIcon, NPopover, NSpin } from "naive-ui";
 import { ArrowBackOutlined, ArrowDropDownOutlined, DeleteOutlined, PrintOutlined } from "@vicons/material";
@@ -21,7 +22,7 @@ async function load() {
   showImages.value = false;
   try {
     msg.value = await get(`/api/sent/${route.params.id}`);
-    document.title = `${msg.value.subject || "(无主题)"} - Roundcube`;
+    document.title = `${msg.value.subject || "(无主题)"} - ${APP_NAME}`;
   } catch (err) {
     msg.value = null;
     error.value = err.message;

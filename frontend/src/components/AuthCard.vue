@@ -1,7 +1,9 @@
 <script setup>
 // 登录 / 两步验证页：居中的卡片
 import { NCard } from "naive-ui";
-import { store, setThemeMode } from "../store";
+import { setThemeMode } from "../store";
+import { prefs } from "../prefs";
+import { APP_NAME } from "../brand";
 
 defineProps({
   title: { type: String, required: true },
@@ -16,7 +18,7 @@ const THEME_TEXT = { light: "浅色", dark: "深色", auto: "跟随系统" };
   <main class="gm-auth">
     <div class="gm-auth-brand">
       <img src="/img/logo.svg" alt="" width="40" height="40" />
-      <span>Roundcube</span>
+      <span>{{ APP_NAME }}</span>
     </div>
     <NCard class="gm-auth-card" :bordered="true" size="large">
       <h1 class="gm-auth-title">{{ title }}</h1>
@@ -24,8 +26,8 @@ const THEME_TEXT = { light: "浅色", dark: "深色", auto: "跟随系统" };
       <slot />
     </NCard>
     <footer class="gm-auth-footer">
-      <span>Roundcube 邮件客户端</span>
-      <a href="#" @click.prevent="setThemeMode(NEXT_THEME[store.themeMode])">外观：{{ THEME_TEXT[store.themeMode] }}</a>
+      <span>{{ APP_NAME }} · 多账号邮件客户端</span>
+      <a href="#" @click.prevent="setThemeMode(NEXT_THEME[prefs.theme])">外观：{{ THEME_TEXT[prefs.theme] }}</a>
     </footer>
   </main>
 </template>

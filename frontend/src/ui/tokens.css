@@ -1,0 +1,53 @@
+/* 设计令牌：间距、圆角、字号、阴影、密度、动效。颜色仍由 ThemeVars.vue 按 Naive UI 主题写入 --gm-*。
+   新组件只用这里的变量，不写死数值；旧页面在过渡期继续使用 --gm-* 变量。 */
+:root {
+    --sp-1: 4px;
+    --sp-2: 8px;
+    --sp-3: 12px;
+    --sp-4: 16px;
+    --sp-5: 20px;
+    --sp-6: 24px;
+    --sp-7: 32px;
+    --sp-8: 48px;
+
+    --r-sm: 6px;
+    --r-md: 10px;
+    --r-lg: 14px;
+    --r-pill: 999px;
+
+    --fs-xs: 12px;
+    --fs-sm: 13px;
+    --fs-md: 14px;
+    --fs-lg: 16px;
+    --fs-xl: 20px;
+    --fs-2xl: 24px;
+
+    --dur-fast: 120ms;
+    --dur: 200ms;
+    --ease: cubic-bezier(.2, 0, 0, 1);
+
+    /* 外壳尺寸 */
+    --rail-w: 60px;
+    --pane-gap: 8px;
+    --tabbar-h: 56px;
+
+    /* 画布（面板之间露出的背景）；深色由 ThemeVars 覆盖 */
+    --gm-canvas: #eef0f4;
+
+    /* 密度：默认舒适 */
+    --row-h: 72px;
+    --row-pad-y: 12px;
+    --row-pad-x: 16px;
+    --ctl-h: 34px;
+}
+
+[data-density="compact"] {
+    --row-h: 52px;
+    --row-pad-y: 6px;
+    --row-pad-x: 12px;
+    --ctl-h: 28px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    :root { --dur-fast: 0ms; --dur: 0ms; }
+}

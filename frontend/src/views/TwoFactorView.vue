@@ -42,7 +42,7 @@ async function submit() {
 </script>
 
 <template>
-  <AuthCard title="两步验证" subtitle="打开手机上的认证器 App，输入 Roundcube 的 6 位验证码">
+  <AuthCard title="两步验证" subtitle="打开手机上的认证器 App，输入 6 位验证码">
     <NForm @submit.prevent="submit">
       <NFormItem label="验证码" :feedback="error" :validation-status="error ? 'error' : undefined">
         <NInput

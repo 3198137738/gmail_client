@@ -2,12 +2,19 @@ import { onBeforeUnmount, ref } from "vue";
 import { get } from "../api";
 import { store } from "../store";
 
-// 手机端 / 窄窗口（导航变为抽屉，写邮件窗口全屏）
-const mobileQuery = window.matchMedia("(max-width: 768px)");
-export const isMobile = ref(mobileQuery.matches);
-mobileQuery.addEventListener("change", (e) => {
-  isMobile.value = e.matches;
-});
+function mediaRef(query) {
+  const mq = window.matchMedia(query);
+  const value = ref(mq.matches);
+  mq.addEventListener("change", (e) => {
+    value.value = e.matches;
+  });
+  return value;
+}
+
+// 手机端（底部标签栏，阅读和写邮件全屏）
+export const isMobile = mediaRef("(max-width: 768px)");
+// 窄窗口（文件夹面板改为浮层，不占列宽）
+export const isNarrow = mediaRef("(max-width: 1279px)");
 
 // 合并频繁的刷新请求：刷新进行中又被调用时只做标记，结束后立刻再刷新一次，
 // 既不丢失更新，也能把短时间内的多个事件合并成一次请求。

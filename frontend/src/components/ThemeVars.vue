@@ -2,7 +2,8 @@
 // 把 Naive UI 当前主题（浅色 / 深色）的颜色写成页面级 CSS 变量，供各组件的样式使用
 import { watchEffect } from "vue";
 import { useThemeVars } from "naive-ui";
-import { withAlpha } from "../theme";
+import { CANVAS, withAlpha } from "../theme";
+import { prefs } from "../prefs";
 
 const props = defineProps({ dark: { type: Boolean, default: false } });
 const vars = useThemeVars();
@@ -40,11 +41,13 @@ watchEffect(() => {
     "--gm-shadow-2": v.boxShadow2,
     "--gm-shadow-3": v.boxShadow3,
     "--gm-radius": v.borderRadius,
+    "--gm-canvas": CANVAS[props.dark ? "dark" : "light"],
   };
   for (const [key, value] of Object.entries(map)) root.style.setProperty(key, value);
   root.dataset.theme = props.dark ? "dark" : "light";
+  root.dataset.density = prefs.density;
   root.style.colorScheme = props.dark ? "dark" : "light";
-  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", v.bodyColor);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", CANVAS[props.dark ? "dark" : "light"]);
 });
 </script>
 

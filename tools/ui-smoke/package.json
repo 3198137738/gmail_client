@@ -1,0 +1,12 @@
+{
+  "name": "gmail-client-ui-smoke",
+  "private": true,
+  "description": "界面冒烟测试：用本机 Chrome 驱动带种子数据的本地服务（node run.mjs）",
+  "type": "module",
+  "scripts": {
+    "smoke": "node run.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "1.65.0"
+  }
+}

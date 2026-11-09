@@ -1,5 +1,6 @@
 <script setup>
 import { computed, reactive, ref, watch } from "vue";
+import { APP_NAME } from "../brand";
 import { useRoute, useRouter } from "vue-router";
 import { NButton, NCheckbox, NCheckboxGroup, NDropdown, NIcon, NPopover, NSpin, NAlert } from "naive-ui";
 import {
@@ -81,7 +82,7 @@ async function load() {
     store.view.kind = data.folder_kind;
     const backAccount = new URLSearchParams(data.back_url.split("?")[1] || "").get("account_id");
     store.view.accountId = backAccount ? Number(backAccount) : null;
-    document.title = `${data.subject || "(无主题)"} - Roundcube`;
+    document.title = `${data.subject || "(无主题)"} - ${APP_NAME}`;
     changed();   // 打开邮件会把它标为已读
   } catch (err) {
     msg.value = null;

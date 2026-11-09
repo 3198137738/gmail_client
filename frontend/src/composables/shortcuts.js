@@ -6,8 +6,13 @@ import { openCompose, store } from "../store";
 
 export const SHORTCUT_HELP = [
   ["通用", [
+    ["Ctrl + K", "命令面板"],
     ["c", "写邮件"],
     ["/", "搜索邮件"],
+    ["'", "切换账号"],
+    ["Alt + 1…9", "切换到第 1–9 个账号"],
+    ["Alt + 0", "全部账号"],
+    ["[", "收起 / 展开文件夹面板"],
     ["?", "显示快捷键帮助"],
     ["g 然后 i", "转到收件箱"],
     ["g 然后 s", "转到已加星标"],
@@ -55,18 +60,36 @@ function isTyping(target) {
   return !!target.closest("input, textarea, select, [contenteditable='true'], [contenteditable='']");
 }
 
+// 正在播放关闭动画的对话框不算打开（否则关闭后立刻按快捷键会被忽略）
 function hasOpenOverlay() {
-  return !!document.querySelector(".n-modal-container .n-modal, .n-dialog");
+  return !!document.querySelector(
+    '.n-modal-container .n-modal:not([class*="-leave-"]), .n-dialog:not([class*="-leave-"])',
+  );
 }
 
 const GO_TARGETS = { i: "inbox", s: "starred", t: "sent", a: "all" };
 
-export function useGlobalShortcuts() {
+// shell：{ togglePanel(), switchAccountAt(index) }（index 从 0 开始，-1 表示全部账号）
+export function useGlobalShortcuts(shell = {}) {
   const router = useRouter();
   let pendingG = 0;
 
   function onKeyDown(ev) {
-    if (ev.ctrlKey || ev.altKey || ev.metaKey || ev.defaultPrevented) return;
+    if (ev.defaultPrevented) return;
+    // Ctrl+K / ⌘K：命令面板（输入时也可用）
+    if ((ev.ctrlKey || ev.metaKey) && !ev.altKey && !ev.shiftKey && ev.key.toLowerCase() === "k") {
+      ev.preventDefault();
+      store.palette = !store.palette;
+      return;
+    }
+    // Alt+数字：切换账号（用 code 判断，macOS 上 Alt+数字会输入特殊字符）
+    if (ev.altKey && !ev.ctrlKey && !ev.metaKey && /^Digit\d$/.test(ev.code) && !hasOpenOverlay()) {
+      ev.preventDefault();
+      const n = Number(ev.code.slice(5));
+      shell.switchAccountAt?.(n === 0 ? -1 : n - 1);
+      return;
+    }
+    if (ev.ctrlKey || ev.altKey || ev.metaKey) return;
     if (ev.key === "Escape" && store.shortcutHelp) {
       store.shortcutHelp = false;
       return;
@@ -94,6 +117,16 @@ export function useGlobalShortcuts() {
     if (key === "c") {
       ev.preventDefault();
       openCompose();
+      return;
+    }
+    if (key === "'") {
+      ev.preventDefault();
+      store.accountSwitcher = true;
+      return;
+    }
+    if (key === "[" && shell.togglePanel) {
+      ev.preventDefault();
+      shell.togglePanel();
       return;
     }
     if (key === "/") {

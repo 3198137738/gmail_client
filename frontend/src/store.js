@@ -1,21 +1,6 @@
 // 全局状态：登录会话、左侧导航数据、界面状态、写邮件窗口。
 import { reactive } from "vue";
-
-function stored(key) {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function persist(key, value) {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    /* 隐私模式等情况下忽略 */
-  }
-}
+import { prefs } from "./prefs";
 
 export const store = reactive({
   // GET /api/session：authenticated、csrf_token、config 等
@@ -24,14 +9,12 @@ export const store = reactive({
   nav: null,
   // 当前查看的文件夹 / 账号（列表页、详情页设置），用于高亮左侧导航和生成文件夹链接
   view: { kind: null, accountId: null, unreadOnly: false, section: null },
-  // 电脑端折叠左侧导航（只显示图标），记在 localStorage
-  navCollapsed: stored("gm:nav-collapsed") === "1",
-  // 外观：light / dark / auto（跟随系统），记在 localStorage
-  themeMode: ["light", "dark"].includes(stored("gm:theme")) ? stored("gm:theme") : "auto",
   // 分栏阅读时，详情页里改动了邮件（删除、星标、已读等）后递增，通知左侧列表刷新
   listVersion: 0,
-  // 手机端导航抽屉
-  drawerOpen: false,
+  // 外壳上的弹层：命令面板（Ctrl+K）、账号切换器、手机端的文件夹 / 「我的」面板
+  palette: false,
+  accountSwitcher: false,
+  mobileSheet: null,   // null / "folders" / "me"
   // 实时推送连接状态：off / connecting / connected / offline
   realtime: "off",
   realtimeTitle: "",
@@ -47,14 +30,8 @@ export const store = reactive({
   shortcutHelp: false,
 });
 
-export function setNavCollapsed(value) {
-  store.navCollapsed = value;
-  persist("gm:nav-collapsed", value ? "1" : "0");
-}
-
 export function setThemeMode(mode) {
-  store.themeMode = mode;
-  persist("gm:theme", mode);
+  prefs.theme = mode;
 }
 
 let composeSeq = 0;

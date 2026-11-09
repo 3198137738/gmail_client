@@ -12,13 +12,13 @@ import {
   zhCN,
 } from "naive-ui";
 import { themeOverrides } from "./theme";
-import { store } from "./store";
+import { prefs } from "./prefs";
 import UiBridge from "./components/UiBridge.vue";
 import ThemeVars from "./components/ThemeVars.vue";
 import AppSnackbar from "./components/AppSnackbar.vue";
 
 const osTheme = useOsTheme();
-const dark = computed(() => (store.themeMode === "auto" ? osTheme.value === "dark" : store.themeMode === "dark"));
+const dark = computed(() => (prefs.theme === "auto" ? osTheme.value === "dark" : prefs.theme === "dark"));
 </script>
 
 <template>

@@ -17,7 +17,17 @@ export default defineConfig(({ command }) => ({
   build: {
     outDir: fileURLToPath(new URL("../app/static/dist", import.meta.url)),
     emptyOutDir: true,
-    chunkSizeWarningLimit: 1200,
+    chunkSizeWarningLimit: 500,
+    rollupOptions: {
+      output: {
+        // Vue 单独成包：页面代码更新时浏览器仍可使用缓存。
+        // naive-ui 不强行合并成一个包：它的组件按页面按需拆分，懒加载的页面才会加载表格、日期选择等大组件。
+        manualChunks(id) {
+          if (/[\\/]node_modules[\\/](vue|@vue|vue-router)[\\/]/.test(id)) return "vue";
+          return undefined;
+        },
+      },
+    },
   },
   server: {
     proxy: {

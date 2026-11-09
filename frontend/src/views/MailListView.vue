@@ -1,5 +1,6 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { APP_NAME } from "../brand";
 import { useRouter } from "vue-router";
 import { NButton, NButtonGroup, NCheckbox, NDropdown, NIcon, NRadioButton, NRadioGroup, NSpin } from "naive-ui";
 import {
@@ -11,7 +12,6 @@ import {
   CloseOutlined,
   DeleteOutlined,
   DraftsOutlined,
-  EditOutlined,
   MarkEmailUnreadOutlined,
   MoreVertOutlined,
   RefreshOutlined,
@@ -23,9 +23,9 @@ import MailRow from "../components/MailRow.vue";
 import RemoteSearch from "../components/RemoteSearch.vue";
 import TimePicker from "../components/TimePicker.vue";
 import { get, post } from "../api";
-import { navAccount, openCompose, store } from "../store";
+import { navAccount, store } from "../store";
 import { confirm, run, toast } from "../ui";
-import { isMobile, makeRefresher, refreshNav, useCleanup } from "../composables/common";
+import { makeRefresher, refreshNav, useCleanup } from "../composables/common";
 import { usePageShortcuts } from "../composables/shortcuts";
 import { onRealtime } from "../realtime";
 import { snoozeMessages, syncAccount, syncAll } from "../actions";
@@ -118,7 +118,7 @@ function updateTitle() {
   if (!d || props.activeId) return;   // 分栏阅读时标题由详情页设置
   const unread = d.kind === "inbox" ? store.nav?.unread_inbox : 0;
   const acc = navAccount(d.account_id);
-  document.title = `${d.kind_label}${unread ? ` (${unread})` : ""}${acc ? ` - ${acc.email}` : ""} - Roundcube`;
+  document.title = `${d.kind_label}${unread ? ` (${unread})` : ""}${acc ? ` - ${acc.email}` : ""} - ${APP_NAME}`;
 }
 watch(() => store.nav, updateTitle);
 
@@ -628,9 +628,6 @@ const emptyText = computed(() => {
       <NIcon :component="ArrowUpwardOutlined" /> {{ newMailCount }} 封新邮件
     </button>
 
-    <NButton v-if="isMobile" type="primary" circle size="large" class="gm-fab" title="写邮件" @click="openCompose()">
-      <template #icon><NIcon :component="EditOutlined" /></template>
-    </NButton>
   </div>
 </template>
 
@@ -657,14 +654,5 @@ const emptyText = computed(() => {
     font-size: 13px;
     box-shadow: var(--gm-shadow-2);
     cursor: pointer;
-}
-.gm-fab {
-    position: fixed;
-    right: 20px;
-    bottom: 24px;
-    z-index: 10;
-    width: 56px !important;
-    height: 56px !important;
-    box-shadow: var(--gm-shadow-2);
 }
 </style>

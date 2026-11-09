@@ -43,7 +43,7 @@ async function submit() {
 </script>
 
 <template>
-  <AuthCard title="访问验证" subtitle="输入访问密码以继续使用 Roundcube">
+  <AuthCard title="访问验证" subtitle="输入访问密码以继续">
     <NForm @submit.prevent="submit">
       <NAlert v-if="blocked" type="error" :show-icon="true" class="gm-auth-alert">{{ blockedText }}</NAlert>
       <NFormItem label="访问密码" :feedback="error" :validation-status="error ? 'error' : undefined">

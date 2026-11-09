@@ -2,7 +2,8 @@
 import { createRouter, createWebHistory } from "vue-router";
 import { refreshSession, setUnauthorizedHandler } from "./api";
 import { openCompose, store } from "./store";
-import AppLayout from "./components/AppLayout.vue";
+import { APP_NAME } from "./brand";
+import AppShell from "./shell/AppShell.vue";
 // 列表页和详情页用同一个组件实例（分栏阅读），必须是同一个组件对象
 import MailSplit from "./views/MailSplit.vue";
 
@@ -19,7 +20,7 @@ const routes = [
   { path: "/login/2fa", name: "login2fa", component: () => import("./views/TwoFactorView.vue"), meta: { public: true, title: "两步验证" } },
   {
     path: "/",
-    component: AppLayout,
+    component: AppShell,
     children: [
       { path: "", redirect: "/messages/" },
       { path: "messages/", name: "list", component: MailSplit },
@@ -112,7 +113,7 @@ router.beforeEach(async (to) => {
 });
 
 router.afterEach((to) => {
-  if (to.meta.title) document.title = `${to.meta.title} - Roundcube`;
+  if (to.meta.title) document.title = `${to.meta.title} - ${APP_NAME}`;
 });
 
 // 接口返回 401（登录过期、设备被登出）：回到登录页，登录后回到当前页面
