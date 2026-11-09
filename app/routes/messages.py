@@ -36,6 +36,8 @@ from ..services import audit, outbox, phishing, threads
 from ..services import remote_search as remote_search_service
 from ..services.message_actions import (
     delete_local_messages as _delete_local_messages,
+    archive as _archive,
+    report_spam as _report_spam,
     restore_from_trash as _restore_from_trash,
     set_starred as _set_starred,
     toggle_messages_read_state as _toggle_messages_read_state,
@@ -496,8 +498,8 @@ class ActionBody(IdsBody):
 
 @router.post("/actions", name="messages.actions")
 def batch_action(request: Request, body: ActionBody, db: Session = Depends(get_db)):
-    """批量操作选中的邮件：read（标为已读）/ unread（标为未读）/ delete（删除；已删除里的为永久删除）/
-    restore（把已删除里的移回收件箱）。"""
+    """批量操作选中的邮件：read / unread（已读 / 未读）、delete（删除；已删除里的为永久删除）、
+    restore（把已删除里的移回收件箱）、star / unstar（星标）、archive（归档）、spam（举报垃圾邮件）。"""
     messages = _load_for_action(request, db, body.ids)
     if body.action == "read":
         affected = _toggle_messages_read_state(db, messages, is_read=True)
@@ -507,6 +509,15 @@ def batch_action(request: Request, body: ActionBody, db: Session = Depends(get_d
         affected = delete_messages(request, db, messages)
     elif body.action == "restore":
         affected = _restore_from_trash(db, messages)
+    elif body.action in ("star", "unstar"):
+        affected = _set_starred(db, messages, body.action == "star")
+    elif body.action == "archive":
+        affected = _archive(db, messages)
+    elif body.action == "spam":
+        summary = audit.summarize_subjects([m.subject for m in messages])   # 删除本地记录前取主题
+        affected = _report_spam(db, messages)
+        if affected:
+            audit.record_request(request, "mail_reported_spam", summary)
     else:
         raise HTTPException(status_code=400, detail="Unknown action")
     logger.info("batch-%s selected=%s affected=%s", body.action, len(body.ids), affected)
@@ -645,34 +656,65 @@ class LabelsBody(BaseModel):
     label_ids: list[int] = []
 
 
+class BulkLabelsBody(IdsBody):
+    add: list[int] = []
+    remove: list[int] = []
+
+
+def _change_labels(db: Session, targets: list[Message], add, remove) -> set[int]:
+    """给邮件加上 / 去掉 Gmail 标签（本地立即生效，服务器上的修改写入 outbox）。
+
+    add / remove 为标签 id 集合，或「账号 id → 集合」的函数；只处理属于邮件所在账号的标签。
+    返回涉及的账号 id（调用方提交后 kick）。
+    """
+    account_ids = {int(m.account_id) for m in targets}
+    labels_of: dict[int, dict[int, Label]] = defaultdict(dict)
+    for label in db.execute(select(Label).where(Label.account_id.in_(account_ids))).scalars():
+        labels_of[int(label.account_id)][int(label.id)] = label
+    current = gmail_labels.labels_by_message(db, [int(m.id) for m in targets])
+    # (账号, 文件夹, 标签名, 操作) -> UID 列表
+    ops: dict[tuple[int, str, str, str], list[int]] = defaultdict(list)
+    for m in targets:
+        acc = int(m.account_id)
+        own = labels_of[acc]
+        want_add = set(add(acc) if callable(add) else add) & set(own)
+        want_remove = set(remove(acc) if callable(remove) else remove) & set(own)
+        have = {item["id"] for item in current.get(int(m.id), [])}
+        for label_id in want_add - have:
+            db.add(MessageLabel(message_id=int(m.id), label_id=label_id))
+            ops[(acc, m.folder, own[label_id].name, outbox.OP_ADD_LABEL)].append(int(m.uid))
+        for label_id in (want_remove - want_add) & have:
+            db.execute(MessageLabel.__table__.delete().where(
+                MessageLabel.message_id == int(m.id), MessageLabel.label_id == label_id
+            ))
+            ops[(acc, m.folder, own[label_id].name, outbox.OP_REMOVE_LABEL)].append(int(m.uid))
+    for (acc, folder, name, op), uids in ops.items():
+        outbox.enqueue(db, acc, folder, op, uids, name)
+    return {acc for acc, _f, _n, _o in ops}
+
+
+@router.post("/labels", name="messages.bulk_labels")
+def bulk_labels(request: Request, body: BulkLabelsBody, db: Session = Depends(get_db)):
+    """批量加 / 去标签（选中的邮件可以来自多个账号，每封只处理它所在账号的标签）。"""
+    targets = _load_for_action(request, db, body.ids)
+    touched = _change_labels(db, targets, set(body.add), set(body.remove))
+    db.commit()
+    if touched:
+        outbox.kick(touched)
+    return {"ok": True, "affected": len(targets)}
+
+
 @router.post("/{message_id}/labels", name="messages.set_labels")
 def set_labels(request: Request, message_id: int, body: LabelsBody, db: Session = Depends(get_db)):
     """设置邮件（会话视图下为整个会话）的 Gmail 标签：勾选的加上，未勾选的去掉。"""
     message = _get_message(db, message_id)
     targets = threads.expand(db, [message]) if threads.conversation_mode(request) else [message]
-    account_labels = {
-        int(label.id): label
-        for label in db.execute(select(Label).where(Label.account_id == message.account_id)).scalars()
-    }
-    wanted = {i for i in body.label_ids if i in account_labels}
-    current = gmail_labels.labels_by_message(db, [int(m.id) for m in targets])
-    # (文件夹, 标签名, 操作) -> UID 列表
-    ops: dict[tuple[str, str, str], list[int]] = defaultdict(list)
-    for m in targets:
-        have = {item["id"] for item in current.get(int(m.id), [])}
-        for label_id in wanted - have:
-            db.add(MessageLabel(message_id=int(m.id), label_id=label_id))
-            ops[(m.folder, account_labels[label_id].name, outbox.OP_ADD_LABEL)].append(int(m.uid))
-        for label_id in (have - wanted) & set(account_labels):
-            db.execute(MessageLabel.__table__.delete().where(
-                MessageLabel.message_id == int(m.id), MessageLabel.label_id == label_id
-            ))
-            ops[(m.folder, account_labels[label_id].name, outbox.OP_REMOVE_LABEL)].append(int(m.uid))
-    for (folder, name, op), uids in ops.items():
-        outbox.enqueue(db, int(message.account_id), folder, op, uids, name)
+    wanted = set(body.label_ids)
+    all_labels = set(db.execute(select(Label.id).where(Label.account_id == message.account_id)).scalars())
+    touched = _change_labels(db, targets, wanted, all_labels - wanted)
     db.commit()
-    if ops:
-        outbox.kick([int(message.account_id)])
+    if touched:
+        outbox.kick(touched)
     return {"ok": True, "labels": _thread_labels(db, targets)}
 
 
@@ -780,6 +822,8 @@ def view_message(
     request: Request,
     message_id: int,
     back: Optional[str] = Query(None),
+    # 预先加载（悬停 / 键盘移动时）：不把邮件标为已读
+    peek: bool = Query(False),
     db: Session = Depends(get_db),
 ):
     message = db.execute(
@@ -795,7 +839,7 @@ def view_message(
     unread_in_thread = [m for m in thread if not m.is_read]
     # 默认展开：未读的邮件、当前打开的邮件，以及会话中最后一封（与 Gmail 一致）
     expanded_ids = {int(m.id) for m in unread_in_thread} | {int(message.id), int(thread[-1].id)}
-    if unread_in_thread:
+    if unread_in_thread and not peek:
         _toggle_messages_read_state(db, unread_in_thread, is_read=True)
 
     back_url = _list_back_url(back, message.folder_kind)

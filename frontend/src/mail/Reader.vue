@@ -33,6 +33,7 @@ import { registerCommandSource } from "../shell/commands";
 import { APP_NAME } from "../brand";
 import { actionIcon, actionLabel, actionTitle, actionsFor, runAction } from "./actions";
 import { hiddenIds, markRemoved } from "./pendingQueue";
+import { cachedMessage, forgetMessage } from "./prefetch";
 
 const props = defineProps({
   id: { type: Number, required: true },
@@ -56,16 +57,27 @@ const threaded = computed(() => (msg.value?.thread.length || 0) > 1);
 const lastMsg = computed(() => msg.value?.thread[msg.value.thread.length - 1]);
 const allExpanded = computed(() => msg.value?.thread.every((m) => expanded[m.id]));
 
+function show(data) {
+  msg.value = data;
+  for (const key of Object.keys(expanded)) delete expanded[key];
+  for (const m of data.thread) expanded[m.id] = m.expanded;
+}
+
 async function load() {
   loading.value = true;
   error.value = "";
   showImages.value = false;
   labelsOpen.value = false;
+  // 预先加载过的先显示出来，再请求一次（标为已读、取最新状态）
+  const cached = cachedMessage(props.id);
+  if (cached) show(cached);
+  forgetMessage(props.id);
   try {
     const data = await get(`/api/messages/${props.id}`, { back: props.back });
-    msg.value = data;
-    for (const key of Object.keys(expanded)) delete expanded[key];
-    for (const m of data.thread) expanded[m.id] = m.expanded;
+    if (data.id !== props.id && data.thread.every((m) => m.id !== props.id)) return;   // 已经切到别的邮件
+    const keep = cached && msg.value === cached ? { ...expanded } : null;
+    show(data);
+    if (keep) Object.assign(expanded, keep);   // 用户在显示缓存时展开 / 收起过的保持不变
     store.view.kind = data.folder_kind;
     const backAccount = new URLSearchParams(data.back_url.split("?")[1] || "").get("account_id");
     store.view.accountId = backAccount ? Number(backAccount) : null;
@@ -136,11 +148,14 @@ const TOOLBAR_SKIP = new Set(["reply", "replyAll", "forward", "print", "openBody
 const toolbarActions = computed(() => (ctx.value ? actionsFor("reader", ctx.value).filter((a) => !TOOLBAR_SKIP.has(a.id)) : []));
 
 // 手机端底部操作栏：回复、删除、延后、星标 + 更多
-const MOBILE_MAIN = ["delete", "snooze", "star"];
-const mobileMain = computed(() => toolbarActions.value.filter((a) => MOBILE_MAIN.includes(a.id)));
+const MOBILE_MAIN = ["archive", "delete", "snooze", "star"];
+const mobileMain = computed(() =>
+  MOBILE_MAIN.map((id) => toolbarActions.value.find((a) => a.id === id)).filter(Boolean).slice(0, 3),
+);
 const mobileMore = computed(() => {
   if (!ctx.value) return [];
-  const rest = actionsFor("reader", ctx.value).filter((a) => !MOBILE_MAIN.includes(a.id) && a.id !== "reply");
+  const main = new Set(mobileMain.value.map((a) => a.id));
+  const rest = actionsFor("reader", ctx.value).filter((a) => !main.has(a.id) && a.id !== "reply");
   return rest.map((a) => ({ key: a.id, label: actionLabel(a, ctx.value) }));
 });
 
@@ -182,6 +197,8 @@ usePageShortcuts({
   a: () => lastMsg.value && reply(lastMsg.value, "all"),
   f: () => lastMsg.value && reply(lastMsg.value, "forward"),
   s: keyAction("star"),
+  e: keyAction("archive"),
+  "!": keyAction("spam"),
   "#": keyAction("delete"),
   U: keyAction("unread"),
   b: keyAction("snooze"),

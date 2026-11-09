@@ -17,6 +17,7 @@ from ..models import Account
 from .imap_client import (
     IMAPSyncError,
     _account_lock,
+    _discover_special_folder,
     _discover_trash_folder,
     _imap_client,
     _release_account_lock,
@@ -220,6 +221,10 @@ def move_imap_messages(
 ) -> dict:
     """把 ``folder`` 中的邮件移动到 ``target``（默认收件箱）。
 
+    ``target`` 以反斜杠开头时是特殊用途标记（``\All`` 所有邮件 / ``\Archive`` 存档 /
+    ``\Junk`` 垃圾邮件），在服务器上查出对应的文件夹名：归档、举报垃圾邮件用它，
+    同一份代码适用于 Gmail 和 Outlook。找不到对应文件夹时返回错误 ``no_special_folder``。
+
     从 Gmail 垃圾邮件文件夹移到收件箱即等同于在 Gmail 中点「不是垃圾邮件」，
     Gmail 会据此调整垃圾邮件过滤。返回 ``{"ok": bool, "moved": n, "error": ...}``。
     """
@@ -245,6 +250,12 @@ def move_imap_messages(
         return {"ok": False, "moved": 0, "error": "busy"}
     try:
         with _imap_client(email, password) as client:
+            if target.startswith("\\"):
+                resolved = _discover_special_folder(client, target)
+                if not resolved:
+                    logger.warning("No %s folder for move account=%s", target, account_id)
+                    return {"ok": False, "moved": 0, "error": "no_special_folder"}
+                target = resolved
             client.select_folder(folder, readonly=False)
             _move_uids(client, uids, target)
         logger.info("Moved IMAP messages account=%s %s -> %s uids=%s", account_id, folder, target, uids)

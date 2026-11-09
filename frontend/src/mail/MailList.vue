@@ -18,6 +18,7 @@ import {
   SearchOffOutlined,
 } from "@vicons/material";
 import MailRow from "./MailRow.vue";
+import BulkLabelPicker from "./BulkLabelPicker.vue";
 import RemoteSearch from "../components/RemoteSearch.vue";
 import GmIconButton from "../ui/GmIconButton.vue";
 import GmEmptyState from "../ui/GmEmptyState.vue";
@@ -36,6 +37,7 @@ import { useMailList } from "./useMailList";
 import { useSelection } from "./useSelection";
 import { actionIcon, actionLabel, actionTitle, actionsFor, runAction } from "./actions";
 import { markRemoved } from "./pendingQueue";
+import { prefetchMessage } from "./prefetch";
 import { providerOf, trashRetention } from "./wording";
 
 const props = defineProps({
@@ -93,8 +95,18 @@ function ctxFor(ids, source = "list") {
         removed.forEach((id) => sel.selected.delete(id));
         // 正在阅读的邮件离开了列表：阅读区自己处理跳转
       },
+      pickLabels() {
+        // 没有勾选时（快捷键 / 右键作用于单封）先选中它，批量标签作用于选中的邮件
+        if (!sel.count.value) ids.forEach((id) => sel.selected.add(id));
+        labelsOpen.value = true;
+      },
     },
   };
+}
+
+const labelsOpen = ref(false);
+function onLabelsApplied() {
+  list.silentRefresh();
 }
 
 const selectionCtx = computed(() => ctxFor([...sel.selected]));
@@ -223,11 +235,15 @@ const selectOptions = [
   { key: "starred", label: "已加星标" },
 ];
 
-// 批量栏里放不下的操作收进「更多」
-const MAX_BULK_ICONS = 5;
-const bulkVisible = computed(() => bulkActions.value.slice(0, MAX_BULK_ICONS));
+// 批量栏按常用程度排列，放不下的收进「更多」（标签需要弹出选择框，总在前面）
+const BULK_ORDER = ["archive", "delete", "read", "unread", "labels", "snooze", "star", "restore", "spam", "block"];
+const MAX_BULK_ICONS = 6;
+const bulkSorted = computed(() =>
+  [...bulkActions.value].sort((a, b) => BULK_ORDER.indexOf(a.id) - BULK_ORDER.indexOf(b.id)),
+);
+const bulkVisible = computed(() => bulkSorted.value.slice(0, MAX_BULK_ICONS));
 const bulkOverflow = computed(() =>
-  bulkActions.value.slice(MAX_BULK_ICONS).map((a) => ({ key: a.id, label: actionLabel(a, selectionCtx.value) })),
+  bulkSorted.value.slice(MAX_BULK_ICONS).map((a) => ({ key: a.id, label: actionLabel(a, selectionCtx.value) })),
 );
 
 // ---- 右键菜单 ----
@@ -243,7 +259,7 @@ const menuItems = computed(() => {
     else out.push({ key: a.id, label: actionLabel(a, ctx), icon: actionIcon(a, ctx), danger: a.danger });
   }
   // 回复类放一组、状态类一组、删除最后
-  const order = ["open", "openTab", "reply", "replyAll", "forward", "|", "read", "unread", "star", "snooze", "copyOtp", "|", "restore", "notSpam", "block", "delete"];
+  const order = ["open", "openTab", "reply", "replyAll", "forward", "|", "archive", "read", "unread", "star", "snooze", "copyOtp", "|", "restore", "notSpam", "spam", "block", "delete"];
   const sorted = [];
   for (const key of order) {
     if (key === "|") {
@@ -300,10 +316,19 @@ usePageShortcuts({
   x: guard(() => focused.value && sel.toggle(focused.value.id)),
   Escape: guard(() => (sel.count.value ? sel.clear() : false)),
   s: keyAction("star"),
+  e: keyAction("archive"),
+  "!": keyAction("spam"),
   "#": keyAction("delete"),
   I: keyAction("read"),
   U: keyAction("unread"),
   b: keyAction("snooze"),
+  l: keyAction("labels"),
+});
+
+// 键盘移动光标时预先加载这封邮件
+watch(focusIndex, (i) => {
+  const item = items.value[i];
+  if (item && props.visible) prefetchMessage(item.id, list.listPath());
 });
 
 // ---- 命令面板：对选中（或光标所在）的邮件执行操作 ----
@@ -379,15 +404,19 @@ const remoteOpen = ref(false);
         <template v-if="sel.active.value">
           <span class="gm-ml-selcount">已选 {{ sel.count.value }}</span>
           <div class="gm-ml-bulk" role="toolbar" aria-label="批量操作">
-            <GmIconButton
-              v-for="a in bulkVisible"
-              :key="a.id"
-              :icon="actionIcon(a, selectionCtx)"
-              :title="actionTitle(a, selectionCtx)"
-              :danger="a.danger"
-              :active="a.active?.(selectionCtx)"
-              @click="runAction(a.id, selectionCtx)"
-            />
+            <template v-for="a in bulkVisible" :key="a.id">
+              <BulkLabelPicker v-if="a.id === 'labels'" v-model:show="labelsOpen" :items="sel.selectedItems.value" @applied="onLabelsApplied">
+                <GmIconButton :icon="actionIcon(a, selectionCtx)" :title="actionTitle(a, selectionCtx)" :active="labelsOpen" @click="labelsOpen = !labelsOpen" />
+              </BulkLabelPicker>
+              <GmIconButton
+                v-else
+                :icon="actionIcon(a, selectionCtx)"
+                :title="actionTitle(a, selectionCtx)"
+                :danger="a.danger"
+                :active="a.active?.(selectionCtx)"
+                @click="runAction(a.id, selectionCtx)"
+              />
+            </template>
             <NDropdown v-if="bulkOverflow.length" trigger="click" :options="bulkOverflow" @select="(id) => runAction(id, selectionCtx)">
               <GmIconButton :icon="MoreHorizOutlined" title="更多操作" />
             </NDropdown>
@@ -500,6 +529,7 @@ const remoteOpen = ref(false);
           @action="(id) => act(id, [m.id])"
           @context="(ev) => openMenu(m, ev)"
           @label="(lb) => openLabel(m, lb)"
+          @prefetch="prefetchMessage(m.id, list.listPath())"
         />
         <GmEmptyState
           v-if="data && !items.length && emptyText"

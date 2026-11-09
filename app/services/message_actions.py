@@ -141,6 +141,53 @@ def restore_from_trash(db: Session, messages: list[Message]) -> int:
     return restored
 
 
+# 归档 / 举报垃圾邮件的目标：特殊用途文件夹标记，由 imap_ops.move_imap_messages 在服务器上解析
+ARCHIVE_TARGETS = {"gmail": "\All", "outlook": "\Archive"}
+JUNK_TARGET = "\Junk"
+
+
+def _providers(db: Session, account_ids: set[int]) -> dict[int, str]:
+    from ..crypto import decrypt_password
+    from ..models import Account
+    from .mail_providers import GMAIL, key_for_secret
+
+    result: dict[int, str] = {}
+    for account in db.execute(select(Account).where(Account.id.in_(account_ids))).scalars():
+        try:
+            result[int(account.id)] = key_for_secret(decrypt_password(account.encrypted_password))
+        except ValueError:
+            result[int(account.id)] = GMAIL
+    return result
+
+
+def _move_out(db: Session, messages: list[Message], target_for) -> int:
+    """把邮件移出当前文件夹：服务器上的移动写入 outbox，本地记录先删掉（同步时跳过这些 UID）。"""
+    if not messages:
+        return 0
+    providers = _providers(db, {int(m.account_id) for m in messages})
+    grouped: dict[tuple[int, str, str], list[int]] = defaultdict(list)
+    for message in messages:
+        target = target_for(providers.get(int(message.account_id), "gmail"))
+        grouped[(int(message.account_id), message.folder, target)].append(int(message.uid))
+    for (account_id, folder, target), uids in grouped.items():
+        outbox.enqueue(db, account_id, folder, outbox.OP_MOVE, uids, target)
+    moved = delete_local_messages(db, messages)
+    outbox.kick({account_id for account_id, _f, _t in grouped})
+    return moved
+
+
+def archive(db: Session, messages: list[Message]) -> int:
+    """归档收件箱里的邮件：Gmail 移到「所有邮件」（去掉收件箱标签），Outlook 移到「存档」。"""
+    targets = [m for m in messages if m.folder_kind == "inbox"]
+    return _move_out(db, targets, lambda provider: ARCHIVE_TARGETS.get(provider, ARCHIVE_TARGETS["gmail"]))
+
+
+def report_spam(db: Session, messages: list[Message]) -> int:
+    """举报垃圾邮件：移到服务器的垃圾邮件文件夹（服务商据此学习）。已删除 / 已发送 / 垃圾邮件中的不处理。"""
+    targets = [m for m in messages if m.folder_kind not in ("junk", "trash", "sent")]
+    return _move_out(db, targets, lambda _provider: JUNK_TARGET)
+
+
 # --- Standalone helpers for the Telegram bot (own session lifecycle) --------
 
 

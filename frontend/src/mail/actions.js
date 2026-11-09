@@ -9,6 +9,7 @@
 //   message   阅读中的邮件详情（GET /api/messages/:id 的结果），仅阅读区
 //   hooks     { removed(ids)：邮件离开当前视图；updated()：状态变了，刷新显示 }
 import {
+  ArchiveOutlined,
   BlockOutlined,
   ContentCopyOutlined,
   DeleteForeverOutlined,
@@ -22,6 +23,7 @@ import {
   ReplyAllOutlined,
   ReplyOutlined,
   ReportOffOutlined,
+  ReportOutlined,
   RestoreFromTrashOutlined,
   SnoozeOutlined,
   StarBorderOutlined,
@@ -34,7 +36,7 @@ import { refreshNav } from "../composables/common";
 import { snoozeMessages } from "../actions";
 import { upsertPurgeJob } from "../purgeJobs";
 import { router } from "../router";
-import { queueDelete } from "./pendingQueue";
+import { queueAction, queueDelete } from "./pendingQueue";
 import { pickTime } from "./pickers";
 import { providerOf, trashRetention } from "./wording";
 
@@ -63,13 +65,20 @@ async function setRead(ctx, read) {
 async function setStar(ctx, starred) {
   const before = ctx.items.map((m) => m.is_starred);
   ctx.items.forEach((m) => (m.is_starred = starred));   // 先在界面上切换，失败时恢复
-  const results = await Promise.all(
-    ctx.ids.map((id) => run(post(`/api/messages/${id}/star`, { starred }))),
-  );
-  if (results.some((r) => !r)) ctx.items.forEach((m, i) => (m.is_starred = before[i]));
+  const result = await run(post("/api/messages/actions", { action: starred ? "star" : "unstar", ids: ctx.ids }));
+  if (!result) ctx.items.forEach((m, i) => (m.is_starred = before[i]));
   else if (ctx.kind === "starred" && !starred) ctx.hooks?.removed?.(ctx.ids);
   changed();
 }
+
+// 可以给这些邮件加的标签（各自账号的标签；只有 Gmail 账号有标签）
+export function labelsFor(ctx) {
+  if (ctx.message) return ctx.message.account_labels || [];
+  const accounts = new Set(accountsOf(ctx));
+  return (store.nav?.labels || []).filter((lb) => accounts.has(lb.account_id));
+}
+
+const inInbox = (m) => (m.folder_kind || "inbox") === "inbox";
 
 export const ACTIONS = [
   {
@@ -98,6 +107,31 @@ export const ACTIONS = [
     scopes: ["reader", "context", "palette"],
     available: one,
     run: (ctx) => openCompose({ forward: ctx.ids[0] }),
+  },
+  {
+    id: "archive",
+    label: "归档",
+    icon: ArchiveOutlined,
+    shortcut: "e",
+    swipe: true,
+    scopes: ["list", "reader", "context", "palette", "swipe"],
+    // 只有收件箱里的邮件可以归档（Gmail 移到「所有邮件」，Outlook 移到「存档」）
+    available: (ctx) => ctx.items.some(inInbox) && !isTrash(ctx) && ctx.kind !== "sent",
+    run(ctx) {
+      queueAction("archive", ctx.items.filter(inInbox).map((m) => m.id));
+    },
+  },
+  {
+    id: "spam",
+    label: "举报垃圾邮件",
+    icon: ReportOutlined,
+    shortcut: "!",
+    swipe: true,
+    scopes: ["list", "reader", "context", "palette", "swipe"],
+    available: (ctx) => !isTrash(ctx) && ctx.kind !== "sent" && ctx.kind !== "junk" && ctx.items.some((m) => !["junk", "trash", "sent"].includes(m.folder_kind)),
+    run(ctx) {
+      queueAction("spam", ctx.ids);
+    },
   },
   {
     id: "restore",
@@ -225,9 +259,9 @@ export const ACTIONS = [
     label: "标签…",
     icon: LabelOutlined,
     shortcut: "l",
-    scopes: ["reader"],
-    // 只有 Gmail 账号有标签；阅读区由 LabelPicker 处理
-    available: (ctx) => one(ctx) && (ctx.message?.account_labels?.length || 0) > 0,
+    scopes: ["list", "reader"],
+    // 只有 Gmail 账号有标签；阅读区由 LabelPicker、列表由 BulkLabelPicker 处理
+    available: (ctx) => !isTrash(ctx) && labelsFor(ctx).length > 0,
     run: (ctx) => ctx.hooks?.pickLabels?.(),
   },
   {
@@ -311,7 +345,9 @@ export function actionIcon(action, ctx) {
 
 export function actionTitle(action, ctx) {
   const label = actionLabel(action, ctx);
-  return action.shortcut ? `${label}（${action.shortcut === "I" || action.shortcut === "U" ? `Shift+${action.shortcut}` : action.shortcut}）` : label;
+  if (!action.shortcut) return label;
+  const key = action.shortcut === "I" || action.shortcut === "U" ? `Shift+${action.shortcut}` : action.shortcut;
+  return `${label}（${key}）`;
 }
 
 export async function runAction(id, ctx) {
@@ -324,6 +360,7 @@ export async function runAction(id, ctx) {
 // 滑动手势可选的动作（设置里用）
 export const SWIPE_CHOICES = [
   { value: "none", label: "无" },
+  { value: "archive", label: "归档" },
   { value: "delete", label: "删除" },
   { value: "toggleRead", label: "标为已读 / 未读" },
   { value: "star", label: "加星标" },

@@ -26,10 +26,10 @@ const props = defineProps({
   account: { type: Object, default: null },
   touch: { type: Boolean, default: false },
 });
-const emit = defineEmits(["open", "toggle", "action", "context", "label"]);
+const emit = defineEmits(["open", "toggle", "action", "context", "label", "prefetch"]);
 
 const FOLDER_NAMES = { inbox: "收件箱", sent: "已发送", junk: "垃圾邮件", trash: "已删除" };
-const HOVER_ACTIONS = ["snooze", "toggleRead", "delete"];
+const HOVER_ACTIONS = ["archive", "snooze", "toggleRead", "delete"];
 
 const unread = computed(() => !props.item.is_read || props.item.thread_unread > 0);
 const peer = computed(() => props.item.peer || "(未知)");
@@ -52,7 +52,7 @@ const swipe = useSwipe({
   enabled: () => props.touch && !props.selectionMode,
   canSwipe: (dir) => !!swipeAction(dir),
   // 删除、延后等会让邮件离开当前列表，先滑出
-  willLeave: (dir) => ["delete", "snooze"].includes(swipeAction(dir)?.id) || (swipeAction(dir)?.id === "star" && props.kind === "starred"),
+  willLeave: (dir) => ["delete", "archive", "spam", "snooze"].includes(swipeAction(dir)?.id) || (swipeAction(dir)?.id === "star" && props.kind === "starred"),
   onCommit: (dir) => {
     const action = swipeAction(dir);
     if (action) emit("action", action.id);
@@ -78,6 +78,16 @@ function onClick(ev) {
   }
   if (String(window.getSelection?.() || "").trim()) return;   // 正在选择文字
   emit("open", ev);
+}
+
+// 悬停 150ms 以上才预先加载（鼠标只是划过时不请求）
+let hoverTimer = null;
+function onEnter() {
+  if (props.touch) return;
+  hoverTimer = setTimeout(() => emit("prefetch"), 150);
+}
+function onLeave() {
+  clearTimeout(hoverTimer);
 }
 
 function onAuxClick(ev) {
@@ -116,6 +126,8 @@ function onAuxClick(ev) {
       @click="onClick"
       @auxclick="onAuxClick"
       @contextmenu.prevent="emit('context', $event)"
+      @mouseenter="onEnter"
+      @mouseleave="onLeave"
       v-on="swipe.handlers"
     >
       <span class="gm-mr-lead" @click.stop="emit('toggle', { range: $event.shiftKey })">
@@ -229,8 +241,6 @@ function onAuxClick(ev) {
     background: var(--gm-surface);
     color: var(--gm-text-2);
     cursor: pointer;
-    content-visibility: auto;
-    contain-intrinsic-size: auto var(--row-h);
     transition: background-color var(--dur-fast) var(--ease);
 }
 .gm-mr:hover { background: var(--gm-hover); }

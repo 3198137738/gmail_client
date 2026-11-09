@@ -363,8 +363,10 @@ export const steps = [
       await page.locator(".n-dropdown-option", { hasText: "加星标" }).click();
       await target.locator(".gm-mr-star.is-on").waitFor();
       // 悬停操作：延后到明天上午 → 离开收件箱，出现在「已延后」
+      const snoozeBtn = target.locator(".gm-mr-hover-btn[aria-label^='延后']");
       await target.hover();
-      await target.locator(".gm-mr-hover-btn[aria-label^='延后']").click();
+      await snoozeBtn.waitFor({ state: "visible" });
+      await snoozeBtn.click();
       await page.locator(".n-modal").getByText("明天上午").click();
       await page.locator(".gm-snackbar", { hasText: "已延后到" }).waitFor();
       await page.locator(".gm-mr", { hasText: "测试邮件 2：" }).waitFor({ state: "detached" });
@@ -486,8 +488,9 @@ export const steps = [
       await page.waitForSelector(".gm-rd-dock");
       await page.waitForSelector(".gm-rd-thread");
       await t.shot("reader");
-      await page.locator(".gm-rd-dock-btn", { hasText: "星标" }).tap();
-      await page.locator(".gm-rd-dock-btn.is-on").waitFor();
+      // 收件箱邮件：底部是 归档 / 删除 / 延后，归档后自动打开下一封
+      await page.locator(".gm-rd-dock-btn", { hasText: "归档" }).tap();
+      await page.locator(".gm-snackbar", { hasText: "已归档" }).waitFor();
     },
   },
   {
@@ -500,6 +503,73 @@ export const steps = [
       await openRow(page, "阿里云");
       await page.waitForTimeout(500);
       await t.shot("reader");
+    },
+  },
+
+  // ---------------- 阶段 2：批量整理 ----------------
+  {
+    name: "triage-archive-spam",
+    async run(t) {
+      const { page } = t;
+      await t.login();
+      const total = async () => Number((await page.locator(".gm-ml-range").innerText()).split("/")[1]);
+      const start = await total();
+      // e 归档两封 → 撤销 → 再归档并等待提交
+      await page.keyboard.press("j");
+      await page.keyboard.press("x");
+      await page.keyboard.press("j");
+      await page.keyboard.press("x");
+      await page.keyboard.press("e");
+      await page.locator(".gm-snackbar", { hasText: "已归档 2 封" }).waitFor();
+      await page.locator(".gm-snackbar-btn", { hasText: "撤销" }).click();
+      await page.waitForFunction(() => document.querySelectorAll(".gm-mr").length === 25);
+      await page.locator(".gm-mr").nth(0).locator(".gm-mr-lead").click();
+      await page.locator(".gm-mr").nth(1).locator(".gm-mr-lead").click();
+      await page.locator(".gm-ml-bulk button[title^='归档']").click();
+      await page.waitForTimeout(5600);
+      await page.waitForFunction((n) => Number(document.querySelector(".gm-ml-range")?.textContent.split("/")[1]) === n, start - 2, { timeout: 8000 });
+      // 右键 → 举报垃圾邮件
+      await page.locator(".gm-mr").nth(2).click({ button: "right" });
+      await page.locator(".n-dropdown-option", { hasText: "举报垃圾邮件" }).click();
+      await page.locator(".gm-snackbar", { hasText: "举报为垃圾邮件" }).waitFor();
+      await t.shot("spam");
+    },
+  },
+  {
+    name: "triage-bulk-labels",
+    async run(t) {
+      const { page, data, base } = t;
+      await t.login();
+      await page.goto(`${base}/messages/?kind=inbox&account_id=${data.main}`);
+      await page.waitForSelector(".gm-mr");
+      const plain = page.locator(".gm-mr", { hasText: "测试邮件 8：" }).first();
+      const labeled = page.locator(".gm-mr", { hasText: "测试邮件 4：" }).first();
+      await plain.locator(".gm-mr-lead").click();
+      await labeled.locator(".gm-mr-lead").click();
+      await page.keyboard.press("l");
+      await page.locator(".gm-blp").waitFor();
+      // 「项目」只有其中一封有：半选；点一下变为全部加上
+      const item = page.locator(".gm-blp-item", { hasText: "项目" });
+      t.expect(((await item.getAttribute("class")) || "").includes("indeterminate"), "部分邮件有的标签应显示为半选");
+      await t.shot("picker");
+      await item.click();
+      await page.locator(".gm-blp-foot button", { hasText: "应用" }).click();
+      await page.locator(".gm-snackbar", { hasText: "已更新 2 封邮件的标签" }).waitFor();
+      await plain.locator(".gm-mr-chip.is-label", { hasText: "项目" }).waitFor();
+    },
+  },
+  {
+    name: "triage-prefetch",
+    async run(t) {
+      const { page } = t;
+      await t.login();
+      const req = page.waitForRequest((r) => /\/api\/messages\/\d+\?.*peek=1/.test(r.url()));
+      await page.locator(".gm-mr").nth(5).hover();
+      await req;
+      // 打开时立即显示（不出现加载骨架）
+      await page.locator(".gm-mr").nth(5).click();
+      await page.waitForSelector(".gm-rd-thread", { timeout: 1500 });
+      t.expect(!(await page.locator(".gm-rd-skeleton").count()), "预加载后打开不应显示加载骨架");
     },
   },
 ];

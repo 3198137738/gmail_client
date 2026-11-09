@@ -45,6 +45,7 @@ EVENT_LABELS = {
     "cert_renew_requested": "请求续订 HTTPS 证书",
     "cert_renewed": "HTTPS 证书续订",
     "mail_deleted": "删除邮件",
+    "mail_reported_spam": "举报垃圾邮件",
     "sender_purged": "永久删除发件人邮件",
     "sent_record_deleted": "删除发件记录",
     "account_added": "添加账号",

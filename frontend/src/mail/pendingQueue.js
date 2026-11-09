@@ -1,5 +1,6 @@
-// 可撤销的删除：先在界面上隐藏邮件并提示「撤销」，几秒后（或离开页面时）才真正删除。
-// 列表和阅读区都过滤掉 hiddenIds 里的邮件；连续删除会合并成一次提交。
+// 可撤销的操作（删除、归档、举报垃圾邮件）：先在界面上隐藏邮件并提示「撤销」，
+// 几秒后（或离开页面时）才真正提交。列表和阅读区都过滤掉 hiddenIds 里的邮件；
+// 连续的同一种操作合并成一次提交，换了另一种操作时先提交前一批。
 import { reactive } from "vue";
 import { post } from "../api";
 import { store } from "../store";
@@ -15,19 +16,26 @@ export function markRemoved(ids) {
   ids.forEach((id) => removedIds.add(id));
 }
 
-let pending = [];
+const DONE_TEXT = {
+  delete: (n) => (n > 1 ? `已删除 ${n} 封邮件` : "已删除邮件"),
+  archive: (n) => (n > 1 ? `已归档 ${n} 封邮件` : "已归档"),
+  spam: (n) => (n > 1 ? `已将 ${n} 封邮件举报为垃圾邮件` : "已举报为垃圾邮件"),
+};
+const FAIL_TEXT = { delete: "删除失败", archive: "归档失败", spam: "举报失败" };
+
+let pending = { action: null, ids: [] };
 let timer = null;
 
 async function commit() {
   clearTimeout(timer);
   timer = null;
-  const ids = pending;
-  pending = [];
+  const { action, ids } = pending;
+  pending = { action: null, ids: [] };
   if (!ids.length) return;
   try {
-    await post("/api/messages/actions", { action: "delete", ids }, { keepalive: true });
+    await post("/api/messages/actions", { action, ids }, { keepalive: true });
   } catch {
-    toast("删除失败，邮件已恢复显示", { tone: "error" });
+    toast(`${FAIL_TEXT[action] || "操作失败"}，邮件已恢复显示`, { tone: "error" });
   }
   ids.forEach((id) => hiddenIds.delete(id));
   store.listVersion += 1;
@@ -37,26 +45,26 @@ async function commit() {
 function undo() {
   clearTimeout(timer);
   timer = null;
-  pending.forEach((id) => hiddenIds.delete(id));
-  pending = [];
+  pending.ids.forEach((id) => hiddenIds.delete(id));
+  pending = { action: null, ids: [] };
 }
 
-// 删除（移到「已删除」）并显示可撤销的提示
-export function queueDelete(ids) {
+// 执行一个可撤销的操作：action 为 /api/messages/actions 的 action（delete / archive / spam）
+export function queueAction(action, ids) {
+  if (pending.action && pending.action !== action) commit();
+  pending.action = action;
   for (const id of ids) {
     if (!hiddenIds.has(id)) {
       hiddenIds.add(id);
-      pending.push(id);
+      pending.ids.push(id);
     }
   }
   clearTimeout(timer);
   timer = setTimeout(commit, UNDO_MS);
-  toast(pending.length > 1 ? `已删除 ${pending.length} 封邮件` : "已删除邮件", {
-    actionText: "撤销",
-    onAction: undo,
-    duration: UNDO_MS,
-  });
+  toast(DONE_TEXT[action](pending.ids.length), { actionText: "撤销", onAction: undo, duration: UNDO_MS });
 }
+
+export const queueDelete = (ids) => queueAction("delete", ids);
 
 export function flushPending() {
   return commit();

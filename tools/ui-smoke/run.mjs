@@ -114,7 +114,8 @@ async function main() {
     const selected = steps.filter((s) => !filters.length || filters.some((f) => s.name.includes(f)));
     for (const step of selected) {
       const problems = [];
-      const allowed = [/^401 \/api\/session/, ...(step.allow || [])];
+      // 预先加载的邮件可能已被删除：404 不影响使用
+      const allowed = [/^401 \/api\/session/, /^404 \/api\/messages\/\d+\?.*peek=1/, ...(step.allow || [])];
       const context = await browser.newContext({
         viewport: step.viewport || { width: 1440, height: 900 },
         deviceScaleFactor: 1,
