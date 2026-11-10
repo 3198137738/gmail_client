@@ -741,16 +741,17 @@ public:
                 for (uint64_t uid : uids) push(BodyResult{uid, "", false, exc.what()});
             }
         };
+        // 线程结束时的计数：必须定义在函数作用域——线程在下面的代码块结束后仍在运行
+        auto finished = [&]() {
+            {
+                std::lock_guard<std::mutex> lg(qmu);
+                --running;
+            }
+            qcv.notify_one();
+        };
         {
             py::gil_scoped_release release;
             running = 1 + workers;
-            auto finished = [&]() {
-                {
-                    std::lock_guard<std::mutex> lg(qmu);
-                    --running;
-                }
-                qcv.notify_one();
-            };
             threads.emplace_back([&]() {
                 fetch_bodies(*main_, small, true);
                 finished();

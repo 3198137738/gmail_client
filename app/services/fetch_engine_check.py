@@ -16,6 +16,7 @@ import logging
 import re
 import socket
 import socketserver
+import subprocess
 import sys
 import threading
 import time
@@ -320,27 +321,47 @@ def check_engine(module, *, verbose: bool = False) -> Optional[str]:
 
 
 def run_self_check() -> bool:
-    """启动时调用：自检通过才启用引擎。"""
+    """启动时调用：自检通过才启用引擎。
+
+    自检在**子进程**里跑：C++ 扩展若有内存错误会让进程直接崩溃（段错误），在子进程里崩溃
+    只会让引擎被禁用，不会把整个应用拖垮。
+    """
     module = fetch_engine._module()
     if module is None or not fetch_engine.FETCH_ENGINE_ENABLED:
         fetch_engine.startup_log()
         return False
-    problem = check_engine(module)
-    if problem:
-        fetch_engine.disable(f"自检失败：{problem}")
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "app.services.fetch_engine_check", "--quiet"],
+            capture_output=True, text=True, timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        fetch_engine.disable("自检超时（120 秒）")
+        return False
+    except OSError as exc:
+        fetch_engine.disable(f"无法启动自检进程：{exc}")
+        return False
+    if proc.returncode != 0:
+        detail = (proc.stdout + proc.stderr).strip().splitlines()
+        reason = detail[-1] if detail else ""
+        if proc.returncode < 0:
+            reason = f"自检进程被信号 {-proc.returncode} 终止（段错误等）" + (f"：{reason}" if reason else "")
+        fetch_engine.disable(f"自检失败：{reason or f'退出码 {proc.returncode}'}")
         return False
     fetch_engine.startup_log()
     return True
 
 
 def main(argv: list[str]) -> int:
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    quiet = "--quiet" in argv
+    logging.basicConfig(level=logging.WARNING if quiet else logging.INFO, format="%(message)s")
     module = fetch_engine._module()
     if module is None:
         print("imapfetch 扩展未编译（app/native/ 下没有 .so）")
         return 2
-    problem = check_engine(module, verbose=True)
-    print("引擎自检：", "通过" if problem is None else f"失败 — {problem}")
+    problem = check_engine(module, verbose=not quiet)
+    if not quiet or problem:
+        print("引擎自检：", "通过" if problem is None else f"失败 — {problem}")
     return 0 if problem is None else 1
 
 
