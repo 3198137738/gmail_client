@@ -58,6 +58,7 @@ from sqlalchemy.orm import Session
 
 from ..config import (
     DEFAULT_FOLDER,
+    IDLE_FAST_PATH_MAX_MESSAGES,
     IMAP_COMPRESSION,
     IMAP_FETCH_BATCH_SIZE,
     IMAP_FETCH_MAX_BYTES,
@@ -723,11 +724,13 @@ def _ingest_uids(
     *,
     apply_rules: bool = False,
     pool: Optional[FetchPool] = None,
+    prefetched: Optional[dict] = None,
 ) -> IngestResult:
     """下载、解析并保存指定 UID 的邮件（已入库的跳过）。增量同步与历史回填共用。
 
     ``apply_rules``：对新入库的邮件执行自动规则（只用于增量同步收到的新邮件）。
     ``pool``：并行下载连接池；有 ≥ 2 批要下载时用它同时取多批，边下载边解析入库。
+    ``prefetched``：调用方已经取到的 ``{uid: fetch 数据}``（新邮件快速路径），不再向服务器下载。
     """
     # 已删除邮件里的照常显示（屏蔽发件人的邮件就是被移到那里的）
     blocked_senders = _load_blocked_sender_emails(account_id) if folder_kind != "trash" else set()
@@ -754,10 +757,16 @@ def _ingest_uids(
         fetch_items += ["X-GM-THRID", "X-GM-LABELS"]
     transient_uids: set[int] = set()
     transient_hit: set[int] = set()
-    # 嫌疑邮件放到最后、逐封单独下载（见 SUSPECT_AFTER_TRANSIENT）
-    suspects = _transient_suspects(account_id, folder, to_fetch)
-    batches = _plan_fetch_batches(client, [uid for uid in to_fetch if uid not in suspects])
-    suspect_batches = [[uid] for uid in sorted(suspects)]
+    if prefetched is not None:
+        pre = {uid: prefetched[uid] for uid in to_fetch if uid in prefetched}
+        suspects: set[int] = set()
+        batches = [sorted(pre)] if pre else []
+        suspect_batches: list[list[int]] = []
+    else:
+        # 嫌疑邮件放到最后、逐封单独下载（见 SUSPECT_AFTER_TRANSIENT）
+        suspects = _transient_suspects(account_id, folder, to_fetch)
+        batches = _plan_fetch_batches(client, [uid for uid in to_fetch if uid not in suspects])
+        suspect_batches = [[uid] for uid in sorted(suspects)]
     fetched_any = False      # 本轮已有邮件成功下载：说明服务器没有在限流
     convicted = False        # 本轮已认定过一封问题邮件（之后连接可能已断开，不再据此判断）
     done_uids: set[int] = set()   # 已经处理完（下载成功或判定失败）的 UID
@@ -849,12 +858,13 @@ def _ingest_uids(
         )
 
     # 1) 普通批次：有 ≥ 2 批且有连接池时并行下载，否则在主连接上顺序下载
-    use_pool = pool is not None and pool.size >= 2 and len(batches) >= 2
-    source = (
-        _pooled_fetch(pool, client, account_id, folder, batches, fetch_items, failed_uids)
-        if use_pool
-        else _sequential_fetch(client, account_id, folder, batches, fetch_items, failed_uids)
-    )
+    use_pool = prefetched is None and pool is not None and pool.size >= 2 and len(batches) >= 2
+    if prefetched is not None:
+        source = iter([(chunk, {uid: pre[uid] for uid in chunk}) for chunk in batches])
+    elif use_pool:
+        source = _pooled_fetch(pool, client, account_id, folder, batches, fetch_items, failed_uids)
+    else:
+        source = _sequential_fetch(client, account_id, folder, batches, fetch_items, failed_uids)
     t_wait = perf_counter()
     for chunk, payload in source:
         timing["download"] += perf_counter() - t_wait
@@ -1299,6 +1309,124 @@ def _announce_new_mail(account_id: int, results: dict[str, dict]) -> None:
             submit_bg(notify_new_mail, account_id, inbox=inbox_new, sent=sent_new, junk=junk_new)
         except Exception:
             logger.debug("Failed to schedule Telegram notification", exc_info=True)
+
+
+def _fetch_items(client: IMAPClient) -> list[str]:
+    items = ["RFC822", "FLAGS", "INTERNALDATE"]
+    if _has_gmail_ext(client):
+        items += ["X-GM-THRID", "X-GM-LABELS"]
+    return items
+
+
+def ingest_new_messages(
+    client: IMAPClient,
+    account_id: int,
+    folder: str,
+    folder_kind: str,
+    *,
+    uidvalidity: int,
+    trigger: str = "push",
+    bodies: bool = True,
+) -> Optional[dict]:
+    """新邮件快速路径：只把比本地最新 UID 更新的邮件取回来入库，其他什么都不做。
+
+    供 IDLE 连接在收到推送后调用：连接已选中该文件夹，不再 SELECT；不核对已读 / 删除
+    （由每 5 分钟的完整同步负责）；``bodies=True`` 时一条 ``UID FETCH last+1:*`` 直接带回正文，
+    省掉 SEARCH 与询问大小的往返——从推送到入库只有一个网络往返。
+    ``bodies=False``（周期性兜底检查）先 ``UID SEARCH``，有新邮件再取，没有时零下载。
+
+    返回与 ``_sync_one_folder`` 相同结构的结果；以下情况返回 ``None``，调用方应改走完整同步：
+    还没做过首次同步、UIDVALIDITY 变了、新邮件多于 ``IDLE_FAST_PATH_MAX_MESSAGES`` 封。
+    """
+    started = perf_counter()
+    with session_scope() as db:
+        state = _get_or_create_sync_state(db, account_id, folder)
+        last_uid = int(state.last_uid or 0)
+        prev_validity = state.uidvalidity
+    if last_uid <= 0 or (prev_validity and uidvalidity and int(prev_validity) != int(uidvalidity)):
+        return None
+
+    items = _fetch_items(client)
+    t0 = perf_counter()
+    try:
+        if bodies:
+            fetched = client.fetch(f"{last_uid + 1}:*", items)
+        else:
+            raw_uids = client.search(["UID", f"{last_uid + 1}:*"])
+            uids = sorted({int(u) for u in raw_uids if int(u) > last_uid})
+            if len(uids) > IDLE_FAST_PATH_MAX_MESSAGES:
+                return None
+            fetched = client.fetch(uids, items) if uids else {}
+    except IMAPClientError as exc:
+        raise IMAPSyncError(f"IMAP fetch failed: {exc}") from exc
+    fetch_sec = perf_counter() - t0
+    # "last+1:*" 在没有新邮件时会返回最后一封（UID 不大于 last_uid），过滤掉
+    new = {int(uid): data for uid, data in fetched.items() if int(uid) > last_uid}
+    result_dict = {"saved": 0, "scanned": len(new), "folder": folder, "folder_kind": folder_kind}
+    if not new:
+        logger.info(
+            "New mail check account=%s folder=%s trigger=%s: nothing new (%.2fs)",
+            account_id, folder, trigger, perf_counter() - started,
+        )
+        return result_dict
+
+    uids = sorted(new)
+    result = _ingest_uids(client, account_id, folder, folder_kind, uids, apply_rules=True, prefetched=new)
+    if result.failed_uids:
+        safe_uid = result.failed_uids[0] - 1
+        new_last_uid = safe_uid if safe_uid > last_uid else None
+        logger.warning(
+            "Fast path incomplete account=%s folder=%s failed=%s; last_uid held at %s",
+            account_id, folder, result.failed_uids, max(last_uid, safe_uid),
+        )
+    else:
+        new_last_uid = max(uids)
+    _update_sync_state(account_id, folder, uidvalidity=uidvalidity, new_last_uid=new_last_uid)
+    _move_rescued_to_inbox(account_id, folder, result.rescue_uids)
+    result_dict["saved"] = result.saved
+    # 先通知页面和 Telegram，再做图片预取等不影响到达时间的事
+    _announce_new_mail(account_id, {folder_kind: result_dict})
+    if result.saved and folder_kind == "inbox":
+        try:
+            image_proxy.schedule_prefetch(account_id, folder, uids)
+        except Exception:
+            logger.exception("Failed to schedule image prefetch account=%s", account_id)
+    latency = ""
+    if result.newest_received is not None:
+        latency = f" latency={(datetime.now() - result.newest_received).total_seconds():.1f}s"
+    logger.info(
+        "New mail fast path account=%s folder=%s kind=%s trigger=%s new=%s saved=%s "
+        "fetch=%.2fs parse=%.2fs db=%.2fs total=%.2fs%s",
+        account_id, folder, folder_kind, trigger, len(new), result.saved,
+        fetch_sec, result.parse_sec, result.db_sec, perf_counter() - started, latency,
+    )
+    return result_dict
+
+
+def fast_sync_folder(
+    client: IMAPClient,
+    account_id: int,
+    folder: str,
+    folder_kind: str,
+    *,
+    uidvalidity: int,
+    trigger: str = "push",
+    bodies: bool = True,
+) -> Optional[dict]:
+    """持文件夹锁执行 :func:`ingest_new_messages`（供 IDLE 使用）。锁等待超时或需要完整同步时返回 None。"""
+    lock = _folder_lock(account_id, folder)
+    if not lock.acquire(timeout=_FOLDER_LOCK_TIMEOUT_SEC):
+        logger.warning("Folder busy too long, skipped account=%s folder=%s", account_id, folder)
+        return None
+    try:
+        return ingest_new_messages(
+            client, account_id, folder, folder_kind, uidvalidity=uidvalidity, trigger=trigger, bodies=bodies
+        )
+    except IMAPSyncError as exc:
+        _record_error(account_id, folder, str(exc))
+        raise
+    finally:
+        lock.release()
 
 
 def sync_folder_with_client(

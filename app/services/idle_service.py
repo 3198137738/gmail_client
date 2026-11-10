@@ -36,6 +36,7 @@ from imapclient.exceptions import IMAPClientError
 
 from ..config import (
     DEFAULT_FOLDER,
+    IDLE_FAST_PATH_MAX_MESSAGES,
     IDLE_POLL_SEC,
     IDLE_RECONNECT_BACKOFF_SEC,
     IDLE_REFRESH_SEC,
@@ -57,7 +58,7 @@ from .imap_client import (
     _imap_client,
     invalidate_folder_cache,
 )
-from .imap_service import safe_sync_account, sync_folder_with_client
+from .imap_service import fast_sync_folder, safe_sync_account, sync_folder_with_client
 
 logger = logging.getLogger(__name__)
 
@@ -68,18 +69,36 @@ _IDLE_SOCKET_TIMEOUT = IDLE_POLL_SEC + 30
 _NO_FOLDER_RECHECK_SEC = 600
 
 
-def _has_new_mail(responses) -> bool:
-    """IDLE 推送里有需要同步的变化（新邮件、删除、标记变化）时返回 True。"""
+def _classify_push(responses) -> tuple[Optional[int], bool, bool]:
+    """拆解 IDLE 推送：``(最新的 EXISTS 计数, 是否有新邮件, 是否有其他变化)``。
+
+    EXISTS/RECENT：新邮件；EXPUNGE：邮件被删除或移走；FETCH：已读等标记变化。
+    """
+    exists: Optional[int] = None
+    new_mail = False
+    other = False
     for item in responses or ():
         if not item:
             continue
         token = item[1] if len(item) > 1 else None
-        if isinstance(token, bytes):
-            token = token.upper()
-            # EXISTS/RECENT：新邮件；EXPUNGE：邮件被删除或移走；FETCH：已读等标记变化
-            if token in (b"EXISTS", b"RECENT", b"EXPUNGE", b"FETCH"):
-                return True
-    return False
+        if not isinstance(token, bytes):
+            continue
+        token = token.upper()
+        if token == b"EXISTS":
+            new_mail = True
+            if isinstance(item[0], int):
+                exists = item[0]
+        elif token == b"RECENT":
+            new_mail = True
+        elif token in (b"EXPUNGE", b"FETCH"):
+            other = True
+    return exists, new_mail, other
+
+
+def _has_new_mail(responses) -> bool:
+    """IDLE 推送里有需要同步的变化（新邮件、删除、标记变化）时返回 True。"""
+    _exists, new_mail, other = _classify_push(responses)
+    return new_mail or other
 
 
 def _enable_tcp_keepalive(client) -> None:
@@ -163,7 +182,9 @@ class IdleWorker(threading.Thread):
                 return
 
             _enable_tcp_keepalive(client)
-            client.select_folder(folder, readonly=True)
+            select_info = client.select_folder(folder, readonly=True)
+            uidvalidity = int(select_info.get(b"UIDVALIDITY") or 0)
+            exists = int(select_info.get(b"EXISTS") or 0)
             # Catch up on anything that arrived while we were disconnected.
             self._sync_on_connection(client, folder, trigger="connect")
 
@@ -175,25 +196,54 @@ class IdleWorker(threading.Thread):
                     responses = client.idle_check(timeout=IDLE_POLL_SEC)
                     if self._stop.is_set():
                         break
-                    # 收到新邮件通知时立即同步；否则每 IDLE_REFRESH_SEC 秒退出 IDLE 做一次
-                    # 兜底检查（只做 UID SEARCH，无新邮件时开销极小），既能补上 Gmail
-                    # 偶尔漏发的通知，也能尽快发现已失效的连接。
-                    pushed = _has_new_mail(responses)
-                    if pushed or monotonic() - idle_since >= IDLE_REFRESH_SEC:
-                        client.idle_done()
-                        in_idle = False
-                        self._sync_on_connection(
-                            client, folder, trigger="push" if pushed else "periodic"
+                    new_exists, new_mail, other = _classify_push(responses)
+                    periodic = monotonic() - idle_since >= IDLE_REFRESH_SEC
+                    if not (new_mail or other or periodic):
+                        continue
+                    client.idle_done()
+                    in_idle = False
+                    if new_mail:
+                        # 新邮件：快速路径，一次往返直接把新邮件取回来；一次到得太多、
+                        # 还没首次同步或 UIDVALIDITY 变了时改走完整同步
+                        burst = new_exists is not None and new_exists - exists > IDLE_FAST_PATH_MAX_MESSAGES
+                        done = (
+                            None if burst else self._fast_sync(client, folder, uidvalidity, trigger="push", bodies=True)
                         )
-                        client.idle()
-                        in_idle = True
-                        idle_since = monotonic()
+                        if done is None:
+                            self._sync_on_connection(client, folder, trigger="push")
+                        elif other:
+                            # 同一次推送里还有已读 / 删除变化：新邮件已经通知出去了，再补一次完整同步
+                            self._sync_on_connection(client, folder, trigger="push")
+                    elif other:
+                        # 只有已读 / 删除变化（手机上读过、Gmail 网页上删了）：完整同步核对
+                        self._sync_on_connection(client, folder, trigger="push")
+                    else:
+                        # 周期性兜底：只做一次 UID SEARCH（无新邮件时零下载），补上偶尔漏发的推送，
+                        # 也能及时发现已失效的连接。已读 / 删除的核对由每 5 分钟的定时同步负责。
+                        if self._fast_sync(client, folder, uidvalidity, trigger="periodic", bodies=False) is None:
+                            self._sync_on_connection(client, folder, trigger="periodic")
+                    if new_exists is not None:
+                        exists = new_exists
+                    client.idle()
+                    in_idle = True
+                    idle_since = monotonic()
             finally:
                 if in_idle:
                     try:
                         client.idle_done()
                     except (IMAPClientError, OSError):
                         pass
+
+    def _fast_sync(self, client, folder: str, uidvalidity: int, *, trigger: str, bodies: bool):
+        """在 IDLE 连接上走新邮件快速路径；返回 None 表示需要完整同步。出错时与完整同步一样处理。"""
+        try:
+            return fast_sync_folder(
+                client, self.account_id, folder, self.folder_kind,
+                uidvalidity=uidvalidity, trigger=trigger, bodies=bodies,
+            )
+        except Exception:
+            submit_bg(safe_sync_account, self.account_id)
+            raise
 
     def _sync_on_connection(self, client, folder: str, *, trigger: str) -> None:
         """直接在当前 IDLE 连接上拉取新邮件，省去新建连接和登录的时间。

@@ -205,6 +205,9 @@ IDLE_POLL_SEC = _get_positive_int("IDLE_POLL_SEC", 30)
 IDLE_REFRESH_SEC = _get_positive_int("IDLE_REFRESH_SEC", 60)
 # Backoff after an IDLE connection error before reconnecting.
 IDLE_RECONNECT_BACKOFF_SEC = _get_positive_int("IDLE_RECONNECT_BACKOFF_SEC", 30)
+# 收到推送后走「快速路径」（一条 UID FETCH 直接带回新邮件正文）的最多封数；
+# 一次到达更多邮件时改走完整同步（分批下载）。
+IDLE_FAST_PATH_MAX_MESSAGES = _get_positive_int("IDLE_FAST_PATH_MAX_MESSAGES", 20)
 
 # --- Telegram new-mail notifications ---------------------------------------
 # When a bot token + chat id are set, newly synced inbox mail triggers a push
