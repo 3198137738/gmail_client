@@ -15,6 +15,7 @@ from .auth import require_app_password
 from .config import (
     ALLOW_NO_AUTH,
     BACKGROUND_MAX_WORKERS,
+    IMAP_COMPRESSION,
     IMAP_FETCH_BATCH_SIZE,
     INITIAL_SYNC_LIMIT,
     SESSION_COOKIE_SECURE,
@@ -22,6 +23,7 @@ from .config import (
     STATIC_DIR,
     SYNC_INTERVAL_MINUTES,
     SYNC_JUNK_ENABLED,
+    SYNC_PARALLEL_CONNECTIONS,
     SYNC_SENT_ENABLED,
     SYNC_TRASH_ENABLED,
     WEB_AUTH_ENABLED,
@@ -78,7 +80,8 @@ async def lifespan(app: FastAPI):
     start_idle()
     start_bot()
     logger.info(
-        "Sync settings: sent_enabled=%s junk_enabled=%s trash_enabled=%s initial_limit=%s fetch_batch=%s workers=%s interval=%s",
+        "Sync settings: sent_enabled=%s junk_enabled=%s trash_enabled=%s initial_limit=%s fetch_batch=%s workers=%s interval=%s "
+        "parallel_connections=%s compression=%s",
         SYNC_SENT_ENABLED,
         SYNC_JUNK_ENABLED,
         SYNC_TRASH_ENABLED,
@@ -86,6 +89,8 @@ async def lifespan(app: FastAPI):
         IMAP_FETCH_BATCH_SIZE,
         BACKGROUND_MAX_WORKERS,
         SYNC_INTERVAL_MINUTES,
+        SYNC_PARALLEL_CONNECTIONS,
+        IMAP_COMPRESSION,
     )
     if WEB_AUTH_ENABLED:
         logger.info("Web password protection is enabled")

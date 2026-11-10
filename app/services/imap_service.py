@@ -58,10 +58,13 @@ from sqlalchemy.orm import Session
 
 from ..config import (
     DEFAULT_FOLDER,
+    IMAP_COMPRESSION,
     IMAP_FETCH_BATCH_SIZE,
     IMAP_FETCH_MAX_BYTES,
+    IMAP_TIMEOUT_SEC,
     INITIAL_SYNC_LIMIT,
     SYNC_JUNK_ENABLED,
+    SYNC_PARALLEL_CONNECTIONS,
     SYNC_SENT_ENABLED,
     SYNC_TRASH_ENABLED,
 )
@@ -75,6 +78,7 @@ from .imap_client import (
     IMAPSyncError,
     _FOLDER_LOCK_TIMEOUT_SEC,
     _account_lock,
+    _close_quietly,
     _discover_junk_folder,
     _discover_sent_folder,
     _discover_trash_folder,
@@ -82,7 +86,10 @@ from .imap_client import (
     _imap_client,
     _release_account_lock,
     _try_acquire_for_sync,
+    open_connection,
 )
+from .imap_compress import is_compressed
+from .imap_pool import FetchPool, PoolUnavailable
 from .email_parser import _message_base_dir, parse_email
 from .events import new_mail_preview, publish_mail_changed, publish_new_mail, publish_sync_done
 from . import image_proxy
@@ -470,12 +477,16 @@ def _update_sync_state(
         state.last_error = None
 
 
+# 待下载的邮件不超过这么多封时，不先询问大小、直接一批取
+SMALL_FETCH_COUNT = 5
+
+
 def _plan_fetch_batches(
     client: IMAPClient,
     uids: list[int],
     *,
-    max_count: int = IMAP_FETCH_BATCH_SIZE,
-    max_bytes: int = IMAP_FETCH_MAX_BYTES,
+    max_count: Optional[int] = None,
+    max_bytes: Optional[int] = None,
 ) -> list[list[int]]:
     """把待下载的 UID 按「封数 + 总字节数」切成多批。
 
@@ -486,6 +497,11 @@ def _plan_fetch_batches(
     """
     if not uids:
         return []
+    max_count = max_count or IMAP_FETCH_BATCH_SIZE   # 调用时读取，便于测试中调整
+    max_bytes = max_bytes or IMAP_FETCH_MAX_BYTES
+    if len(uids) <= SMALL_FETCH_COUNT and len(uids) <= max_count:
+        # 增量同步常见的几封新邮件：一批直接取，省一次往返（单封最大也就 Gmail 的 25MB 附件上限）
+        return [list(uids)]
     sizes: dict[int, int] = {}
     try:
         for uid, data in client.fetch(uids, ["RFC822.SIZE"]).items():
@@ -651,10 +667,51 @@ class IngestResult:
     failed_uids: list[int] = field(default_factory=list)
     # 因 Gmail 限流或连接中断提前停止（剩下的邮件下次再取）
     interrupted: bool = False
+    # 分项耗时（秒）与用到的连接数，写进同步日志
+    download_sec: float = 0.0
+    parse_sec: float = 0.0
+    db_sec: float = 0.0
+    connections: int = 1
 
     @property
     def failed(self) -> bool:
         return bool(self.failed_uids)
+
+    def add_timing(self, other: "IngestResult") -> None:
+        self.download_sec += other.download_sec
+        self.parse_sec += other.parse_sec
+        self.db_sec += other.db_sec
+        self.connections = max(self.connections, other.connections)
+
+
+def _sequential_fetch(client, account_id, folder, batches, items, failed_uids):
+    """在主连接上按顺序下载各批；临时错误（限流 / 断线）作为异常值产出，由调用方决定停止。"""
+    for chunk in batches:
+        try:
+            yield chunk, _fetch_batch(client, account_id, folder, chunk, items, failed_uids)
+        except _TransientFetchError as exc:
+            yield chunk, exc
+
+
+def _pooled_fetch(pool: FetchPool, client, account_id, folder, batches, items, failed_uids):
+    """用并行连接下载各批（完成顺序）。单批的非临时错误在主连接上重试（整批、再逐封）；
+    并行连接全部不可用时，剩下的批改在主连接上顺序下载。"""
+    try:
+        for chunk, payload in pool.fetch_batches(folder, batches, items):
+            if isinstance(payload, Exception):
+                if isinstance(payload, IMAPClientError) and _is_transient_imap_error(payload):
+                    payload = _TransientFetchError(str(payload))
+                elif isinstance(payload, (IMAPClientError, OSError)):
+                    try:
+                        payload = _fetch_batch(client, account_id, folder, chunk, items, failed_uids)
+                    except _TransientFetchError as exc:
+                        payload = exc
+                else:
+                    payload = _TransientFetchError(str(payload))
+            yield chunk, payload
+    except PoolUnavailable as exc:
+        logger.info("Parallel connections unavailable account=%s; fetching %s batches sequentially", account_id, len(exc.remaining))
+        yield from _sequential_fetch(client, account_id, folder, exc.remaining, items, failed_uids)
 
 
 def _ingest_uids(
@@ -665,10 +722,12 @@ def _ingest_uids(
     uids: list[int],
     *,
     apply_rules: bool = False,
+    pool: Optional[FetchPool] = None,
 ) -> IngestResult:
     """下载、解析并保存指定 UID 的邮件（已入库的跳过）。增量同步与历史回填共用。
 
     ``apply_rules``：对新入库的邮件执行自动规则（只用于增量同步收到的新邮件）。
+    ``pool``：并行下载连接池；有 ≥ 2 批要下载时用它同时取多批，边下载边解析入库。
     """
     # 已删除邮件里的照常显示（屏蔽发件人的邮件就是被移到那里的）
     blocked_senders = _load_blocked_sender_emails(account_id) if folder_kind != "trash" else set()
@@ -681,6 +740,7 @@ def _ingest_uids(
     failed_uids: set[int] = set()
     # 本批新邮件中最新的 Gmail 接收时间（INTERNALDATE），用于计算「Gmail 收到 → 入库」延迟。
     newest_received: Optional[datetime] = None
+    timing = {"download": 0.0, "parse": 0.0, "db": 0.0}
     # 本地已有的邮件不必再下载正文；本地已删除 / 移走、远程操作还在 outbox 排队的
     # 邮件也跳过，否则会被重新下载回来
     existing_before = _existing_uids(account_id, folder, uids)
@@ -697,39 +757,18 @@ def _ingest_uids(
     # 嫌疑邮件放到最后、逐封单独下载（见 SUSPECT_AFTER_TRANSIENT）
     suspects = _transient_suspects(account_id, folder, to_fetch)
     batches = _plan_fetch_batches(client, [uid for uid in to_fetch if uid not in suspects])
-    batches += [[uid] for uid in sorted(suspects)]
+    suspect_batches = [[uid] for uid in sorted(suspects)]
     fetched_any = False      # 本轮已有邮件成功下载：说明服务器没有在限流
     convicted = False        # 本轮已认定过一封问题邮件（之后连接可能已断开，不再据此判断）
-    for index, chunk in enumerate(batches):
-        if len(chunk) == 1 and chunk[0] in suspects and not fetched_any and not convicted:
-            # 本轮还没有邮件下载成功，无从对比：先探测服务器是否正常（必须在下载嫌疑邮件之前，
-            # 它可能直接让连接断开）
-            fetched_any = _server_serving_mail(client, account_id, folder, set(to_fetch))
-        try:
-            fetched = _fetch_batch(client, account_id, folder, chunk, fetch_items, failed_uids)
-        except _TransientFetchError as exc:
-            if fetched_any and not convicted and len(chunk) == 1 and chunk[0] in suspects:
-                # 其他邮件都能下载，唯独这封单独下载仍然出错：问题在邮件本身，
-                # 按普通失败计数（满 MAX_UID_ATTEMPTS 次放弃），不能让它永远卡住同步进度
-                convicted = True
-                failed_uids.add(chunk[0])
-                logger.warning(
-                    "Message keeps failing while others succeed, counted as failure "
-                    "account=%s folder=%s uid=%s: %s",
-                    account_id, folder, chunk[0], exc,
-                )
-                continue
-            # 限流或断线时后面的批次也会失败，停在这里，剩下的下次再取（不计失败次数）
-            transient_hit.update(chunk)
-            transient_uids.update(uid for rest in batches[index:] for uid in rest)
-            logger.warning(
-                "IMAP fetch interrupted account=%s folder=%s; %s messages deferred: %s",
-                account_id, folder, len(transient_uids), exc,
-            )
-            break
+    done_uids: set[int] = set()   # 已经处理完（下载成功或判定失败）的 UID
+    interrupted = False
+
+    def process(chunk: list[int], fetched: dict) -> None:
+        """解析并保存一批下载到的邮件。"""
+        nonlocal saved, newest_received, fetched_any
+        done_uids.update(chunk)
         if fetched:
             fetched_any = True
-
         fetched_items = sorted(
             ((int(uid), data) for uid, data in fetched.items()),
             key=lambda item: item[0],
@@ -740,6 +779,7 @@ def _ingest_uids(
             received = data.get(b"INTERNALDATE")
             if isinstance(received, datetime) and (newest_received is None or received > newest_received):
                 newest_received = received
+        t0 = perf_counter()
         records = _parse_fetched_messages(
             account_id=account_id,
             folder=folder,
@@ -764,9 +804,11 @@ def _ingest_uids(
                 else:
                     kept.append(record)
             records = kept
+        timing["parse"] += perf_counter() - t0
         if not records:
-            continue
+            return
 
+        t0 = perf_counter()
         try:
             saved += _persist_parsed_messages(records)
             persisted_uids.extend(int(r["uid"]) for r in records)
@@ -793,6 +835,62 @@ def _ingest_uids(
                 account_id, folder, chunk,
             )
             failed_uids.update(int(record["uid"]) for record in records)
+        timing["db"] += perf_counter() - t0
+
+    def defer_rest(chunk: list[int], exc: Exception) -> None:
+        """限流或断线：这一批和还没处理的都留到下次（不计失败次数）。"""
+        nonlocal interrupted
+        interrupted = True
+        transient_hit.update(chunk)
+        transient_uids.update(uid for uid in to_fetch if uid not in done_uids and uid not in failed_uids)
+        logger.warning(
+            "IMAP fetch interrupted account=%s folder=%s; %s messages deferred: %s",
+            account_id, folder, len(transient_uids), exc,
+        )
+
+    # 1) 普通批次：有 ≥ 2 批且有连接池时并行下载，否则在主连接上顺序下载
+    use_pool = pool is not None and pool.size >= 2 and len(batches) >= 2
+    source = (
+        _pooled_fetch(pool, client, account_id, folder, batches, fetch_items, failed_uids)
+        if use_pool
+        else _sequential_fetch(client, account_id, folder, batches, fetch_items, failed_uids)
+    )
+    t_wait = perf_counter()
+    for chunk, payload in source:
+        timing["download"] += perf_counter() - t_wait
+        if isinstance(payload, Exception):
+            defer_rest(chunk, payload)
+            break
+        process(chunk, payload)
+        t_wait = perf_counter()
+
+    # 2) 嫌疑邮件：逐封在主连接上下载，以区分「服务器限流」和「这封邮件本身有问题」
+    for chunk in suspect_batches if not interrupted else []:
+        if not fetched_any and not convicted:
+            # 本轮还没有邮件下载成功，无从对比：先探测服务器是否正常（必须在下载嫌疑邮件之前，
+            # 它可能直接让连接断开）
+            fetched_any = _server_serving_mail(client, account_id, folder, set(to_fetch))
+        t_wait = perf_counter()
+        try:
+            fetched = _fetch_batch(client, account_id, folder, chunk, fetch_items, failed_uids)
+        except _TransientFetchError as exc:
+            timing["download"] += perf_counter() - t_wait
+            if fetched_any and not convicted:
+                # 其他邮件都能下载，唯独这封单独下载仍然出错：问题在邮件本身，
+                # 按普通失败计数（满 MAX_UID_ATTEMPTS 次放弃），不能让它永远卡住同步进度
+                convicted = True
+                failed_uids.add(chunk[0])
+                done_uids.update(chunk)
+                logger.warning(
+                    "Message keeps failing while others succeed, counted as failure "
+                    "account=%s folder=%s uid=%s: %s",
+                    account_id, folder, chunk[0], exc,
+                )
+                continue
+            defer_rest(chunk, exc)
+            break
+        timing["download"] += perf_counter() - t_wait
+        process(chunk, fetched)
 
     if blocked_uids:
         _trash_blocked(account_id, folder, blocked_uids)
@@ -811,6 +909,10 @@ def _ingest_uids(
             account_id, folder, to_fetch, failed_uids | transient_uids, transient_uids, transient_hit
         ),
         interrupted=bool(transient_uids),
+        download_sec=timing["download"],
+        parse_sec=timing["parse"],
+        db_sec=timing["db"],
+        connections=(pool.connections_used + 1) if use_pool and pool is not None else 1,
     )
 
 
@@ -1073,6 +1175,7 @@ def _sync_one_folder(
     account_id: int,
     folder: str,
     folder_kind: str,
+    pool: Optional[FetchPool] = None,
 ) -> dict:
     """Sync a single IMAP folder using an already-opened client."""
     started = perf_counter()
@@ -1131,7 +1234,7 @@ def _sync_one_folder(
         return {"saved": 0, "scanned": 0, "folder": folder, "folder_kind": folder_kind}
 
     # 首次同步拉的是已有的邮件，不执行自动规则（与 Gmail 过滤器只作用于新邮件一致）
-    result = _ingest_uids(client, account_id, folder, folder_kind, uids, apply_rules=last_uid > 0)
+    result = _ingest_uids(client, account_id, folder, folder_kind, uids, apply_rules=last_uid > 0, pool=pool)
     saved = result.saved
     newest_received = result.newest_received
 
@@ -1168,8 +1271,10 @@ def _sync_one_folder(
     if saved and last_uid > 0 and newest_received is not None:
         latency = f" latency={(datetime.now() - newest_received).total_seconds():.1f}s"
     logger.info(
-        "Synced folder account=%s folder=%s kind=%s scanned=%s saved=%s elapsed=%.2fs%s",
-        account_id, folder, folder_kind, scanned, saved, elapsed, latency,
+        "Synced folder account=%s folder=%s kind=%s scanned=%s saved=%s elapsed=%.2fs "
+        "download=%.2fs parse=%.2fs db=%.2fs conns=%s compressed=%s%s",
+        account_id, folder, folder_kind, scanned, saved, elapsed,
+        result.download_sec, result.parse_sec, result.db_sec, result.connections, is_compressed(client), latency,
     )
     return {"saved": saved, "scanned": scanned, "folder": folder, "folder_kind": folder_kind}
 
@@ -1225,23 +1330,39 @@ def sync_folder_with_client(
     return result
 
 
+def make_fetch_pool(email: str, password: str, *, size: Optional[int] = None) -> FetchPool:
+    """为账号创建并行下载连接池（连接按需打开）。Outlook 登录不稳定，最多 2 条。"""
+    from . import mail_providers
+
+    limit = SYNC_PARALLEL_CONNECTIONS
+    if mail_providers.key_for_secret(password) == mail_providers.OUTLOOK:
+        limit = min(limit, 2)
+    if size is not None:
+        limit = min(limit, size)
+    return FetchPool(
+        lambda: open_connection(email, password, timeout=max(IMAP_TIMEOUT_SEC, 60), compress=IMAP_COMPRESSION),
+        size=limit,
+        close=_close_quietly,
+    )
+
+
 def sync_targets(client: IMAPClient, account_id: int) -> list[tuple[str, str]]:
     """本账号需要同步的 (文件夹名, 类型) 列表：收件箱，以及按配置开启的已发送 / 垃圾邮件 / 已删除邮件。"""
     targets: list[tuple[str, str]] = [(DEFAULT_FOLDER, "inbox")]
     if SYNC_SENT_ENABLED:
-        sent_folder = _discover_sent_folder(client)
+        sent_folder = _discover_sent_folder(client, account_id)
         if sent_folder and sent_folder != DEFAULT_FOLDER:
             targets.append((sent_folder, "sent"))
         else:
             logger.info("No Sent folder discovered for account=%s", account_id)
     if SYNC_JUNK_ENABLED:
-        junk_folder = _discover_junk_folder(client)
+        junk_folder = _discover_junk_folder(client, account_id)
         if junk_folder and junk_folder != DEFAULT_FOLDER:
             targets.append((junk_folder, "junk"))
         else:
             logger.info("No Junk folder discovered for account=%s", account_id)
     if SYNC_TRASH_ENABLED:
-        trash_folder = _discover_trash_folder(client)
+        trash_folder = _discover_trash_folder(client, account_id)
         if trash_folder and trash_folder != DEFAULT_FOLDER:
             targets.append((trash_folder, "trash"))
         else:
@@ -1283,8 +1404,9 @@ def safe_sync_account(account_id: int, folder: Optional[str] = None) -> dict:
             return {"error": msg}
 
         results: dict[str, dict] = {}
+        pool = make_fetch_pool(email, password)
         try:
-            with _imap_client(email, password) as client:
+            with _imap_client(email, password, compress=True) as client:
                 if _has_gmail_ext(client):
                     try:
                         gmail_labels.sync_label_list(account_id, gmail_labels.discover_label_names(client))
@@ -1300,7 +1422,7 @@ def safe_sync_account(account_id: int, folder: Optional[str] = None) -> dict:
                         continue
                     try:
                         results[kind] = _sync_one_folder(
-                            client, account_id, folder_name, kind
+                            client, account_id, folder_name, kind, pool=pool
                         )
                     except IMAPSyncError as exc:
                         logger.warning(
@@ -1319,6 +1441,8 @@ def safe_sync_account(account_id: int, folder: Optional[str] = None) -> dict:
             logger.warning("IMAP login/network failed account=%s: %s", account_id, exc)
             _record_error(account_id, DEFAULT_FOLDER, str(exc))
             return {"error": str(exc)}
+        finally:
+            pool.close()
 
         logger.info(
             "Account sync complete account=%s folders=%s elapsed=%.2fs",

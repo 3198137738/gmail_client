@@ -50,7 +50,13 @@ from ..models import Account
 from sqlalchemy import select
 
 from .background import submit_bg
-from .imap_client import _discover_junk_folder, _discover_sent_folder, _discover_trash_folder, _imap_client
+from .imap_client import (
+    _discover_junk_folder,
+    _discover_sent_folder,
+    _discover_trash_folder,
+    _imap_client,
+    invalidate_folder_cache,
+)
 from .imap_service import safe_sync_account, sync_folder_with_client
 
 logger = logging.getLogger(__name__)
@@ -121,11 +127,11 @@ class IdleWorker(threading.Thread):
         if self.folder_kind == "inbox":
             return DEFAULT_FOLDER
         if self.folder_kind == "junk":
-            folder = _discover_junk_folder(client)
+            folder = _discover_junk_folder(client, self.account_id)
         elif self.folder_kind == "trash":
-            folder = _discover_trash_folder(client)
+            folder = _discover_trash_folder(client, self.account_id)
         else:
-            folder = _discover_sent_folder(client)
+            folder = _discover_sent_folder(client, self.account_id)
         if not folder or folder == DEFAULT_FOLDER:
             return None
         return folder
@@ -297,6 +303,8 @@ def start_idle() -> None:
 
 
 def reconcile_idle() -> None:
+    # 账号增删、重新授权时调用：特殊文件夹缓存一并作废，下次同步重新发现
+    invalidate_folder_cache()
     idle_manager.reconcile()
 
 

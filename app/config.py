@@ -149,11 +149,17 @@ IMAP_FETCH_BATCH_SIZE = _get_positive_int("IMAP_FETCH_BATCH_SIZE", 50)
 # 同步全部历史邮件：首次同步先取最新 INITIAL_SYNC_LIMIT 封，之后在后台按
 # BACKFILL_BATCH_SIZE 一批批回填更早的邮件，直到全部同步完（不发送通知）。
 SYNC_FULL_HISTORY = _get_bool("SYNC_FULL_HISTORY", True)
-BACKFILL_BATCH_SIZE = _get_positive_int("BACKFILL_BATCH_SIZE", 200)
+BACKFILL_BATCH_SIZE = _get_positive_int("BACKFILL_BATCH_SIZE", 500)
 # 每批之间的间隔（秒），避免长时间占满 IMAP 带宽
 BACKFILL_PAUSE_SEC = _get_positive_int("BACKFILL_PAUSE_SEC", 1)
 # 同时回填的账号数（独立线程池，不占用常规同步的后台线程）
-BACKFILL_MAX_CONCURRENT = _get_positive_int("BACKFILL_MAX_CONCURRENT", 2)
+BACKFILL_MAX_CONCURRENT = _get_positive_int("BACKFILL_MAX_CONCURRENT", 3)
+# 首次同步 / 回填时每个账号额外打开的并行下载连接数（Gmail 每账号最多 15 条连接；
+# 常规同步 1 条 + IDLE 最多 3 条 + 回填 1 条，再加同步与回填各 N 条并行连接，N=3 时合计 11 条）。
+# 设为 1 则只用一条连接。
+SYNC_PARALLEL_CONNECTIONS = _get_positive_int("SYNC_PARALLEL_CONNECTIONS", 3)
+# 同步连接开启 IMAP COMPRESS=DEFLATE 传输压缩（Gmail 支持，文本邮件传输量减少一半以上）
+IMAP_COMPRESSION = _get_bool("IMAP_COMPRESSION", True)
 # 每批下载的邮件总大小上限（MB），避免大附件邮件导致内存峰值过高
 IMAP_FETCH_MAX_MB = _get_positive_int("IMAP_FETCH_MAX_MB", 20)
 IMAP_FETCH_MAX_BYTES = IMAP_FETCH_MAX_MB * 1024 * 1024

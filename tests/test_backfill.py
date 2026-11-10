@@ -202,7 +202,7 @@ def test_run_backfill_end_to_end(no_notify, monkeypatch):
     _sync_one_folder(box, acc, "INBOX", "inbox")
 
     @contextmanager
-    def fake_client(email, password, timeout=None):
+    def fake_client(email, password, timeout=None, **kwargs):
         yield box
 
     monkeypatch.setattr(imap_backfill, "_imap_client", fake_client)

@@ -123,6 +123,9 @@ def test_imap_connects_to_outlook_with_xoauth2(monkeypatch):
         def oauth2_login(self, user, token):
             seen["login"] = (user, token)
 
+        def namespace(self):
+            return ()
+
         def logout(self):
             pass
 
@@ -319,3 +322,56 @@ def test_special_folder_name_fallback():
     assert imap_client._discover_trash_folder(FakeIMAP()) == "Deleted Items"
     assert imap_client._discover_junk_folder(FakeIMAP()) == "Junk Email"
     assert imap_client._discover_sent_folder(FakeIMAP()) is None
+
+
+def _flaky_imap(results: list):
+    """按顺序返回登录结果的假 IMAP：True 成功，字符串则以该内容登录失败。"""
+    from imapclient.exceptions import LoginError
+
+    created = []
+
+    class FakeIMAP:
+        def __init__(self, **kwargs):
+            created.append(self)
+            self.closed = False
+
+        def oauth2_login(self, user, token):
+            outcome = results.pop(0)
+            if outcome is not True:
+                raise LoginError(outcome)
+
+        def namespace(self):
+            return ()
+
+        def logout(self):
+            self.closed = True
+
+    return FakeIMAP, created
+
+
+def test_outlook_login_retries_not_connected(monkeypatch):
+    FakeIMAP, created = _flaky_imap(["User is authenticated but not connected.", "User is authenticated but not connected.", True])
+    monkeypatch.setattr(imap_client, "IMAPClient", FakeIMAP)
+    monkeypatch.setattr(imap_client, "_OUTLOOK_RETRY_PAUSE_SEC", 0)
+    monkeypatch.setattr(ms_oauth, "access_token_for_secret", lambda secret, email=None: "tok")
+    with imap_client._imap_client("u@outlook.com", "msoauth:rt") as client:
+        assert client is created[2]
+    assert len(created) == 3 and all(c.closed for c in created)
+
+
+def test_outlook_login_gives_up_and_other_errors_not_retried(monkeypatch):
+    monkeypatch.setattr(imap_client, "_OUTLOOK_RETRY_PAUSE_SEC", 0)
+    monkeypatch.setattr(ms_oauth, "access_token_for_secret", lambda secret, email=None: "tok")
+    FakeIMAP, created = _flaky_imap(["User is authenticated but not connected."] * imap_client.OUTLOOK_LOGIN_ATTEMPTS)
+    monkeypatch.setattr(imap_client, "IMAPClient", FakeIMAP)
+    with pytest.raises(imap_client.IMAPSyncError, match="开启 IMAP"):
+        with imap_client._imap_client("u@outlook.com", "msoauth:rt"):
+            pass
+    assert len(created) == imap_client.OUTLOOK_LOGIN_ATTEMPTS
+
+    FakeIMAP, created = _flaky_imap(["AUTHENTICATE failed."])
+    monkeypatch.setattr(imap_client, "IMAPClient", FakeIMAP)
+    with pytest.raises(imap_client.IMAPSyncError, match="AUTHENTICATE failed"):
+        with imap_client._imap_client("u@outlook.com", "msoauth:rt"):
+            pass
+    assert len(created) == 1

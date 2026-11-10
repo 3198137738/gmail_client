@@ -136,9 +136,9 @@ def test_backfill_releases_folder_lock_between_chunks(no_notify, monkeypatch):
     held = []
     original = imap_backfill._ingest_uids
 
-    def spy(client, account_id, folder, kind, uids):
+    def spy(client, account_id, folder, kind, uids, **kwargs):
         held.append(lock.locked())
-        return original(client, account_id, folder, kind, uids)
+        return original(client, account_id, folder, kind, uids, **kwargs)
 
     monkeypatch.setattr(imap_backfill, "_ingest_uids", spy)
     assert imap_backfill._backfill_batch(box, acc, "INBOX", "inbox", lock) == imap_backfill.DONE

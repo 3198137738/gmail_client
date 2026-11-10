@@ -39,6 +39,7 @@ from .imap_service import (
     _get_or_create_sync_state,
     _ingest_uids,
     _move_rescued_to_inbox,
+    make_fetch_pool,
     safe_sync_account,
     sync_targets,
 )
@@ -141,10 +142,12 @@ def _backfill_batch(
     folder: str,
     folder_kind: str,
     lock: Optional[threading.Lock] = None,
+    pool=None,
 ) -> str:
     """回填一批：取 UID 小于断点的邮件中最新的 BACKFILL_BATCH_SIZE 封。
 
     ``lock`` 为该文件夹的锁，只在规划和下载每一小批时持有。
+    ``pool`` 为并行下载连接池（见 imap_pool），每一小批内部再分给多条连接同时取。
     """
     if not _acquire(lock):
         return BUSY
@@ -157,14 +160,16 @@ def _backfill_batch(
     batch, remaining, expected_validity = plan
 
     saved = 0
-    for chunk in _chunks(batch, IMAP_FETCH_BATCH_SIZE):
+    # 有并行连接时每次多取几批，让各条连接都有活干；仍按小批持锁、批间释放
+    step = IMAP_FETCH_BATCH_SIZE * (pool.size if pool is not None else 1)
+    for chunk in _chunks(batch, step):
         # 中途停下时断点不推进；已入库的邮件下次会被跳过，不会重复下载
         if not _acquire(lock):
             return BUSY
         try:
             if _current_validity(account_id, folder) != expected_validity:
                 return SKIP  # 释放锁期间增量同步发现 UIDVALIDITY 变了，已清空该文件夹
-            result = _ingest_uids(client, account_id, folder, folder_kind, chunk)
+            result = _ingest_uids(client, account_id, folder, folder_kind, chunk, pool=pool)
         finally:
             _release(lock)
         _move_rescued_to_inbox(account_id, folder, result.rescue_uids)
@@ -197,18 +202,22 @@ def _run_backfill(account_id: int) -> None:
             encrypted_password = account.encrypted_password
         password = decrypt_password(encrypted_password)
 
-        with _imap_client(email, password, timeout=max(IMAP_TIMEOUT_SEC, 60)) as client:
-            pending = sync_targets(client, account_id)
-            while pending and not _stop.is_set():
-                for folder, kind in list(pending):
-                    status = _backfill_batch(
-                        client, account_id, folder, kind, _folder_lock(account_id, folder)
-                    )
-                    if status not in (PROGRESS, BUSY):  # 文件夹正在同步时下一轮再试
-                        pending.remove((folder, kind))
-                    if _stop.is_set():
-                        break
-                _stop.wait(BACKFILL_PAUSE_SEC)
+        pool = make_fetch_pool(email, password)
+        try:
+            with _imap_client(email, password, timeout=max(IMAP_TIMEOUT_SEC, 60), compress=True) as client:
+                pending = sync_targets(client, account_id)
+                while pending and not _stop.is_set():
+                    for folder, kind in list(pending):
+                        status = _backfill_batch(
+                            client, account_id, folder, kind, _folder_lock(account_id, folder), pool=pool
+                        )
+                        if status not in (PROGRESS, BUSY):  # 文件夹正在同步时下一轮再试
+                            pending.remove((folder, kind))
+                        if _stop.is_set():
+                            break
+                    _stop.wait(BACKFILL_PAUSE_SEC)
+        finally:
+            pool.close()
     except IMAPSyncError as exc:
         logger.warning("Backfill stopped account=%s: %s", account_id, exc)
     except Exception:
