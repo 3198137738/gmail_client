@@ -32,12 +32,19 @@ async function commit() {
   const { action, ids } = pending;
   pending = { action: null, ids: [] };
   if (!ids.length) return;
+  let ok = true;
   try {
     await post("/api/messages/actions", { action, ids }, { keepalive: true });
   } catch {
+    ok = false;
     toast(`${FAIL_TEXT[action] || "操作失败"}，邮件已恢复显示`, { tone: "error" });
   }
-  ids.forEach((id) => hiddenIds.delete(id));
+  // 成功时转为 removedIds：当前列表数据还是提交前取的，直接取消隐藏会让邮件闪现一下，
+  // 等列表重新加载（load 里会清空 removedIds）后再以服务器结果为准
+  ids.forEach((id) => {
+    hiddenIds.delete(id);
+    if (ok) removedIds.add(id);
+  });
   store.listVersion += 1;
   refreshNav();
 }
