@@ -88,12 +88,17 @@ class EngineHandle:
     def __init__(self, engine, email: str, secret: str, folder: str) -> None:
         self.engine = engine
         self.signature = (email, secret, folder)
+        # 创建时问一次并缓存：入库回调发生在引擎持锁期间，那时不能再调回引擎
+        self._caps = {cap: self._ask(cap) for cap in ("X-GM-EXT-1", "COMPRESS=DEFLATE", "CONDSTORE")}
 
-    def has_capability(self, cap: str) -> bool:
+    def _ask(self, cap: str) -> bool:
         try:
             return bool(self.engine.has_capability(cap))
         except Exception:
             return False
+
+    def has_capability(self, cap: str) -> bool:
+        return self._caps.get(cap, False)
 
     def close(self) -> None:
         try:

@@ -620,7 +620,9 @@ public:
     ~Engine() { close_all(); }
 
     bool has_capability(const std::string& cap) {
-        std::lock_guard<std::mutex> g(mu_);
+        // 等锁时不能握着 GIL：否则另一线程在 fetch_new 里等 GIL 回调 Python，两边互等
+        py::gil_scoped_release release;
+        std::lock_guard<std::recursive_mutex> g(mu_);
         return main_ && main_->has_capability(cap);
     }
 
@@ -630,7 +632,7 @@ public:
     }
 
     py::dict fetch_new(uint64_t last_uid, size_t max_messages, py::object on_headers, py::object on_body) {
-        std::lock_guard<std::mutex> g(mu_);
+        std::lock_guard<std::recursive_mutex> g(mu_);
         auto started = std::chrono::steady_clock::now();
         std::vector<FetchRecord> records;
         bool gmail = false;
@@ -875,14 +877,14 @@ private:
     }
 
     void close_all() {
-        std::lock_guard<std::mutex> g(mu_);
+        std::lock_guard<std::recursive_mutex> g(mu_);
         for (auto& c : extras_) if (c) { try { c->close(); } catch (...) {} }
         extras_.clear();
         if (main_) { try { main_->close(); } catch (...) {} main_.reset(); }
     }
 
     Config cfg_;
-    std::mutex mu_;
+    std::recursive_mutex mu_;   // 可重入：fetch_new 回调 Python 期间可能再调用 has_capability
     std::unique_ptr<Connection> main_;
     std::vector<std::unique_ptr<Connection>> extras_;
 };
