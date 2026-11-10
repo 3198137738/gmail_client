@@ -60,6 +60,10 @@ bool starts_with(const std::string& s, const char* prefix) {
     return s.size() >= n && s.compare(0, n, prefix) == 0;
 }
 
+bool starts_with(const std::string& s, const std::string& prefix) {
+    return s.size() >= prefix.size() && s.compare(0, prefix.size(), prefix) == 0;
+}
+
 std::string base64_encode(const std::string& in) {
     static const char* alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     std::string out;
