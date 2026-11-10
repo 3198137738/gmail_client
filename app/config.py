@@ -208,6 +208,15 @@ IDLE_RECONNECT_BACKOFF_SEC = _get_positive_int("IDLE_RECONNECT_BACKOFF_SEC", 30)
 # 收到推送后走「快速路径」（一条 UID FETCH 直接带回新邮件正文）的最多封数；
 # 一次到达更多邮件时改走完整同步（分批下载）。
 IDLE_FAST_PATH_MAX_MESSAGES = _get_positive_int("IDLE_FAST_PATH_MAX_MESSAGES", 20)
+# 新邮件下载引擎（C++ 扩展 app.native.imapfetch）：每账号常驻一条已登录的下载连接，收到推送后
+# 先取头部让邮件立刻出现在列表里，正文随后在多条连接上并发取。扩展不可用或自检不过时自动退回 Python 路径。
+FETCH_ENGINE_ENABLED = _get_bool("FETCH_ENGINE_ENABLED", True)
+# 取正文时额外开的连接数（主连接之外）
+FETCH_ENGINE_EXTRA_CONNECTIONS = _get_positive_int("FETCH_ENGINE_EXTRA_CONNECTIONS", 2)
+# 不超过这个大小的正文在主连接上一条命令取齐，更大的分给副连接并发取
+FETCH_ENGINE_SMALL_BODY_KB = _get_positive_int("FETCH_ENGINE_SMALL_BODY_KB", 256)
+# 副连接空闲多久后关闭
+FETCH_ENGINE_IDLE_CLOSE_SEC = _get_positive_int("FETCH_ENGINE_IDLE_CLOSE_SEC", 600)
 
 # --- Telegram new-mail notifications ---------------------------------------
 # When a bot token + chat id are set, newly synced inbox mail triggers a push

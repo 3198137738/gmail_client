@@ -380,10 +380,12 @@ def parse_email(
     folder_kind: str = "inbox",
     *,
     backend: Optional[str] = None,
+    headers_only: bool = False,
 ) -> ParsedMessage:
     """Parse a raw RFC822 byte stream into a :class:`ParsedMessage`.
 
     ``backend``：``"stdlib"`` / ``"native"`` 强制指定解析后端（自检与测试用）；默认自动选择。
+    ``headers_only``：只解析头部（新邮件头部先行时 ``raw_bytes`` 只有头部），不产出正文和附件。
     """
     src = _make_backend(raw_bytes, backend)
 
@@ -397,6 +399,8 @@ def parse_email(
         message_id=(src.header("Message-ID") or "").strip() or None,
     )
     parsed.thread_root = _thread_root_from(src.header, parsed.message_id)
+    if headers_only:
+        return parsed
 
     text_chunks: list[str] = []
     html_chunks: list[str] = []

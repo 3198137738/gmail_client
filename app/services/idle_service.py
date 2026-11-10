@@ -58,6 +58,7 @@ from .imap_client import (
     _imap_client,
     invalidate_folder_cache,
 )
+from . import fetch_engine
 from .imap_service import fast_sync_folder, safe_sync_account, sync_folder_with_client
 
 logger = logging.getLogger(__name__)
@@ -200,15 +201,26 @@ class IdleWorker(threading.Thread):
                     periodic = monotonic() - idle_since >= IDLE_REFRESH_SEC
                     if not (new_mail or other or periodic):
                         continue
+                    burst = new_mail and new_exists is not None and new_exists - exists > IDLE_FAST_PATH_MAX_MESSAGES
+                    engine_done = None
+                    if new_mail and not burst:
+                        # 优先用常驻的下载引擎（自己的连接）取新邮件：IDLE 连接不必退出
+                        engine_done = fetch_engine.fetch_new_mail(
+                            self.account_id, self._email, self._password, folder, self.folder_kind,
+                            uidvalidity=uidvalidity,
+                        )
+                        if engine_done is not None and not other and not periodic:
+                            if new_exists is not None:
+                                exists = new_exists
+                            continue
                     client.idle_done()
                     in_idle = False
                     if new_mail:
                         # 新邮件：快速路径，一次往返直接把新邮件取回来；一次到得太多、
                         # 还没首次同步或 UIDVALIDITY 变了时改走完整同步
-                        burst = new_exists is not None and new_exists - exists > IDLE_FAST_PATH_MAX_MESSAGES
-                        done = (
-                            None if burst else self._fast_sync(client, folder, uidvalidity, trigger="push", bodies=True)
-                        )
+                        done = engine_done
+                        if done is None and not burst:
+                            done = self._fast_sync(client, folder, uidvalidity, trigger="push", bodies=True)
                         if done is None:
                             self._sync_on_connection(client, folder, trigger="push")
                         elif other:
@@ -353,9 +365,11 @@ def start_idle() -> None:
 
 
 def reconcile_idle() -> None:
-    # 账号增删、重新授权时调用：特殊文件夹缓存一并作废，下次同步重新发现
+    # 账号增删、重新授权时调用：特殊文件夹缓存一并作废，下次同步重新发现；
+    # 下载引擎按凭据重建（get_engine 发现凭据变化会丢弃旧引擎），这里只把已删除账号的关掉
     invalidate_folder_cache()
     idle_manager.reconcile()
+    fetch_engine.drop_engine()
 
 
 def shutdown_idle() -> None:

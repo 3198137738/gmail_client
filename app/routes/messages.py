@@ -817,6 +817,8 @@ def _thread_item(m: Message, expanded: bool) -> dict:
         # 正文中有被拦下的外部图片（前端显示「显示图片」提示条）；默认就加载外部图片时不拦
         "remote_images": body_has_remote_images(m.body_html) and not remote_images_allowed(),
         "otp_code": m.otp_code,
+        # 正文还在下载（新邮件头部先行）：页面显示提示，正文到达后自动刷新
+        "body_pending": bool(m.body_pending),
         # 自己发出的邮件不检查
         "phishing": [] if m.folder_kind == "sent" else phishing.check(m.from_addr, m.body_html),
         "attachments": [ser.attachment(a) for a in sorted(m.attachments, key=lambda a: (a.is_inline, a.id))],
@@ -889,11 +891,14 @@ def message_body(
 ):
     """邮件正文文档，只在详情页的 sandbox iframe 中加载。"""
     row = db.execute(
-        select(Message.body_html, Message.body_text).where(Message.id == message_id)
+        select(Message.body_html, Message.body_text, Message.body_pending).where(Message.id == message_id)
     ).first()
     if row is None:
         raise HTTPException(status_code=404, detail="Message not found")
+    body_text = row.body_text
+    if row.body_pending and not row.body_html and not body_text:
+        body_text = "正文正在下载，请稍候…"
     return body_document_response(
-        row.body_html, row.body_text,
+        row.body_html, body_text,
         allow_remote_images=remote_images_allowed(images), origin=request_origin(request),
     )

@@ -27,7 +27,8 @@ import GmEmptyState from "../ui/GmEmptyState.vue";
 import { get } from "../api";
 import { openCompose, store } from "../store";
 import { prefs } from "../prefs";
-import { refreshNav } from "../composables/common";
+import { refreshNav, useCleanup } from "../composables/common";
+import { onRealtime } from "../realtime";
 import { usePageShortcuts } from "../composables/shortcuts";
 import { registerCommandSource } from "../shell/commands";
 import { APP_NAME } from "../brand";
@@ -118,9 +119,34 @@ function afterRemoved() {
   else goBack();
 }
 
+// 正文到达后换一个地址让 iframe 重新加载（新邮件头部先行时正文稍后才有）
+const bodyVersion = ref(0);
 function bodyUrl(m) {
-  return `/messages/${m.id}/body${showImages.value ? "?images=1" : ""}`;
+  const query = [];
+  if (showImages.value) query.push("images=1");
+  if (bodyVersion.value) query.push(`v=${bodyVersion.value}`);
+  return `/messages/${m.id}/body${query.length ? `?${query.join("&")}` : ""}`;
 }
+
+async function refreshPendingBody() {
+  try {
+    const data = await get(`/api/messages/${props.id}`, { back: props.back, peek: 1 });
+    if (!msg.value || data.id !== msg.value.id) return;
+    const keep = { ...expanded };
+    show(data);
+    Object.assign(expanded, keep);
+    bodyVersion.value += 1;
+  } catch {
+    // 下次事件再试
+  }
+}
+
+useCleanup(
+  onRealtime("mail_changed", (ev) => {
+    const m = msg.value;
+    if (m && ev.account_id === m.account_id && m.thread.some((t) => t.body_pending)) refreshPendingBody();
+  }),
+);
 
 // ---- 操作 ----
 const ctx = computed(() => {

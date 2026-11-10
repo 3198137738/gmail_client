@@ -10,4 +10,10 @@ try:
 except ImportError:  # 没有编译产物
     fastmime = None
 
-__all__ = ["fastmime"]
+# 新邮件下载引擎（native/imapfetch/），同样只在 Docker 构建时编译
+try:
+    from . import imapfetch  # type: ignore[attr-defined]
+except ImportError:
+    imapfetch = None
+
+__all__ = ["fastmime", "imapfetch"]

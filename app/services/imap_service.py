@@ -54,7 +54,7 @@ from imapclient import IMAPClient
 from imapclient.exceptions import IMAPClientAbortError, IMAPClientError
 from sqlalchemy import delete, or_, select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from ..config import (
     DEFAULT_FOLDER,
@@ -350,12 +350,15 @@ def _parse_fetched_messages(
             if failed_uids is not None:
                 failed_uids.add(uid)
             continue
+        # 头部先行：fetch 数据里只有头部，正文稍后由 complete_message_body 补上
+        headers_only = bool(data.get(b"BODY_PENDING"))
         try:
             parsed = parse_email(
                 raw,
                 account_id=account_id,
                 uid=uid,
                 folder_kind=folder_kind,
+                headers_only=headers_only,
             )
         except Exception:
             logger.exception("parse_email failed for account=%s uid=%s", account_id, uid)
@@ -401,6 +404,7 @@ def _parse_fetched_messages(
                 # 自己发出的邮件不识别验证码
                 "otp_code": extract_code(parsed.subject, parsed.body_text) if folder_kind != "sent" else None,
                 "attachments": parsed.attachments,
+                "body_pending": headers_only,
             }
         )
     return records
@@ -431,6 +435,7 @@ def _persist_parsed_messages(records: list[dict]) -> int:
                 thread_id=record.get("thread_id"),
                 has_attachments=record["has_attachments"],
                 otp_code=record.get("otp_code"),
+                body_pending=bool(record.get("body_pending")),
             )
             db.add(message)
             db.flush()
@@ -452,6 +457,43 @@ def _persist_parsed_messages(records: list[dict]) -> int:
                     )
                 )
     return len(records)
+
+
+def complete_message_body(account_id: int, folder: str, folder_kind: str, uid: int, raw: bytes) -> Optional[int]:
+    """头部先行入库的邮件收到完整正文后：解析正文与附件，补齐该行。返回邮件 id；本地没有这封时返回 None。"""
+    parsed = parse_email(raw, account_id=account_id, uid=uid, folder_kind=folder_kind)
+    with session_scope() as db:
+        message = db.execute(
+            select(Message)
+            .options(selectinload(Message.attachments))
+            .where(Message.account_id == account_id, Message.folder == folder, Message.uid == uid)
+        ).scalar_one_or_none()
+        if message is None:
+            return None
+        message.body_text = parsed.body_text
+        message.body_html = parsed.body_html
+        message.has_attachments = parsed.has_attachments
+        if folder_kind != "sent" and not message.otp_code:
+            message.otp_code = extract_code(parsed.subject, parsed.body_text)
+        message.body_pending = False
+        existing = {a.filename for a in message.attachments}
+        for att in parsed.attachments:
+            if att.filename in existing:
+                continue
+            db.add(
+                Attachment(
+                    message_id=message.id,
+                    filename=att.filename,
+                    display_name=att.display_name,
+                    mime_type=att.mime_type,
+                    size=att.size,
+                    is_inline=att.is_inline,
+                    content_id=att.content_id,
+                    file_path=att.file_path,
+                    public_url=att.public_url,
+                )
+            )
+        return int(message.id)
 
 
 def _update_sync_state(

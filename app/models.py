@@ -103,6 +103,10 @@ class Message(Base):
     snoozed_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
     # 邮件中识别出的验证码（见 services/otp.py）
     otp_code: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    # 新邮件「头部先行」：只收到了头部、正文还在下载（见 services/fetch_engine.py）
+    body_pending: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
 
