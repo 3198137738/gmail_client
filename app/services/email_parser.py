@@ -1,5 +1,12 @@
 """Robust MIME parser that extracts headers, bodies, inline images and attachments.
 
+两种解析后端产出同样的中间结构（顶层头部 + 叶子部件），之后的组装只写一份：
+
+* ``stdlib``：Python 标准库 ``email``（policy.default），始终可用；
+* ``native``：C++ 扩展 ``app.native.fastmime``（见 native/fastmime/），只做结构切分与传输解码，
+  头部的 RFC 2047 解码、字符集转换、地址格式化仍在这里完成。启动自检通过后启用
+  （见 fastmime_check）；单封解析出错时退回 stdlib 重解析该封，累计出错过多则关闭。
+
 Inline images:
 * multipart/related parts carrying a ``Content-ID`` header are stored under
   ``attachments/{account_id}/{folder_kind}/{uid}/inline/`` and registered
@@ -15,6 +22,7 @@ from __future__ import annotations
 import logging
 import mimetypes
 import re
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from email import message_from_bytes, policy
@@ -128,18 +136,20 @@ def _parse_date(raw_value: Optional[str]) -> Optional[datetime]:
         return None
 
 
-def _decode_part_text(part: Message) -> str:
-    """Decode a text/* part using its declared charset, with safe fallbacks."""
-    payload = part.get_payload(decode=True)
+def _decode_text(payload: Optional[bytes], charset: Optional[str]) -> str:
+    """Decode a text/* payload using its declared charset, with safe fallbacks."""
     if payload is None:
         return ""
-    charset = part.get_content_charset() or "utf-8"
-    for enc in (charset, "utf-8", "latin-1"):
+    for enc in (charset or "utf-8", "utf-8", "latin-1"):
         try:
             return payload.decode(enc, errors="strict")
         except (UnicodeDecodeError, LookupError):
             continue
     return payload.decode("utf-8", errors="replace")
+
+
+def _decode_part_text(part: Message) -> str:
+    return _decode_text(part.get_payload(decode=True), part.get_content_charset())
 
 
 def _normalize_cid(raw_cid: Optional[str]) -> Optional[str]:
@@ -149,16 +159,6 @@ def _normalize_cid(raw_cid: Optional[str]) -> Optional[str]:
     if cid.startswith("<") and cid.endswith(">"):
         cid = cid[1:-1]
     return cid or None
-
-
-def _is_inline_part(part: Message) -> bool:
-    """A part is inline if disposition='inline' OR a Content-ID exists."""
-    disposition = (part.get("Content-Disposition") or "").lower()
-    if "inline" in disposition:
-        return True
-    if part.get("Content-ID"):
-        return True
-    return False
 
 
 def _guess_extension(mime_type: str) -> str:
@@ -204,10 +204,10 @@ def _walk_parts(msg: Message) -> Iterable[Message]:
 _MSGID_RE = re.compile(r"<([^<>\s]+)>")
 
 
-def _thread_root(msg, message_id: Optional[str]) -> Optional[str]:
+def _thread_root_from(get_header, message_id: Optional[str]) -> Optional[str]:
     for header in ("References", "In-Reply-To"):
         try:
-            found = _MSGID_RE.findall(str(msg.get(header) or ""))
+            found = _MSGID_RE.findall(str(get_header(header) or ""))
         except Exception:
             found = []
         if found:
@@ -216,25 +216,187 @@ def _thread_root(msg, message_id: Optional[str]) -> Optional[str]:
     return own[0].lower() if own else None
 
 
+def _thread_root(msg, message_id: Optional[str]) -> Optional[str]:
+    return _thread_root_from(msg.get, message_id)
+
+
+# ---- 两种后端产出的中间结构 -------------------------------------------------------
+
+@dataclass
+class _PartView:
+    """一个叶子部件：组装层只认这些字段。"""
+
+    content_type: str                 # 小写 type/subtype
+    disposition: str                  # Content-Disposition 原始值（小写），没有则空串
+    filename: Optional[str]           # 已解码的显示文件名
+    content_id: Optional[str]
+    charset: Optional[str]
+    payload: Optional[bytes]          # 已按传输编码解码
+
+
+class _StdlibBackend:
+    name = "stdlib"
+
+    def __init__(self, raw: bytes) -> None:
+        self.msg = message_from_bytes(raw, policy=policy.default)
+
+    def header(self, name: str) -> Optional[str]:
+        value = self.msg.get(name)
+        return None if value is None else str(value)
+
+    def parts(self) -> Iterable[_PartView]:
+        for part in _walk_parts(self.msg):
+            raw_filename = part.get_filename()
+            yield _PartView(
+                content_type=(part.get_content_type() or "").lower(),
+                disposition=(part.get("Content-Disposition") or "").lower(),
+                filename=_decode_header_value(raw_filename) if raw_filename else None,
+                content_id=part.get("Content-ID"),
+                charset=part.get_content_charset(),
+                payload=part.get_payload(decode=True),
+            )
+
+
+def _bytes_text(value: Optional[bytes]) -> Optional[str]:
+    """头部原始字节 → 字符串。与标准库一致：8 位内容按 UTF-8 解码，坏字节替换。"""
+    return None if value is None else value.decode("utf-8", "replace")
+
+
+def _param_text(params: dict, name: str) -> Optional[str]:
+    """RFC 2231 参数 → 字符串：有字符集按字符集解码，再解 RFC 2047 编码词。"""
+    item = params.get(name)
+    if item is None:
+        return None
+    raw, charset = item
+    text = None
+    if charset:
+        try:
+            text = raw.decode(charset, "replace")
+        except LookupError:
+            text = None
+    if text is None:
+        text = raw.decode("utf-8", "replace")
+    return _decode_header_value(text)
+
+
+class _NativeBackend:
+    name = "native"
+
+    def __init__(self, raw: bytes, module) -> None:
+        data = module.parse(raw)
+        self._headers: dict[str, bytes] = {}
+        for name, value in data["headers"]:
+            self._headers.setdefault(name, value)   # 同名头部取第一个，与 msg.get 一致
+        self._parts = data["parts"]
+
+    def header(self, name: str) -> Optional[str]:
+        return _bytes_text(self._headers.get(name.lower()))
+
+    def parts(self) -> Iterable[_PartView]:
+        for p in self._parts:
+            ct_params = p["ct_params"]
+            cd_params = p["cd_params"]
+            filename = _param_text(cd_params, "filename") or _param_text(ct_params, "name")
+            charset_item = ct_params.get("charset")
+            charset = charset_item[0].decode("ascii", "replace").strip().lower() if charset_item else None
+            yield _PartView(
+                content_type=p["content_type"],
+                disposition=(_bytes_text(p["disposition"]) or "").lower(),
+                filename=filename or None,
+                content_id=_bytes_text(p["content_id"]),
+                charset=charset or None,
+                payload=p["payload"],
+            )
+
+
+# ---- 后端选择 -------------------------------------------------------------------
+
+_native_module = None
+_native_enabled = False
+_native_failures = 0
+_native_lock = threading.Lock()
+# 原生解析连续 / 累计出错这么多次后不再使用（进程内）
+NATIVE_FAILURE_LIMIT = 20
+
+
+def native_available() -> bool:
+    from .. import native
+
+    return native.fastmime is not None
+
+
+def set_native_enabled(enabled: bool, reason: str = "") -> None:
+    """由启动自检（fastmime_check）调用：自检通过才启用原生解析。"""
+    global _native_module, _native_enabled, _native_failures
+    from .. import native
+
+    with _native_lock:
+        _native_module = native.fastmime if enabled else None
+        _native_enabled = bool(enabled and native.fastmime is not None)
+        _native_failures = 0
+    logger.info("MIME parser: %s%s", "native" if _native_enabled else "python", f" ({reason})" if reason else "")
+
+
+def native_enabled() -> bool:
+    return _native_enabled
+
+
+def _record_native_failure(exc: Exception) -> None:
+    global _native_enabled, _native_failures
+    with _native_lock:
+        _native_failures += 1
+        count = _native_failures
+        if count >= NATIVE_FAILURE_LIMIT and _native_enabled:
+            _native_enabled = False
+            logger.error("Native MIME parser disabled after %s failures; last error: %s", count, exc)
+            return
+    logger.warning("Native MIME parse failed, falling back to python (%s/%s): %s", count, NATIVE_FAILURE_LIMIT, exc)
+
+
+def _make_backend(raw: bytes, backend: Optional[str]):
+    if backend == "native" or (backend is None and _native_enabled):
+        module = _native_module
+        if module is None:
+            from .. import native
+
+            module = native.fastmime
+        if module is None:
+            raise RuntimeError("native MIME parser is not available")
+        try:
+            return _NativeBackend(raw, module)
+        except Exception as exc:
+            if backend == "native":
+                raise
+            _record_native_failure(exc)
+    return _StdlibBackend(raw)
+
+
+# ---- 组装 -------------------------------------------------------------------------
+
 def parse_email(
     raw_bytes: bytes,
     account_id: int,
     uid: int,
     folder_kind: str = "inbox",
+    *,
+    backend: Optional[str] = None,
 ) -> ParsedMessage:
-    """Parse a raw RFC822 byte stream into a :class:`ParsedMessage`."""
-    msg = message_from_bytes(raw_bytes, policy=policy.default)
+    """Parse a raw RFC822 byte stream into a :class:`ParsedMessage`.
+
+    ``backend``：``"stdlib"`` / ``"native"`` 强制指定解析后端（自检与测试用）；默认自动选择。
+    """
+    src = _make_backend(raw_bytes, backend)
 
     parsed = ParsedMessage(
-        subject=_decode_header_value(msg.get("Subject")),
-        from_addr=_format_addresses(msg.get("From")),
-        to_addr=_format_addresses(msg.get("To")),
-        cc_addr=_format_addresses(msg.get("Cc")),
-        bcc_addr=_format_addresses(msg.get("Bcc")),
-        date=_parse_date(msg.get("Date")),
-        message_id=(msg.get("Message-ID") or "").strip() or None,
+        subject=_decode_header_value(src.header("Subject")),
+        from_addr=_format_addresses(src.header("From")),
+        to_addr=_format_addresses(src.header("To")),
+        cc_addr=_format_addresses(src.header("Cc")),
+        bcc_addr=_format_addresses(src.header("Bcc")),
+        date=_parse_date(src.header("Date")),
+        message_id=(src.header("Message-ID") or "").strip() or None,
     )
-    parsed.thread_root = _thread_root(msg, parsed.message_id)
+    parsed.thread_root = _thread_root_from(src.header, parsed.message_id)
 
     text_chunks: list[str] = []
     html_chunks: list[str] = []
@@ -245,27 +407,27 @@ def parse_email(
     inline_dir: Optional[Path] = None
     files_dir: Optional[Path] = None
 
-    for part in _walk_parts(msg):
-        ctype = (part.get_content_type() or "").lower()
-        disposition = (part.get("Content-Disposition") or "").lower()
+    for part in src.parts():
+        ctype = part.content_type
+        disposition = part.disposition
         is_attachment_disposition = "attachment" in disposition
-        is_inline = _is_inline_part(part)
+        # A part is inline if disposition='inline' OR a Content-ID exists.
+        is_inline = "inline" in disposition or bool(part.content_id)
 
         if ctype == "text/plain" and not is_attachment_disposition:
-            text_chunks.append(_decode_part_text(part))
+            text_chunks.append(_decode_text(part.payload, part.charset))
             continue
 
         if ctype == "text/html" and not is_attachment_disposition:
-            html_chunks.append(_decode_part_text(part))
+            html_chunks.append(_decode_text(part.payload, part.charset))
             continue
 
-        payload = part.get_payload(decode=True)
+        payload = part.payload
         if payload is None:
             continue
 
-        raw_filename = part.get_filename()
-        filename = _decode_header_value(raw_filename) if raw_filename else None
-        cid = _normalize_cid(part.get("Content-ID"))
+        filename = part.filename
+        cid = _normalize_cid(part.content_id)
 
         treat_as_inline = is_inline and ctype.startswith("image/") and (cid or not is_attachment_disposition)
 

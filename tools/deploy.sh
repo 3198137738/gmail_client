@@ -37,7 +37,8 @@ else
     echo "==> 依赖漏洞扫描（pip-audit，工具本身也按 hash 安装）"
     docker run --rm -v "$PWD:/src:ro" -w /src "$IMAGE" sh -c '
         pip install --quiet --no-cache-dir --root-user-action=ignore --require-hashes -r tools/audit-requirements.lock \
-        && pip-audit --strict --progress-spinner off -r requirements.lock --require-hashes --disable-pip'
+        && pip-audit --strict --progress-spinner off -r requirements.lock --require-hashes --disable-pip \
+        && pip-audit --strict --progress-spinner off -r native/fastmime/build-requirements.lock --require-hashes --disable-pip'
     echo "==> 前端依赖漏洞扫描（npm audit，按 package-lock.json 检查打包进页面的依赖）"
     docker run --rm -v "$PWD/frontend:/src:ro" -w /src "$NODE_IMAGE" npm audit --omit=dev
 fi

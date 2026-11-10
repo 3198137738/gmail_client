@@ -17,6 +17,19 @@ COPY frontend/ ./
 # 输出到 /app/static/dist（见 vite.config.js 的 outDir）
 RUN npm run build
 
+# ---- 原生 MIME 解析扩展（C++ / pybind11）：只在这一阶段编译，编译器不进入最终镜像 ----
+# 源码在 native/fastmime/；构建依赖按 build-requirements.lock 的 hash 安装。
+# 编译失败会让整个构建失败（不静默退回），运行时则由 fastmime_check 自检决定是否启用。
+FROM base AS native
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends g++ make \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY native/fastmime/build-requirements.lock ./
+RUN pip install --no-cache-dir --require-hashes --no-deps -r build-requirements.lock
+COPY native/fastmime/ ./
+RUN python setup.py build_ext --inplace && ls fastmime*.so
+
 FROM base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -48,6 +61,7 @@ RUN pip install --no-cache-dir --require-hashes --no-deps -r requirements.lock  
 
 COPY app ./app
 COPY --from=frontend /app/static/dist ./app/static/dist
+COPY --from=native /build/fastmime*.so ./app/native/
 COPY run.py ./run.py
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 # Windows CRLF in the script makes the kernel look for "/bin/sh\r" → "no such file or directory"

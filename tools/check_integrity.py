@@ -11,7 +11,7 @@ import re
 import sys
 from pathlib import Path
 
-SCAN_SUFFIXES = {".py", ".sh", ".js", ".mjs", ".vue", ".css", ".html", ".mako", ".txt", ".lock", ".yml", ".yaml", ".cfg", ".ini", ".toml"}
+SCAN_SUFFIXES = {".py", ".sh", ".js", ".mjs", ".vue", ".css", ".html", ".mako", ".txt", ".lock", ".yml", ".yaml", ".cfg", ".ini", ".toml", ".cpp", ".h", ".hpp"}
 # dist：前端构建产物（压缩后的代码，由 frontend/ 源码重新生成，不入库）
 SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", "dist", "data", "attachments", "backups", "logs", "secrets", "vendor", ".pytest_cache"}
 

@@ -1,0 +1,4 @@
+# fastmime 扩展的构建依赖（只在 Docker 构建阶段安装，不进入运行镜像）。
+# 升级后重新生成锁文件（hash 用 pip download + pip hash 取得，或 uv pip compile --generate-hashes）。
+pybind11==3.1.0
+setuptools==84.2.1
