@@ -645,14 +645,22 @@ public:
             if (gmail) items += " X-GM-THRID X-GM-LABELS";
             items += " BODY.PEEK[HEADER]";
             std::string cmd = "UID FETCH " + std::to_string(last_uid + 1) + ":* (" + items + ")";
-            Tagged r = run_main([&](Connection& c) {
-                return c.command(cmd, [&](const std::vector<Segment>& segs) {
-                    if (segs.front().text.find(" FETCH ") == std::string::npos) return;
-                    FetchRecord rec = parse_fetch(segs);
-                    if (rec.uid > last_uid && rec.has_header) records.push_back(std::move(rec));
-                }, false);
-            });
-            if (r.status != "OK") throw std::runtime_error("UID FETCH failed: " + r.text);
+            // Gmail 只让「已经收到 EXISTS 通知」的连接看到新邮件：这条常驻连接可能还没被告知，
+            // 第一次 FETCH 的 * 按旧的邮件数算、取不到新邮件，但响应里会带上 EXISTS——此时再取一次。
+            for (int attempt = 0; attempt < 2; ++attempt) {
+                bool saw_exists = false;
+                Tagged r = run_main([&](Connection& c) {
+                    return c.command(cmd, [&](const std::vector<Segment>& segs) {
+                        const std::string& line = segs.front().text;
+                        if (line.find(" EXISTS") != std::string::npos) saw_exists = true;
+                        if (line.find(" FETCH ") == std::string::npos) return;
+                        FetchRecord rec = parse_fetch(segs);
+                        if (rec.uid > last_uid && rec.has_header) records.push_back(std::move(rec));
+                    }, false);
+                });
+                if (r.status != "OK") throw std::runtime_error("UID FETCH failed: " + r.text);
+                if (!records.empty() || !saw_exists) break;
+            }
         }
         double headers_sec = seconds_since(started);
         py::dict result;

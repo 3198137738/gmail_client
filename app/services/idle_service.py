@@ -209,6 +209,10 @@ class IdleWorker(threading.Thread):
                             self.account_id, self._email, self._password, folder, self.folder_kind,
                             uidvalidity=uidvalidity,
                         )
+                        if engine_done is not None and not engine_done.get("scanned"):
+                            # 推送说有新邮件、引擎却没取到（Gmail 对未收到 EXISTS 的连接会隐藏新邮件）：
+                            # 用已经收到通知的 IDLE 连接再取一次
+                            engine_done = None
                         if engine_done is not None and not other and not periodic:
                             if new_exists is not None:
                                 exists = new_exists
