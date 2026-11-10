@@ -50,8 +50,8 @@ from .routes import templates as templates_routes
 from .services import image_proxy as image_proxy_service
 from .services import login_sessions
 from .services.background import shutdown_executor
-from .services import fetch_engine
 from .services.fastmime_check import run_self_check as run_mime_self_check
+from .services.fetch_engine_check import run_self_check as run_engine_self_check
 from .services.imap_backfill import shutdown_backfill, start_backfill
 from .services.idle_service import shutdown_idle, start_idle
 from .services.scheduler import shutdown_scheduler, start_scheduler
@@ -78,7 +78,7 @@ async def lifespan(app: FastAPI):
         # 访问密码改过（.env 修改后重启）：撤销所有登录会话
         login_sessions.check_password_change(WEB_AUTH_PASSWORD)
     run_mime_self_check()   # 原生 MIME 解析器与标准库结果一致才启用
-    fetch_engine.startup_log()
+    run_engine_self_check()   # 下载引擎在假服务器上跑通才启用
     start_backfill()
     start_scheduler()
     start_idle()

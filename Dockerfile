@@ -22,13 +22,16 @@ RUN npm run build
 # 编译失败会让整个构建失败（不静默退回），运行时则由 fastmime_check 自检决定是否启用。
 FROM base AS native
 RUN apt-get update \
- && apt-get install -y --no-install-recommends g++ make \
+ && apt-get install -y --no-install-recommends g++ make libssl-dev zlib1g-dev \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY native/fastmime/build-requirements.lock ./
 RUN pip install --no-cache-dir --require-hashes --no-deps -r build-requirements.lock
-COPY native/fastmime/ ./
-RUN python setup.py build_ext --inplace && ls fastmime*.so
+# fastmime：MIME 结构解析；imapfetch：新邮件下载引擎（常驻连接、头部先行、并发取正文）
+COPY native/fastmime/ ./fastmime/
+COPY native/imapfetch/ ./imapfetch/
+RUN cd fastmime && python setup.py build_ext --inplace && ls fastmime*.so \
+ && cd ../imapfetch && python setup.py build_ext --inplace && ls imapfetch*.so
 
 FROM base
 
@@ -61,7 +64,7 @@ RUN pip install --no-cache-dir --require-hashes --no-deps -r requirements.lock  
 
 COPY app ./app
 COPY --from=frontend /app/static/dist ./app/static/dist
-COPY --from=native /build/fastmime*.so ./app/native/
+COPY --from=native /build/fastmime/fastmime*.so /build/imapfetch/imapfetch*.so ./app/native/
 COPY run.py ./run.py
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 # Windows CRLF in the script makes the kernel look for "/bin/sh\r" → "no such file or directory"

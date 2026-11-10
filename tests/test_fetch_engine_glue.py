@@ -198,3 +198,23 @@ def test_pending_body_placeholder_and_detail_flag(client, no_notify):
     assert client.get(f"/api/messages/{mid}").json()["thread"][0]["body_pending"] is False
     assert "100099" in client.get(f"/messages/{mid}/body").text
     assert complete_message_body(acc, "INBOX", "inbox", 12345, _raw(1)) is None
+
+
+def test_regular_sync_repairs_stuck_pending_bodies(no_notify, monkeypatch):
+    from datetime import datetime, timedelta
+
+    from app.services import imap_service
+
+    acc, box = _prepared()
+    # 模拟头部先行入库、正文一直没到的邮件（引擎中途出错）
+    with session_scope() as db:
+        row = db.execute(select(Message).where(Message.account_id == acc, Message.uid == 3)).scalar_one()
+        row.body_pending = True
+        row.body_html = None
+        row.body_text = None
+        row.created_at = datetime.now() - timedelta(minutes=5)
+    monkeypatch.setattr(imap_service, "PENDING_BODY_GRACE", timedelta(minutes=1))
+    _sync_one_folder(box, acc, "INBOX", "inbox")
+    with session_scope() as db:
+        row = db.execute(select(Message).where(Message.account_id == acc, Message.uid == 3)).scalar_one()
+        assert not row.body_pending and row.body_text == "body 3"

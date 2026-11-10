@@ -496,6 +496,47 @@ def complete_message_body(account_id: int, folder: str, folder_kind: str, uid: i
         return int(message.id)
 
 
+# 头部先行入库后正文迟迟没到（引擎取正文时出错）：超过这个时间由常规同步补取
+PENDING_BODY_GRACE = timedelta(minutes=2)
+
+
+def _repair_pending_bodies(client: IMAPClient, account_id: int, folder: str, folder_kind: str) -> int:
+    """给只有头部、正文长时间没到的邮件补取正文（下载引擎的兜底），返回补齐的封数。"""
+    cutoff = datetime.now() - PENDING_BODY_GRACE
+    with session_scope() as db:
+        uids = list(
+            db.execute(
+                select(Message.uid).where(
+                    Message.account_id == account_id,
+                    Message.folder == folder,
+                    Message.body_pending.is_(True),
+                    Message.created_at < cutoff,
+                ).order_by(Message.uid).limit(50)
+            ).scalars()
+        )
+    if not uids:
+        return 0
+    try:
+        fetched = client.fetch([int(u) for u in uids], ["RFC822"])
+    except IMAPClientError as exc:
+        logger.warning("Pending body repair fetch failed account=%s folder=%s: %s", account_id, folder, exc)
+        return 0
+    fixed = 0
+    for uid, data in fetched.items():
+        raw = data.get(b"RFC822")
+        if not raw:
+            continue
+        try:
+            if complete_message_body(account_id, folder, folder_kind, int(uid), raw) is not None:
+                fixed += 1
+        except Exception:
+            logger.exception("Pending body repair failed account=%s uid=%s", account_id, uid)
+    if fixed:
+        logger.info("Repaired pending bodies account=%s folder=%s count=%s", account_id, folder, fixed)
+        publish_mail_changed(account_id, folder_kind)
+    return fixed
+
+
 def _update_sync_state(
     account_id: int,
     folder: str,
@@ -1262,6 +1303,7 @@ def _sync_one_folder(
         changed_flags += 1   # 排序变了，页面需要刷新
     if changed_flags or removed:
         publish_mail_changed(account_id, folder_kind)
+    _repair_pending_bodies(client, account_id, folder, folder_kind)
 
     truncated = False
     if last_uid > 0:

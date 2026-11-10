@@ -19,6 +19,7 @@ from datetime import datetime
 from time import perf_counter
 from typing import Any, Optional
 
+from imapclient import imap_utf7
 from imapclient.datetime_util import parse_to_datetime
 
 from ..config import (
@@ -126,7 +127,8 @@ def get_engine(account_id: int, email: str, secret: str, folder: str) -> Optiona
             user=email,
             password="" if token else secret,
             token=token or "",
-            folder=folder,
+            # IMAP 文件夹名用修改版 UTF-7 传输（imapclient 平时替我们做了）
+            folder=imap_utf7.encode(folder).decode("ascii"),
             extra_connections=FETCH_ENGINE_EXTRA_CONNECTIONS,
             small_body_bytes=FETCH_ENGINE_SMALL_BODY_KB * 1024,
             idle_close_sec=FETCH_ENGINE_IDLE_CLOSE_SEC,
