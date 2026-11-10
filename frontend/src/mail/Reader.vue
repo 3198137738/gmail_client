@@ -295,7 +295,8 @@ onBeforeUnmount(() => unregister?.());
         <NButton quaternary class="gm-rd-back" @click="goBack">返回列表</NButton>
       </GmEmptyState>
 
-      <div v-else-if="msg" class="gm-rd-thread">
+      <!-- 按邮件 id 整体重建：浏览器「翻译网页」会替换文字节点，原地改文字时译文不会更新 -->
+      <div v-else-if="msg" :key="msg.id" class="gm-rd-thread">
         <div class="gm-rd-subject-row">
           <h1 class="gm-rd-subject">
             {{ msg.subject || "(无主题)" }}
