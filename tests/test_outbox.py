@@ -43,7 +43,10 @@ def test_batch_delete_enqueues_remote_op_with_local_delete(client, _no_backgroun
     resp = api_post(client, "/api/messages/actions", token, {"action": "delete", "ids": [m1, m2]})
     assert resp.status_code == 200
     with session_scope() as db:
-        assert db.get(Message, m1) is None and db.get(Message, m2) is None
+        # 本地立即移入「已删除」并保留记录（等服务器回收站里的那封认领）
+        for mid in (m1, m2):
+            row = db.get(Message, mid)
+            assert row.folder_kind == "trash" and row.moved_at is not None and row.moved_from_kind == "inbox"
     ops = _ops(acc)
     assert [(o.op, o.folder, o.uids, o.uidvalidity) for o in ops] == [("delete", "INBOX", "501,502", 7)]
     assert ("process_account", (acc,), {}) in _no_background_network

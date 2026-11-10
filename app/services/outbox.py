@@ -132,6 +132,28 @@ def _supersede(
             db.delete(row)
 
 
+def cancel_uids(db: Session, account_id: int, folder: str, op: str, uids: Iterable[int]) -> set[int]:
+    """把这些 UID 从还在排队的某类操作里去掉（如撤回尚未执行的删除）。返回确实撤回了的 UID。"""
+    wanted = {int(u) for u in uids}
+    cancelled: set[int] = set()
+    rows = db.execute(
+        select(PendingOp).where(
+            PendingOp.account_id == account_id, PendingOp.folder == folder, PendingOp.op == op
+        )
+    ).scalars().all()
+    for row in rows:
+        old_uids = _decode_uids(row.uids)
+        remaining = [u for u in old_uids if u not in wanted]
+        if len(remaining) == len(old_uids):
+            continue
+        cancelled.update(u for u in old_uids if u in wanted)
+        if remaining:
+            row.uids = _encode_uids(remaining)
+        else:
+            db.delete(row)
+    return cancelled
+
+
 def kick(account_ids: Iterable[int]) -> None:
     """事务提交后调用：让后台立即处理这些账号的待执行操作。"""
     for account_id in sorted(set(int(a) for a in account_ids)):

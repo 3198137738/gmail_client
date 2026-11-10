@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import shutil
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import select
@@ -124,20 +125,93 @@ def set_starred(db: Session, messages: list[Message], starred: bool) -> int:
     return len(changed)
 
 
-def restore_from_trash(db: Session, messages: list[Message]) -> int:
-    """把「已删除」里的邮件移回收件箱：Gmail 上的移动写入 outbox，本地记录先删掉，
-    收件箱同步会再把它作为新邮件收进来（与「这不是垃圾邮件」相同）。"""
-    targets = [m for m in messages if m.folder_kind == "trash"]
+def move_to_trash(db: Session, messages: list[Message]) -> int:
+    """删除（移入「已删除」）：本地记录立即改为「已删除」并保留，服务器上的删除写入 outbox。
+
+    这封邮件在服务器回收站里有了新 UID、同步下来时，按 Message-ID 认领这一行
+    （见 imap_service._adopt_moved_message），列表里不会出现两条，也不必等几秒才在「已删除」里看到。
+    """
+    targets = [m for m in messages if m.folder_kind != "trash"]
     if not targets:
         return 0
     grouped: dict[int, dict[str, list[int]]] = defaultdict(lambda: defaultdict(list))
+    now = datetime.now()
     for message in targets:
+        grouped[int(message.account_id)][message.folder].append(int(message.uid))
+        message.moved_from_kind = message.folder_kind
+        message.folder_kind = "trash"
+        message.moved_at = now
+        message.snoozed_until = None
+    for account_id, folder_uids in grouped.items():
+        for folder, uids in folder_uids.items():
+            outbox.enqueue(db, account_id, folder, outbox.OP_DELETE, uids)
+    db.commit()
+    outbox.kick(grouped)
+    return len(targets)
+
+
+def purge_trash(db: Session, messages: list[Message]) -> int:
+    """永久删除「已删除」里的邮件。还没被服务器回收站那封认领的（刚移入）先标记 purge_pending，
+    认领时再在服务器上彻底删除；其余的立即写入 outbox 并删除本地记录。"""
+    targets = [m for m in messages if m.folder_kind == "trash"]
+    if not targets:
+        return 0
+    waiting = [m for m in targets if m.moved_at is not None]
+    ready = [m for m in targets if m.moved_at is None]
+    for message in waiting:
+        message.purge_pending = True
+    grouped: dict[int, dict[str, list[int]]] = defaultdict(lambda: defaultdict(list))
+    for message in ready:
         grouped[int(message.account_id)][message.folder].append(int(message.uid))
     for account_id, folder_uids in grouped.items():
         for folder, uids in folder_uids.items():
-            outbox.enqueue(db, account_id, folder, outbox.OP_MOVE, uids, DEFAULT_FOLDER)
-    restored = delete_local_messages(db, targets)
+            outbox.enqueue(db, account_id, folder, outbox.OP_DELETE, uids)
+    if ready:
+        delete_local_messages(db, ready)   # 内部会提交
+    else:
+        db.commit()
     outbox.kick(grouped)
+    return len(targets)
+
+
+def restore_from_trash(db: Session, messages: list[Message]) -> int:
+    """把「已删除」里的邮件移回收件箱。
+
+    刚从本地移入、服务器上的删除还在排队的：撤回那条删除，本地直接改回原文件夹（纯本地，立即生效）。
+    服务器上已经移走、还没认领的：这几秒内无法恢复，跳过（认领后再恢复即可）。
+    其余：Gmail 上的移动写入 outbox，本地记录先删掉，收件箱同步会再把它作为新邮件收进来。
+    """
+    targets = [m for m in messages if m.folder_kind == "trash"]
+    if not targets:
+        return 0
+    restored = 0
+    remote: list[Message] = []
+    touched: set[int] = set()
+    for message in targets:
+        if message.moved_at is None:
+            remote.append(message)
+            continue
+        cancelled = outbox.cancel_uids(
+            db, int(message.account_id), message.folder, outbox.OP_DELETE, [int(message.uid)]
+        )
+        if cancelled:
+            message.folder_kind = message.moved_from_kind or "inbox"
+            message.moved_at = None
+            message.moved_from_kind = None
+            message.purge_pending = False
+            restored += 1
+    if remote:
+        grouped: dict[int, dict[str, list[int]]] = defaultdict(lambda: defaultdict(list))
+        for message in remote:
+            grouped[int(message.account_id)][message.folder].append(int(message.uid))
+        for account_id, folder_uids in grouped.items():
+            for folder, uids in folder_uids.items():
+                outbox.enqueue(db, account_id, folder, outbox.OP_MOVE, uids, DEFAULT_FOLDER)
+        touched.update(grouped)
+        restored += delete_local_messages(db, remote)   # 内部会提交
+    else:
+        db.commit()
+    outbox.kick(touched)
     return restored
 
 
@@ -279,7 +353,7 @@ def mark_read_by_id(message_id: int) -> tuple[bool, str]:
 
 
 def delete_by_id(message_id: int) -> tuple[bool, str]:
-    """删除一封邮件：本地立即删除，远程删除写入 outbox。Returns ``(ok, subject_or_error)``."""
+    """删除一封邮件（Telegram 按钮）：不在「已删除」里的本地立即移入「已删除」，已在里面的永久删除。Returns ``(ok, subject_or_error)``."""
     try:
         with session_scope() as db:
             message = db.execute(
@@ -289,11 +363,11 @@ def delete_by_id(message_id: int) -> tuple[bool, str]:
             ).scalar_one_or_none()
             if message is None:
                 return False, "邮件不存在或已删除"
-            account_id = int(message.account_id)
             subject = (message.subject or "(无主题)").strip()
-            outbox.enqueue(db, account_id, message.folder, outbox.OP_DELETE, [int(message.uid)])
-            delete_local_messages(db, [message])
-        outbox.kick([account_id])
+            if message.folder_kind == "trash":
+                purge_trash(db, [message])
+            else:
+                move_to_trash(db, [message])
         return True, subject
     except Exception as exc:
         logger.exception("delete_by_id failed id=%s", message_id)

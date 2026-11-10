@@ -40,7 +40,9 @@ def test_delete_one(client):
     mid = create_message(acc)
     resp = api_post(client, f"/api/messages/{mid}/delete", token)
     assert resp.json() == {"ok": True}
-    assert client.get(f"/api/messages/{mid}").status_code == 404
+    # 删除 = 本地立即移入「已删除」，邮件仍可打开，只是文件夹变了
+    detail = client.get(f"/api/messages/{mid}")
+    assert detail.status_code == 200 and detail.json()["folder_kind"] == "trash"
 
 
 def test_block_sender_hides_existing_mail(client, _no_background_network):

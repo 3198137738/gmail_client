@@ -103,9 +103,11 @@ def test_batch_delete_applies_to_whole_conversation(client):
     resp = api_post(client, "/api/messages/actions", token, {"action": "delete", "ids": [ids[2]]})
     assert resp.status_code == 200
     with session_scope() as db:
-        remaining = set(db.execute(select(Message.id).where(Message.account_id == acc)).scalars())
+        # 整个会话都本地移入「已删除」（记录保留、等服务器回收站认领），不相干的那封不动
+        trashed = set(db.execute(select(Message.id).where(Message.account_id == acc, Message.folder_kind == "trash")).scalars())
+        kept = set(db.execute(select(Message.id).where(Message.account_id == acc, Message.folder_kind != "trash")).scalars())
         ops = db.execute(select(PendingOp.folder, PendingOp.uids).where(PendingOp.account_id == acc)).all()
-    assert remaining == {other}
+    assert trashed == set(ids) and kept == {other}
     assert sorted(ops) == [("INBOX", "600,601,602"), ("[Gmail]/Sent Mail", "650")]
 
 

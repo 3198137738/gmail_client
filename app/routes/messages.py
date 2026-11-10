@@ -36,6 +36,8 @@ from ..services import audit, outbox, phishing, threads
 from ..services import remote_search as remote_search_service
 from ..services.message_actions import (
     delete_local_messages as _delete_local_messages,
+    move_to_trash as _move_to_trash,
+    purge_trash as _purge_trash,
     archive as _archive,
     report_spam as _report_spam,
     restore_from_trash as _restore_from_trash,
@@ -145,7 +147,10 @@ def _kind_condition(kind: str):
         return Message.id.in_(
             select(MessageLabel.message_id).where(MessageLabel.label_id == label_id)
         ) & regular & not_snoozed
-    if kind in ("sent", "trash"):
+    if kind == "trash":
+        # 本地刚移入、又被点了永久删除、还在等服务器那边认领的邮件不显示
+        return (Message.folder_kind == kind) & Message.purge_pending.is_(False)
+    if kind == "sent":
         return Message.folder_kind == kind
     return (Message.folder_kind == kind) & not_snoozed
 
@@ -251,14 +256,19 @@ def _enqueue_remote_delete(db: Session, messages: list[Message]) -> list[int]:
 
 
 def delete_messages(request: Request, db: Session, messages: list[Message]) -> int:
-    """删除邮件：本地立即删除，Gmail 上的删除写入 outbox 后台执行。"""
+    """删除邮件：不在「已删除」里的本地立即移入「已删除」，服务器上的移动后台执行；
+    已在「已删除」里的则永久删除。"""
     if not messages:
         return 0
     audit.record_request(request, "mail_deleted", audit.summarize_subjects([m.subject for m in messages]))
-    touched = _enqueue_remote_delete(db, messages)
-    deleted = _delete_local_messages(db, messages)
-    outbox.kick(touched)
-    return deleted
+    to_trash = [m for m in messages if m.folder_kind != "trash"]
+    to_purge = [m for m in messages if m.folder_kind == "trash"]
+    affected = 0
+    if to_trash:
+        affected += _move_to_trash(db, to_trash)
+    if to_purge:
+        affected += _purge_trash(db, to_purge)
+    return affected
 
 
 SNIPPET_SOURCE_CHARS = 300

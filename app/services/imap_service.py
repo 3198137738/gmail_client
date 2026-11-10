@@ -410,12 +410,79 @@ def _parse_fetched_messages(
     return records
 
 
+# 删除时本地立即移入「已删除」的邮件，超过这么久还没被服务器回收站里的那封认领
+# （邮件没有 Message-ID、或服务器上已被清掉），由回收站的同步清理掉
+UNADOPTED_MOVE_TTL = timedelta(minutes=15)
+
+
+def _find_moved_message(db: Session, record: dict) -> Optional[Message]:
+    """服务器回收站里新同步下来的邮件，对应本地刚移入「已删除」、还没认领的那一行。"""
+    if record["folder_kind"] != "trash" or not record.get("message_id"):
+        return None
+    return db.execute(
+        select(Message)
+        .options(selectinload(Message.attachments))
+        .where(
+            Message.account_id == record["account_id"],
+            Message.folder_kind == "trash",
+            Message.moved_at.is_not(None),
+            Message.message_id == record["message_id"],
+            Message.folder != record["folder"],
+        )
+        .order_by(Message.id)
+    ).scalars().first()
+
+
+def _adopt_moved_message(db: Session, message: Message, record: dict) -> Optional[tuple[str, int]]:
+    """把本地那一行接到服务器回收站里的 UID 上；正文 / 附件沿用本地已有的。
+    之前已被点了永久删除的，返回要在服务器上删除的 (文件夹, UID) 并删掉本地行。"""
+    message.folder = record["folder"]
+    message.uid = record["uid"]
+    message.moved_at = None
+    message.moved_from_kind = None
+    message.is_read = record["is_read"]
+    message.is_starred = bool(record.get("is_starred", False))
+    if record.get("thread_id") is not None:
+        message.thread_id = record["thread_id"]
+    if record.get("labels"):
+        gmail_labels.set_message_labels(db, record["account_id"], int(message.id), record["labels"])
+    if message.body_html is None and message.body_text is None and not record.get("body_pending"):
+        # 本地这行当时只有头部：用服务器这封的正文
+        message.body_text = record["body_text"]
+        message.body_html = record["body_html"]
+        message.has_attachments = record["has_attachments"]
+        message.body_pending = False
+        for att in record["attachments"]:
+            db.add(
+                Attachment(
+                    message_id=message.id, filename=att.filename, display_name=att.display_name,
+                    mime_type=att.mime_type, size=att.size, is_inline=att.is_inline,
+                    content_id=att.content_id, file_path=att.file_path, public_url=att.public_url,
+                )
+            )
+    elif not record.get("body_pending"):
+        # 本地已有正文和附件：这次解析写到 trash/uid 下的附件文件不需要了
+        shutil.rmtree(_message_base_dir(record["account_id"], record["folder_kind"], int(record["uid"])), ignore_errors=True)
+    if message.purge_pending:
+        target = (record["folder"], int(record["uid"]))
+        db.delete(message)
+        return target
+    return None
+
+
 def _persist_parsed_messages(records: list[dict]) -> int:
     if not records:
         return 0
 
+    purge: dict[int, dict[str, list[int]]] = {}
     with session_scope() as db:
         for record in records:
+            moved = _find_moved_message(db, record)
+            if moved is not None:
+                target = _adopt_moved_message(db, moved, record)
+                if target is not None:
+                    purge.setdefault(record["account_id"], {}).setdefault(target[0], []).append(target[1])
+                continue
             message = Message(
                 account_id=record["account_id"],
                 folder=record["folder"],
@@ -456,7 +523,41 @@ def _persist_parsed_messages(records: list[dict]) -> int:
                         public_url=att.public_url,
                     )
                 )
+        for account_id, folder_uids in purge.items():
+            for folder, uids in folder_uids.items():
+                outbox.enqueue(db, account_id, folder, outbox.OP_DELETE, uids)
+    if purge:
+        outbox.kick(purge)
     return len(records)
+
+
+def _cleanup_unadopted_moves(account_id: int, trash_folder: str) -> int:
+    """回收站同步时：清掉本地移入「已删除」太久却一直没被认领、且服务器端删除已不再排队的记录。"""
+    cutoff = datetime.now() - UNADOPTED_MOVE_TTL
+    with session_scope() as db:
+        rows = db.execute(
+            select(Message)
+            .options(selectinload(Message.attachments))
+            .where(
+                Message.account_id == account_id,
+                Message.folder_kind == "trash",
+                Message.moved_at.is_not(None),
+                Message.moved_at < cutoff,
+                Message.folder != trash_folder,
+            )
+        ).scalars().all()
+        stale = []
+        for row in rows:
+            pending = outbox.pending_uids(db, account_id, row.folder, ops=(outbox.OP_DELETE,))
+            if int(row.uid) not in pending:
+                stale.append(row)
+        if not stale:
+            return 0
+        from .message_actions import delete_local_messages
+
+        removed = delete_local_messages(db, stale)
+    logger.info("Removed %s unadopted trash moves account=%s", removed, account_id)
+    return removed
 
 
 def complete_message_body(account_id: int, folder: str, folder_kind: str, uid: int, raw: bytes) -> Optional[int]:
@@ -1186,6 +1287,7 @@ def _reconcile_deletions(
                     Message.account_id == account_id,
                     Message.folder == folder,
                     Message.uid <= last_uid,
+                    Message.moved_at.is_(None),   # 本地刚移入「已删除」的行：服务器上本来就该没有了
                 )
             ).scalars()
         )
@@ -1304,6 +1406,9 @@ def _sync_one_folder(
     if changed_flags or removed:
         publish_mail_changed(account_id, folder_kind)
     _repair_pending_bodies(client, account_id, folder, folder_kind)
+    if folder_kind == "trash":
+        if _cleanup_unadopted_moves(account_id, folder):
+            publish_mail_changed(account_id, folder_kind)
 
     truncated = False
     if last_uid > 0:

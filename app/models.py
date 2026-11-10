@@ -107,6 +107,14 @@ class Message(Base):
     body_pending: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="0", nullable=False
     )
+    # 删除时本地立即移入「已删除」：moved_at 为移入时间，folder / uid 仍是原文件夹里的；
+    # 服务器回收站里的这封同步下来时按 Message-ID 认领这一行并清空 moved_at（见 imap_service）
+    moved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    moved_from_kind: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    # 还没被认领时用户又点了永久删除：认领后立即在服务器上彻底删除；期间不在列表里显示
+    purge_pending: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, nullable=False)
 
